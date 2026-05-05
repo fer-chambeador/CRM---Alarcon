@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import Link from 'next/link'
 import { supabase, type Lead, type LeadActividad } from '@/lib/supabase'
 import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -391,7 +392,7 @@ function StatusPopover({ current, anchor, onPick, onClose }: {
 }
 
 // ─── Sortable header ─────────────────────────────────────────────────────────
-type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'plan' | 'status' | 'monto' | 'contacto' | 'fecha'
+type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'status' | 'monto' | 'contacto' | 'fecha'
 function SortableHeader({ label, sortKey, current, onSort }: {
   label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
   onSort: (k: SortKey) => void
@@ -509,7 +510,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'empresa': return (l.empresa || '').toLowerCase()
         case 'telefono': return l.telefono || ''
         case 'canal': return l.canal_adquisicion || ''
-        case 'plan': return l.plan || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
         case 'monto': return l.monto ?? 0
         case 'contacto': return l.veces_contactado || 0
@@ -547,6 +547,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     <div className={styles.root}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}><span className={styles.logoIcon}>⚡</span><span>Chambas CRM</span></div>
+        <nav className={styles.sidebarNav}>
+          <Link href="/dashboard" className={clsx(styles.navLink, styles.navLinkActive)}>📋 Dashboard</Link>
+          <Link href="/analytics" className={styles.navLink}>📊 Analítica</Link>
+        </nav>
         {liveCount > 0 && <div className={styles.livePill}><span className={styles.liveDot} />{liveCount} nuevo{liveCount > 1 ? 's' : ''} en vivo</div>}
 
         <div className={styles.statsGrid}>
@@ -632,7 +636,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 <SortableHeader label="Empresa" sortKey="empresa" current={sort} onSort={onSort} />
                 <SortableHeader label="Teléfono" sortKey="telefono" current={sort} onSort={onSort} />
                 <SortableHeader label="Canal" sortKey="canal" current={sort} onSort={onSort} />
-                <SortableHeader label="Plan" sortKey="plan" current={sort} onSort={onSort} />
                 <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
                 <SortableHeader label="Monto" sortKey="monto" current={sort} onSort={onSort} />
                 <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
@@ -641,9 +644,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
+              {sorted.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
               {sorted.map(lead => {
-                const pb = planBadge(lead.plan)
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
                 const isDescartadoPorIntentos = (lead.veces_contactado || 0) >= CONTACTO_LABELS.length - 1
@@ -668,7 +670,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         : <span className={styles.empty}>—</span>}
                     </td>
                     <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
-                    <td>{pb ? <span className={styles.planTag} style={{ '--pc': pb.color } as React.CSSProperties}>{pb.plan}</span> : <span className={styles.empty}>—</span>}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <button className={styles.statusInlineBtn}
                         title="Click para cambiar status"
