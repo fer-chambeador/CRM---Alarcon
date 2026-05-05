@@ -2,23 +2,46 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Lead, type LeadActividad } from '@/lib/supabase'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './CRMClient.module.css'
 
+// ─── Status ─────────────────────────────────────────────────────────────────
 const STATUS_LABELS: Record<Lead['status'], string> = {
-  nuevo: 'Nuevo', contactado: 'Contactado', en_negociacion: 'En Negociación',
-  convertido: 'Convertido', descartado: 'Descartado',
+  nuevo: 'Nuevo',
+  contactado: 'Contactado',
+  llamada_agendada: 'Llamada agendada',
+  presentacion_enviada: 'Presentación enviada',
+  convertido: 'Convertido',
+  cliente_recurrente: 'Cliente recurrente',
 }
-const STATUS_ORDER: Lead['status'][] = ['nuevo','contactado','en_negociacion','convertido','descartado']
+const STATUS_ORDER: Lead['status'][] = [
+  'nuevo','contactado','llamada_agendada','presentacion_enviada','convertido','cliente_recurrente',
+]
+const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada']
+const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
+const DEFAULT_MONTO = 1160
+
+const CURRENCY = new Intl.NumberFormat('es-MX', {
+  style: 'currency', currency: 'MXN', maximumFractionDigits: 0,
+})
+function fmtMoney(n: number | null | undefined) {
+  if (n == null || isNaN(n)) return '—'
+  return CURRENCY.format(n)
+}
+
 function statusColor(s: Lead['status']) {
   const map: Record<Lead['status'], string> = {
-    nuevo: '#4ea8f5', contactado: '#f5c842', en_negociacion: '#f5914e',
-    convertido: '#22d68a', descartado: '#606078',
+    nuevo: '#4ea8f5',
+    contactado: '#f5c842',
+    llamada_agendada: '#f5914e',
+    presentacion_enviada: '#a594ff',
+    convertido: '#22d68a',
+    cliente_recurrente: '#22d68a',
   }
   return map[s]
 }
@@ -38,14 +61,31 @@ function planBadge(plan: string | null) {
 }
 
 function formatFecha(dateStr: string) {
-  try {
-    return format(new Date(dateStr), "d 'de' MMM, HH:mm", { locale: es })
-  } catch { return '—' }
+  try { return format(new Date(dateStr), "d 'de' MMM, HH:mm", { locale: es }) }
+  catch { return '—' }
+}
+
+// ─── Date filter ─────────────────────────────────────────────────────────────
+type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'ultimos-30'
+const DATE_LABELS: Record<DateRange, string> = {
+  todo: 'Todo el tiempo',
+  hoy: 'Hoy',
+  semana: 'Esta semana',
+  mes: 'Este mes',
+  'ultimos-30': 'Últimos 30 días',
+}
+function dateRangeStart(range: DateRange): Date | null {
+  const now = new Date()
+  switch (range) {
+    case 'todo': return null
+    case 'hoy': return startOfDay(now)
+    case 'semana': return startOfWeek(now, { weekStartsOn: 1 })
+    case 'mes': return startOfMonth(now)
+    case 'ultimos-30': return subDays(now, 30)
+  }
 }
 
 // ─── Fuzzy search ────────────────────────────────────────────────────────────
-// Score = sum of: substring hit (high), bigram overlap (medium). Higher = better.
-// Returns 0 when no signal at all so we can drop irrelevant rows.
 function bigrams(s: string): string[] {
   const out: string[] = []
   for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2))
@@ -56,17 +96,15 @@ function fuzzyScore(query: string, target: string | null | undefined): number {
   const q = query.toLowerCase().trim()
   const t = target.toLowerCase()
   if (!q) return 0
-  if (t.includes(q)) return 100 + (q.length / t.length) * 20  // direct hit boost short fields
+  if (t.includes(q)) return 100 + (q.length / t.length) * 20
   if (q.length < 3) return 0
-  // bigram overlap for typo tolerance
-  const qb = bigrams(q)
-  const tb = bigrams(t)
+  const qb = bigrams(q), tb = bigrams(t)
   if (!qb.length || !tb.length) return 0
-  let hits = 0
   const tbSet = new Set(tb)
+  let hits = 0
   for (const b of qb) if (tbSet.has(b)) hits++
   const overlap = hits / qb.length
-  return overlap > 0.5 ? overlap * 50 : 0  // require >50% bigram overlap
+  return overlap > 0.5 ? overlap * 50 : 0
 }
 function leadScore(query: string, lead: Lead): number {
   if (!query) return 1
@@ -136,20 +174,25 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
 
 // ─── Add Lead Modal ──────────────────────────────────────────────────────────
 function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: Lead) => void }) {
-  const [form, setForm] = useState({ email: '', nombre: '', empresa: '', telefono: '', puesto: '', canal_adquisicion: '', notas: '' })
+  const [form, setForm] = useState({
+    email: '', nombre: '', empresa: '', telefono: '', puesto: '', canal_adquisicion: '', notas: '',
+    monto: DEFAULT_MONTO,
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const save = useCallback(async () => {
     if (!form.email) { setError('El email es requerido'); return }
     setSaving(true)
-    const res = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+    const res = await fetch('/api/leads', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    })
     const data = await res.json()
     if (data.error) { setError(data.error); setSaving(false); return }
     onAdd(data); onClose()
   }, [form, onAdd, onClose])
 
-  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -174,7 +217,11 @@ function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: L
             <label><span>Empresa</span><input value={form.empresa} onChange={e => setForm(f => ({ ...f, empresa: e.target.value }))} placeholder="Nombre de empresa" /></label>
             <label><span>Teléfono</span><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="55 XXXX XXXX" /></label>
             <label><span>Puesto / Rol</span><input value={form.puesto} onChange={e => setForm(f => ({ ...f, puesto: e.target.value }))} placeholder="Reclutador, Dueño, etc." /></label>
-            <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Facebook, LinkedIn..." /></label>
+            <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Instagram, TikTok, Facebook..." /></label>
+            <label><span>Monto pipeline (MXN)</span>
+              <input type="number" min={0} value={form.monto}
+                onChange={e => setForm(f => ({ ...f, monto: Number(e.target.value) || 0 }))} />
+            </label>
           </div>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Notas</span>
@@ -201,6 +248,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     nombre: lead.nombre || '', empresa: lead.empresa || '', telefono: lead.telefono || '',
     puesto: lead.puesto || '', canal_adquisicion: lead.canal_adquisicion || '',
     status: lead.status, notas: lead.notas || '', plan: lead.plan || '',
+    monto: lead.monto ?? DEFAULT_MONTO,
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
   const [saving, setSaving] = useState(false)
@@ -222,7 +270,6 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     onDelete(lead.id); onClose()
   }
 
-  // Keyboard shortcuts: Esc closes, Cmd/Ctrl+S saves
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -241,6 +288,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}
               {lead.plan && <span className={styles.contactBadge}>💳 {lead.plan}</span>}
+              <span className={styles.contactBadge}>💵 {fmtMoney(form.monto)}</span>
             </div>
           </div>
           <button className={styles.closeBtn} onClick={onClose}>✕</button>
@@ -251,7 +299,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <label><span>Empresa</span><input value={form.empresa} onChange={e => setForm(f => ({ ...f, empresa: e.target.value }))} placeholder="Nombre de empresa" /></label>
             <label><span>Teléfono</span><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="55 XXXX XXXX" /></label>
             <label><span>Puesto / Rol</span><input value={form.puesto} onChange={e => setForm(f => ({ ...f, puesto: e.target.value }))} placeholder="Reclutador, Dueño, etc." /></label>
-            <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Facebook, Metro..." /></label>
+            <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Instagram, TikTok..." /></label>
             <label><span>Plan</span>
               <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))}>
                 <option value="">Sin plan</option>
@@ -260,6 +308,10 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 <option value="Plan Premium">Plan Premium</option>
                 <option value="Plan Enterprise">Plan Enterprise</option>
               </select>
+            </label>
+            <label><span>Monto pipeline (MXN)</span>
+              <input type="number" min={0} step={1} value={form.monto}
+                onChange={e => setForm(f => ({ ...f, monto: Number(e.target.value) || 0 }))} />
             </label>
           </div>
 
@@ -339,7 +391,7 @@ function StatusPopover({ current, anchor, onPick, onClose }: {
 }
 
 // ─── Sortable header ─────────────────────────────────────────────────────────
-type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'plan' | 'status' | 'contacto' | 'fecha'
+type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'plan' | 'status' | 'monto' | 'contacto' | 'fecha'
 function SortableHeader({ label, sortKey, current, onSort }: {
   label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
   onSort: (k: SortKey) => void
@@ -355,26 +407,6 @@ function SortableHeader({ label, sortKey, current, onSort }: {
   )
 }
 
-// ─── Bulk actions bar ────────────────────────────────────────────────────────
-function BulkActionsBar({ count, onStatus, onClear }: {
-  count: number; onStatus: (s: Lead['status']) => void; onClear: () => void
-}) {
-  return (
-    <div className={styles.bulkBar}>
-      <span className={styles.bulkBarCount}>{count} seleccionado{count !== 1 ? 's' : ''}</span>
-      <span className={styles.bulkBarLabel}>Cambiar status a:</span>
-      {STATUS_ORDER.map(s => (
-        <button key={s} className={styles.bulkBarBtn}
-          style={{ '--sc': statusColor(s) } as React.CSSProperties}
-          onClick={() => onStatus(s)}>
-          {STATUS_LABELS[s]}
-        </button>
-      ))}
-      <button className={styles.bulkBarClear} onClick={onClear}>Limpiar</button>
-    </div>
-  )
-}
-
 // ─── Main CRM ────────────────────────────────────────────────────────────────
 export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads, setLeads] = useState<Lead[]>(initialLeads)
@@ -383,11 +415,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
-  const [filterPlan, setFilterPlan] = useState<string>('todos')
+  const [dateRange, setDateRange] = useState<DateRange>('todo')
   const [newLeadFlash, setNewLeadFlash] = useState<string | null>(null)
   const [liveCount, setLiveCount] = useState(0)
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>({ key: 'fecha', dir: 'desc' })
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [popover, setPopover] = useState<{ leadId: string; current: Lead['status']; x: number; y: number } | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -407,13 +438,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         } else if (payload.eventType === 'DELETE') {
           const id = (payload.old as Lead).id
           setLeads(prev => prev.filter(l => l.id !== id))
-          setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n })
         }
       }).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [selectedLead])
 
-  // Global keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
@@ -432,7 +461,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const handleDelete = useCallback((id: string) => { setLeads(prev => prev.filter(l => l.id !== id)) }, [])
   const handleAdd = useCallback((lead: Lead) => { setLeads(prev => [lead, ...prev]) }, [])
 
-  // Inline status change (optimistic)
   const updateStatus = useCallback(async (leadId: string, newStatus: Lead['status']) => {
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l))
     try {
@@ -445,31 +473,23 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     } catch {}
   }, [])
 
-  const bulkStatus = useCallback(async (status: Lead['status']) => {
-    const ids = Array.from(selectedIds)
-    if (!ids.length) return
-    setLeads(prev => prev.map(l => ids.includes(l.id) ? { ...l, status } : l))
-    setSelectedIds(new Set())
-    try {
-      await fetch('/api/leads/bulk', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, updates: { status } }),
-      })
-    } catch {}
-  }, [selectedIds])
+  const canales = useMemo(
+    () => Array.from(new Set(leads.map(l => l.canal_adquisicion).filter((x): x is string => !!x))).sort(),
+    [leads]
+  )
 
-  // Available canal/plan options derived from data
-  const canales = useMemo(() => Array.from(new Set(leads.map(l => l.canal_adquisicion).filter((x): x is string => !!x))).sort(), [leads])
-  const planes = useMemo(() => Array.from(new Set(leads.map(l => l.plan).filter((x): x is string => !!x))).sort(), [leads])
+  const dateScoped = useMemo(() => {
+    const start = dateRangeStart(dateRange)
+    if (!start) return leads
+    return leads.filter(l => new Date(l.created_at) >= start)
+  }, [leads, dateRange])
 
-  // Filter + search + sort pipeline
   const filtered = useMemo(() => {
     const q = search.trim()
-    let rows = leads.filter(lead => {
+    let rows = dateScoped.filter(lead => {
       const matchStatus = filterStatus === 'todos' || lead.status === filterStatus
       const matchCanal = filterCanal === 'todos' || lead.canal_adquisicion === filterCanal
-      const matchPlan = filterPlan === 'todos' || (filterPlan === '__none__' ? !lead.plan : lead.plan === filterPlan)
-      return matchStatus && matchCanal && matchPlan
+      return matchStatus && matchCanal
     })
     if (q) {
       rows = rows
@@ -479,10 +499,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         .map(r => r.l)
     }
     return rows
-  }, [leads, search, filterStatus, filterCanal, filterPlan])
+  }, [dateScoped, search, filterStatus, filterCanal])
 
   const sorted = useMemo(() => {
-    if (!sort || search.trim()) return filtered  // when searching, fuzzy score already orders
+    if (!sort || search.trim()) return filtered
     const get = (l: Lead): string | number => {
       switch (sort.key) {
         case 'email': return (l.nombre || l.email).toLowerCase()
@@ -491,6 +511,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'canal': return l.canal_adquisicion || ''
         case 'plan': return l.plan || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
+        case 'monto': return l.monto ?? 0
         case 'contacto': return l.veces_contactado || 0
         case 'fecha': return l.created_at
       }
@@ -507,43 +528,58 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const onSort = (key: SortKey) => {
     setSort(s => s?.key === key
       ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-      : { key, dir: key === 'fecha' || key === 'contacto' ? 'desc' : 'asc' })
+      : { key, dir: key === 'fecha' || key === 'contacto' || key === 'monto' ? 'desc' : 'asc' })
   }
 
-  const allVisibleSelected = sorted.length > 0 && sorted.every(l => selectedIds.has(l.id))
-  const toggleSelectAll = () => {
-    setSelectedIds(prev => {
-      if (allVisibleSelected) {
-        const n = new Set(prev); for (const l of sorted) n.delete(l.id); return n
-      }
-      const n = new Set(prev); for (const l of sorted) n.add(l.id); return n
-    })
-  }
-  const toggleSelect = (id: string) => {
-    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
-
-  const stats = {
-    total: leads.length,
-    nuevos: leads.filter(l => l.status === 'nuevo').length,
-    convertidos: leads.filter(l => l.status === 'convertido').length,
-    conEmpresa: leads.filter(l => l.empresa).length,
-  }
+  const stats = useMemo(() => {
+    const sumMonto = (rows: Lead[]) => rows.reduce((acc, l) => acc + (l.monto ?? DEFAULT_MONTO), 0)
+    return {
+      leads: dateScoped.length,
+      sinContactar: dateScoped.filter(l => l.status === 'nuevo').length,
+      convertidos: dateScoped.filter(l => PIPELINE_CLOSED.includes(l.status)).length,
+      pipelineTotal: sumMonto(dateScoped),
+      pipelineCierre: sumMonto(dateScoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
+      pipelineCerrado: sumMonto(dateScoped.filter(l => PIPELINE_CLOSED.includes(l.status))),
+    }
+  }, [dateScoped])
 
   return (
     <div className={styles.root}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}><span className={styles.logoIcon}>⚡</span><span>Chambas CRM</span></div>
         {liveCount > 0 && <div className={styles.livePill}><span className={styles.liveDot} />{liveCount} nuevo{liveCount > 1 ? 's' : ''} en vivo</div>}
-        <div className={styles.stats}>
-          <div className={styles.statCard}><div className={styles.statNum}>{stats.total}</div><div className={styles.statLabel}>Total leads</div></div>
-          <div className={styles.statCard}><div className={styles.statNum} style={{ color: 'var(--status-nuevo)' }}>{stats.nuevos}</div><div className={styles.statLabel}>Sin contactar</div></div>
-          <div className={styles.statCard}><div className={styles.statNum} style={{ color: 'var(--status-convertido)' }}>{stats.convertidos}</div><div className={styles.statLabel}>Convertidos</div></div>
-          <div className={styles.statCard}><div className={styles.statNum} style={{ color: 'var(--accent)' }}>{stats.conEmpresa}</div><div className={styles.statLabel}>Con empresa</div></div>
+
+        <div className={styles.statsGrid}>
+          <div className={styles.statCard}>
+            <div className={styles.statNum}>{stats.leads}</div>
+            <div className={styles.statLabel}>Leads</div>
+          </div>
+          <div className={styles.statCard}>
+            <div className={styles.statNum} style={{ color: 'var(--status-nuevo, #4ea8f5)' }}>{stats.sinContactar}</div>
+            <div className={styles.statLabel}>Sin contactar</div>
+          </div>
+          <div className={styles.statCard}>
+            <div className={styles.statNum} style={{ color: 'var(--status-convertido, #22d68a)' }}>{stats.convertidos}</div>
+            <div className={styles.statLabel}>Convertidos</div>
+          </div>
+          <div className={styles.statCard}>
+            <div className={styles.statNumMoney}>{fmtMoney(stats.pipelineTotal)}</div>
+            <div className={styles.statLabel}>Pipeline total</div>
+          </div>
+          <div className={styles.statCard}>
+            <div className={styles.statNumMoney} style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</div>
+            <div className={styles.statLabel}>Pipeline en cierre</div>
+          </div>
+          <div className={styles.statCard}>
+            <div className={styles.statNumMoney} style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</div>
+            <div className={styles.statLabel}>Pipeline cerrado</div>
+          </div>
         </div>
+
         <div style={{ padding: '0 16px 12px' }}>
           <button className={styles.addLeadBtn} onClick={() => setShowAddModal(true)}>+ Agregar lead</button>
         </div>
+
         <div className={styles.filterSection}>
           <div className={styles.filterLabel}>Filtrar por status</div>
           {(['todos', ...STATUS_ORDER] as const).map(s => (
@@ -551,26 +587,19 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               onClick={() => setFilterStatus(s)}
               style={s !== 'todos' ? { '--sc': statusColor(s as Lead['status']) } as React.CSSProperties : {}}>
               {s === 'todos' ? 'Todos' : STATUS_LABELS[s as Lead['status']]}
-              <span className={styles.filterCount}>{s === 'todos' ? leads.length : leads.filter(l => l.status === s).length}</span>
+              <span className={styles.filterCount}>
+                {s === 'todos' ? dateScoped.length : dateScoped.filter(l => l.status === s).length}
+              </span>
             </button>
           ))}
         </div>
+
         {canales.length > 0 && (
           <div className={styles.filterSection}>
             <div className={styles.filterLabel}>Canal</div>
             <select className={styles.filterSelect} value={filterCanal} onChange={e => setFilterCanal(e.target.value)}>
               <option value="todos">Todos los canales</option>
               {canales.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        )}
-        {planes.length > 0 && (
-          <div className={styles.filterSection}>
-            <div className={styles.filterLabel}>Plan</div>
-            <select className={styles.filterSelect} value={filterPlan} onChange={e => setFilterPlan(e.target.value)}>
-              <option value="todos">Todos los planes</option>
-              <option value="__none__">Sin plan</option>
-              {planes.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
         )}
@@ -583,6 +612,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             <input ref={searchInputRef} className={styles.searchInput} type="text"
               placeholder="Buscar (atajo: / )… tolera typos" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          <select className={styles.dateSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
+            {(Object.keys(DATE_LABELS) as DateRange[]).map(r => (
+              <option key={r} value={r}>{DATE_LABELS[r]}</option>
+            ))}
+          </select>
           <div className={styles.topBarRight}>
             <div className={styles.liveIndicator}><span className={styles.liveDotGreen} />En vivo desde Slack</div>
           </div>
@@ -590,25 +624,17 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
         {newLeadFlash && <div className={styles.flashBanner}>🆕 Nuevo lead: <strong>{newLeadFlash}</strong></div>}
 
-        {selectedIds.size > 0 && (
-          <BulkActionsBar count={selectedIds.size} onStatus={bulkStatus} onClear={() => setSelectedIds(new Set())} />
-        )}
-
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
               <tr>
-                <th className={styles.checkboxCell}>
-                  <input type="checkbox" checked={allVisibleSelected}
-                    ref={el => { if (el) el.indeterminate = !allVisibleSelected && sorted.some(l => selectedIds.has(l.id)) }}
-                    onChange={toggleSelectAll} />
-                </th>
                 <SortableHeader label="Lead" sortKey="email" current={sort} onSort={onSort} />
                 <SortableHeader label="Empresa" sortKey="empresa" current={sort} onSort={onSort} />
                 <SortableHeader label="Teléfono" sortKey="telefono" current={sort} onSort={onSort} />
                 <SortableHeader label="Canal" sortKey="canal" current={sort} onSort={onSort} />
                 <SortableHeader label="Plan" sortKey="plan" current={sort} onSort={onSort} />
                 <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
+                <SortableHeader label="Monto" sortKey="monto" current={sort} onSort={onSort} />
                 <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
                 <SortableHeader label="Fecha" sortKey="fecha" current={sort} onSort={onSort} />
                 <th></th>
@@ -621,13 +647,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
                 const isDescartadoPorIntentos = (lead.veces_contactado || 0) >= CONTACTO_LABELS.length - 1
-                const isSelected = selectedIds.has(lead.id)
                 return (
-                  <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash, isSelected && styles.rowSelected)}
+                  <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash)}
                       onClick={() => setSelectedLead(lead)}>
-                    <td className={styles.checkboxCell} onClick={e => e.stopPropagation()}>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(lead.id)} />
-                    </td>
                     <td>
                       <div className={styles.emailCell}>
                         <span className={styles.tipoIcon}>{tipoLabel(lead.tipo_evento)}</span>
@@ -658,6 +680,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         <span className={styles.statusInlineCaret}>▾</span>
                       </button>
                     </td>
+                    <td className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
                     <td>
                       {lead.veces_contactado > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>

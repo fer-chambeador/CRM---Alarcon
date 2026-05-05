@@ -1,3 +1,5 @@
+import { normalizeCanal } from './canales'
+
 export type ParsedLead = {
   tipo_evento: 'usuario_nuevo' | 'empresa_creada' | 'suscripcion_nueva' | 'pago_confirmado'
   email: string | null
@@ -70,7 +72,8 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     if (!email) return null
     const telefono = normalized.match(/Tel[eé]fono:\s*(.+)/)?.[1]?.trim() || null
     const puesto = normalized.match(/Rol en la empresa:\s*(.+)/)?.[1]?.trim() || null
-    const canal = normalized.match(/Canal de adquisici[oó]n:\s*(.+)/)?.[1]?.trim() || null
+    const canalRaw = normalized.match(/Canal de adquisici[oó]n:\s*(.+)/)?.[1]?.trim() || null
+    const canal = normalizeCanal(canalRaw)
     const empresa = normalized.match(/Nombre de la empresa:\s*(.+)/)?.[1]?.trim() || null
     if (puesto && puesto.toLowerCase().includes('soy candidato')) return null
     return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null }
