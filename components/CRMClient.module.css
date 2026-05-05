@@ -73,7 +73,7 @@
 .stats,
 .statsGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 16px;
 }
@@ -82,31 +82,51 @@
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 12px 14px;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .statNum {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.04em;
   color: var(--text);
   line-height: 1;
-  margin-bottom: 4px;
 }
 
 .statNumMoney {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text);
-  line-height: 1.1;
-  margin-bottom: 4px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+
+.sidebarNav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 12px 0;
+}
+
+.navLink {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.1s, color 0.1s;
+}
+.navLink:hover { background: var(--bg3); color: var(--text); }
+.navLinkActive { background: var(--bg3); color: var(--accent); }
 
 .statLabel {
   font-size: 11px;

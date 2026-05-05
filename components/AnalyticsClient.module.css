@@ -1,0 +1,261 @@
+.root {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── Sidebar ─────────────────────────────────────── */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 20px 20px;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.logoIcon { font-size: 20px; }
+
+.sidebarNav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 12px 0;
+}
+.navLink {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.1s, color 0.1s;
+}
+.navLink:hover { background: var(--bg3); color: var(--text); }
+.navLinkActive { background: var(--bg3); color: var(--accent); }
+
+.dateBlock { padding: 20px 16px 8px; }
+.dateLabel {
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.dateSelect {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+  font-weight: 600;
+}
+.dateSelect:hover { border-color: var(--border2); }
+
+.kpiList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+}
+.kpi, .kpiMoney {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.kpi span, .kpiMoney span {
+  color: var(--text3);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.kpi strong { font-size: 18px; color: var(--text); font-weight: 800; }
+.kpiMoney strong {
+  font-size: 15px; color: var(--text); font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Main ────────────────────────────────────────── */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.topBar {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+.topBar h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+.sectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sectionHeader h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.sectionSubtitle {
+  font-size: 12px;
+  color: var(--text3);
+}
+.empty {
+  font-size: 13px;
+  color: var(--text3);
+  padding: 16px 0;
+}
+
+/* ── Breakdown table ─────────────────────────────── */
+.breakdownTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.breakdownTable th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+.breakdownTable td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.breakdownTable tr:last-child td { border-bottom: none; }
+.breakdownKey { min-width: 200px; }
+.breakdownKey > div:first-child { font-weight: 600; margin-bottom: 6px; }
+
+.bar {
+  width: 100%;
+  height: 4px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.barFill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* ── Funnel ──────────────────────────────────────── */
+.funnel { display: flex; flex-direction: column; gap: 8px; }
+.funnelRow {
+  display: grid;
+  grid-template-columns: 180px 1fr 50px 110px;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.funnelLabel { color: var(--text); font-weight: 600; }
+.funnelBarWrap { min-width: 0; }
+.funnelBarWrap .bar { height: 10px; }
+.funnelCount {
+  text-align: right;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.funnelMoney {
+  text-align: right;
+  font-size: 12px;
+  color: var(--text2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Daily timeline ──────────────────────────────── */
+.timelineChart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 140px;
+  padding: 0 4px;
+}
+.timelineDay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  min-width: 0;
+  cursor: default;
+  position: relative;
+}
+.timelineBar {
+  width: 100%;
+  background: linear-gradient(to top, var(--accent), color-mix(in srgb, var(--accent) 60%, transparent));
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+  transition: opacity 0.1s;
+}
+.timelineDay:hover .timelineBar { opacity: 0.7; }
+.timelineDate {
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 4px;
+  font-family: var(--mono);
+}
