@@ -70,7 +70,8 @@
   flex-shrink: 0;
 }
 
-.stats {
+.stats,
+.statsGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
@@ -82,6 +83,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
+  min-width: 0;
 }
 
 .statNum {
@@ -91,6 +93,19 @@
   color: var(--text);
   line-height: 1;
   margin-bottom: 4px;
+}
+
+.statNumMoney {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.1;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .statLabel {
@@ -872,4 +887,26 @@
   margin-left: 4px;
   font-family: var(--mono);
   letter-spacing: 0.02em;
+}
+
+/* ── Date range select in topbar ─────────────────── */
+.dateSelect {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+  font-weight: 600;
+}
+.dateSelect:hover { border-color: var(--border2); }
+
+/* ── Monto column ────────────────────────────────── */
+.montoCell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
 }

@@ -23,12 +23,13 @@ export type Lead = {
   telefono: string | null
   puesto: string | null
   canal_adquisicion: string | null
-  status: 'nuevo' | 'contactado' | 'en_negociacion' | 'convertido' | 'descartado'
+  status: 'nuevo' | 'contactado' | 'llamada_agendada' | 'presentacion_enviada' | 'convertido' | 'cliente_recurrente'
   veces_contactado: number
   ultimo_contacto: string | null
   plan: string | null
   cupon: string | null
   suscripcion_fecha: string | null
+  monto: number
   notas: string | null
   tipo_evento: string | null
   slack_ts: string | null
