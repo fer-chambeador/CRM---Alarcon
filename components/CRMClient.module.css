@@ -661,3 +661,215 @@
   border-color: var(--cc, var(--accent));
   color: var(--cc, var(--accent));
 }
+
+/* ── Sortable headers ────────────────────────────── */
+.sortHeader {
+  cursor: pointer;
+  user-select: none;
+}
+.sortHeader:hover { color: var(--text); }
+.sortHeader > span:first-child { margin-right: 6px; }
+.sortIcon {
+  font-size: 10px;
+  color: var(--text3);
+  opacity: 0.5;
+}
+.sortIconActive {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Checkbox column ─────────────────────────────── */
+.checkboxCell {
+  width: 36px;
+  padding-left: 16px !important;
+  padding-right: 0 !important;
+}
+.checkboxCell input[type="checkbox"] {
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+.rowSelected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.rowSelected:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ── Inline status changer ───────────────────────── */
+.statusInlineBtn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border-radius: 20px;
+  transition: transform 0.1s;
+}
+.statusInlineBtn:hover { transform: translateY(-1px); }
+.statusInlineCaret {
+  font-size: 10px;
+  color: var(--text3);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.statusInlineBtn:hover .statusInlineCaret { opacity: 1; }
+
+/* ── Status popover ──────────────────────────────── */
+.statusPopover {
+  position: fixed;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+}
+.statusPopoverItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.statusPopoverItem:hover { background: var(--bg3); }
+.statusPopoverItemActive {
+  background: color-mix(in srgb, var(--sc) 12%, transparent);
+  color: var(--sc);
+  font-weight: 600;
+}
+.statusPopoverDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sc, var(--accent));
+}
+
+/* ── Bulk actions bar ────────────────────────────── */
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg2));
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.bulkBarCount {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 13px;
+}
+.bulkBarLabel {
+  color: var(--text2);
+  font-size: 12px;
+  margin-left: 4px;
+}
+.bulkBarBtn {
+  background: var(--bg3);
+  border: 1px solid color-mix(in srgb, var(--sc) 30%, var(--border));
+  color: var(--sc);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.1s;
+}
+.bulkBarBtn:hover {
+  background: color-mix(in srgb, var(--sc) 15%, var(--bg3));
+}
+.bulkBarClear {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.bulkBarClear:hover { color: var(--text); border-color: var(--border2); }
+
+/* ── Activity timeline ───────────────────────────── */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.timelineItem {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 4px 0;
+  position: relative;
+}
+.timelineItem:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 16px;
+  bottom: -10px;
+  width: 1px;
+  background: var(--border);
+}
+.timelineDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+.timelineBody { flex: 1; min-width: 0; }
+.timelineDesc { font-size: 13px; color: var(--text); }
+.timelineMeta {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 2px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Sidebar select filter ───────────────────────── */
+.filterSelect {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.filterSelect:hover { border-color: var(--border2); }
+
+/* ── Keyboard hint ───────────────────────────────── */
+.shortcutHint {
+  font-size: 11px;
+  color: var(--text3);
+  margin-left: 4px;
+  font-family: var(--mono);
+  letter-spacing: 0.02em;
+}

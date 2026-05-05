@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { supabase, type Lead } from '@/lib/supabase'
-import { format } from 'date-fns'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { supabase, type Lead, type LeadActividad } from '@/lib/supabase'
+import { format, formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './CRMClient.module.css'
@@ -43,6 +43,42 @@ function formatFecha(dateStr: string) {
   } catch { return '—' }
 }
 
+// ─── Fuzzy search ────────────────────────────────────────────────────────────
+// Score = sum of: substring hit (high), bigram overlap (medium). Higher = better.
+// Returns 0 when no signal at all so we can drop irrelevant rows.
+function bigrams(s: string): string[] {
+  const out: string[] = []
+  for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2))
+  return out
+}
+function fuzzyScore(query: string, target: string | null | undefined): number {
+  if (!target) return 0
+  const q = query.toLowerCase().trim()
+  const t = target.toLowerCase()
+  if (!q) return 0
+  if (t.includes(q)) return 100 + (q.length / t.length) * 20  // direct hit boost short fields
+  if (q.length < 3) return 0
+  // bigram overlap for typo tolerance
+  const qb = bigrams(q)
+  const tb = bigrams(t)
+  if (!qb.length || !tb.length) return 0
+  let hits = 0
+  const tbSet = new Set(tb)
+  for (const b of qb) if (tbSet.has(b)) hits++
+  const overlap = hits / qb.length
+  return overlap > 0.5 ? overlap * 50 : 0  // require >50% bigram overlap
+}
+function leadScore(query: string, lead: Lead): number {
+  if (!query) return 1
+  const fields: (string | null)[] = [
+    lead.email, lead.nombre, lead.empresa, lead.telefono,
+    lead.canal_adquisicion, lead.puesto, lead.plan,
+  ]
+  let best = 0
+  for (const f of fields) best = Math.max(best, fuzzyScore(query, f))
+  return best
+}
+
 function ContactoSelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
     <div className={styles.contactoSelector}>
@@ -62,20 +98,66 @@ function ContactoSelector({ value, onChange }: { value: number; onChange: (v: nu
   )
 }
 
+// ─── Timeline ────────────────────────────────────────────────────────────────
+function ActivityTimeline({ leadId }: { leadId: string }) {
+  const [items, setItems] = useState<LeadActividad[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/leads/${leadId}/actividad`)
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setItems(Array.isArray(data) ? data : []) })
+      .catch(() => { if (!cancelled) setError('No se pudo cargar la actividad') })
+    return () => { cancelled = true }
+  }, [leadId])
+
+  if (error) return <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>
+  if (!items) return <div style={{ fontSize: 12, color: 'var(--text3)' }}>Cargando...</div>
+  if (items.length === 0) return <div style={{ fontSize: 12, color: 'var(--text3)' }}>Sin actividad registrada todavía.</div>
+
+  return (
+    <div className={styles.timeline}>
+      {items.map(it => (
+        <div key={it.id} className={styles.timelineItem}>
+          <div className={styles.timelineDot} />
+          <div className={styles.timelineBody}>
+            <div className={styles.timelineDesc}>{it.descripcion || it.tipo}</div>
+            <div className={styles.timelineMeta}>
+              {formatFecha(it.created_at)}
+              <span style={{ opacity: 0.6 }}>· hace {formatDistanceToNow(new Date(it.created_at), { locale: es })}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── Add Lead Modal ──────────────────────────────────────────────────────────
 function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: Lead) => void }) {
   const [form, setForm] = useState({ email: '', nombre: '', empresa: '', telefono: '', puesto: '', canal_adquisicion: '', notas: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const save = async () => {
+  const save = useCallback(async () => {
     if (!form.email) { setError('El email es requerido'); return }
     setSaving(true)
     const res = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
     const data = await res.json()
     if (data.error) { setError(data.error); setSaving(false); return }
     onAdd(data); onClose()
-  }
+  }, [form, onAdd, onClose])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, save])
 
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
@@ -87,7 +169,7 @@ function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: L
         <div className={styles.modalBody}>
           {error && <div style={{ color: 'var(--red)', fontSize: 13, background: 'rgba(240,90,90,0.1)', padding: '8px 12px', borderRadius: 8 }}>{error}</div>}
           <div className={styles.fieldGrid}>
-            <label><span>Email *</span><input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="email@empresa.com" /></label>
+            <label><span>Email *</span><input autoFocus value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="email@empresa.com" /></label>
             <label><span>Nombre</span><input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} placeholder="Nombre completo" /></label>
             <label><span>Empresa</span><input value={form.empresa} onChange={e => setForm(f => ({ ...f, empresa: e.target.value }))} placeholder="Nombre de empresa" /></label>
             <label><span>Teléfono</span><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="55 XXXX XXXX" /></label>
@@ -100,7 +182,7 @@ function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: L
           </label>
         </div>
         <div className={styles.modalFooter}>
-          <div />
+          <div className={styles.shortcutHint}>⌘S guardar · Esc cerrar</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className={styles.cancelBtn} onClick={onClose}>Cancelar</button>
             <button className={styles.saveBtn} onClick={save} disabled={saving}>{saving ? 'Guardando...' : '+ Agregar lead'}</button>
@@ -125,20 +207,30 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  const save = async () => {
+  const save = useCallback(async () => {
     setSaving(true)
     const res = await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, veces_contactado: contactos }),
     })
     onSave(await res.json()); setSaving(false); onClose()
-  }
+  }, [lead.id, form, contactos, onSave, onClose])
 
   const deleteLead = async () => {
     setDeleting(true)
     await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
     onDelete(lead.id); onClose()
   }
+
+  // Keyboard shortcuts: Esc closes, Cmd/Ctrl+S saves
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, save])
 
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
@@ -192,13 +284,19 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <span style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Notas</span>
             <textarea value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} placeholder="Notas sobre este lead..." rows={4} style={{ resize: 'vertical' }} />
           </label>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Actividad</span>
+            <ActivityTimeline leadId={lead.id} />
+          </div>
         </div>
         <div className={styles.modalFooter}>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {!confirmDelete
               ? <button className={styles.deleteBtn} onClick={() => setConfirmDelete(true)}>🗑 Eliminar</button>
               : <button className={styles.deleteConfirmBtn} onClick={deleteLead} disabled={deleting}>{deleting ? 'Eliminando...' : '⚠️ Confirmar'}</button>
             }
+            <span className={styles.shortcutHint}>⌘S guardar · Esc cerrar</span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className={styles.cancelBtn} onClick={onClose}>Cancelar</button>
@@ -210,6 +308,73 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
   )
 }
 
+// ─── Inline status popover ───────────────────────────────────────────────────
+function StatusPopover({ current, anchor, onPick, onClose }: {
+  current: Lead['status']; anchor: { x: number; y: number };
+  onPick: (s: Lead['status']) => void; onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    setTimeout(() => document.addEventListener('mousedown', onClick), 0)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  return (
+    <div ref={ref} className={styles.statusPopover} style={{ top: anchor.y, left: anchor.x }}>
+      {STATUS_ORDER.map(s => (
+        <button key={s} className={clsx(styles.statusPopoverItem, current === s && styles.statusPopoverItemActive)}
+          style={{ '--sc': statusColor(s) } as React.CSSProperties}
+          onClick={() => onPick(s)}>
+          <span className={styles.statusPopoverDot} />
+          {STATUS_LABELS[s]}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ─── Sortable header ─────────────────────────────────────────────────────────
+type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'plan' | 'status' | 'contacto' | 'fecha'
+function SortableHeader({ label, sortKey, current, onSort }: {
+  label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
+  onSort: (k: SortKey) => void
+}) {
+  const isActive = current?.key === sortKey
+  return (
+    <th className={styles.sortHeader} onClick={() => onSort(sortKey)}>
+      <span>{label}</span>
+      <span className={clsx(styles.sortIcon, isActive && styles.sortIconActive)}>
+        {isActive ? (current?.dir === 'asc' ? '↑' : '↓') : '↕'}
+      </span>
+    </th>
+  )
+}
+
+// ─── Bulk actions bar ────────────────────────────────────────────────────────
+function BulkActionsBar({ count, onStatus, onClear }: {
+  count: number; onStatus: (s: Lead['status']) => void; onClear: () => void
+}) {
+  return (
+    <div className={styles.bulkBar}>
+      <span className={styles.bulkBarCount}>{count} seleccionado{count !== 1 ? 's' : ''}</span>
+      <span className={styles.bulkBarLabel}>Cambiar status a:</span>
+      {STATUS_ORDER.map(s => (
+        <button key={s} className={styles.bulkBarBtn}
+          style={{ '--sc': statusColor(s) } as React.CSSProperties}
+          onClick={() => onStatus(s)}>
+          {STATUS_LABELS[s]}
+        </button>
+      ))}
+      <button className={styles.bulkBarClear} onClick={onClear}>Limpiar</button>
+    </div>
+  )
+}
+
 // ─── Main CRM ────────────────────────────────────────────────────────────────
 export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads, setLeads] = useState<Lead[]>(initialLeads)
@@ -217,8 +382,14 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
+  const [filterCanal, setFilterCanal] = useState<string>('todos')
+  const [filterPlan, setFilterPlan] = useState<string>('todos')
   const [newLeadFlash, setNewLeadFlash] = useState<string | null>(null)
   const [liveCount, setLiveCount] = useState(0)
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>({ key: 'fecha', dir: 'desc' })
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [popover, setPopover] = useState<{ leadId: string; current: Lead['status']; x: number; y: number } | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const channel = supabase.channel('leads-realtime')
@@ -234,11 +405,26 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
           if (selectedLead?.id === updated.id) setSelectedLead(updated)
         } else if (payload.eventType === 'DELETE') {
-          setLeads(prev => prev.filter(l => l.id !== (payload.old as Lead).id))
+          const id = (payload.old as Lead).id
+          setLeads(prev => prev.filter(l => l.id !== id))
+          setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n })
         }
       }).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [selectedLead])
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable
+      if (inField) return
+      if (e.key === '/') { e.preventDefault(); searchInputRef.current?.focus() }
+      if (e.key === 'n') { e.preventDefault(); setShowAddModal(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const handleSave = useCallback((updated: Lead) => {
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
@@ -246,12 +432,96 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const handleDelete = useCallback((id: string) => { setLeads(prev => prev.filter(l => l.id !== id)) }, [])
   const handleAdd = useCallback((lead: Lead) => { setLeads(prev => [lead, ...prev]) }, [])
 
-  const filtered = leads.filter(lead => {
-    const matchSearch = !search || [lead.email, lead.nombre, lead.empresa, lead.telefono, lead.canal_adquisicion, lead.puesto]
-      .some(v => v?.toLowerCase().includes(search.toLowerCase()))
-    const matchStatus = filterStatus === 'todos' || lead.status === filterStatus
-    return matchSearch && matchStatus
-  })
+  // Inline status change (optimistic)
+  const updateStatus = useCallback(async (leadId: string, newStatus: Lead['status']) => {
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l))
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      const updated = await res.json()
+      if (updated && updated.id) setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
+    } catch {}
+  }, [])
+
+  const bulkStatus = useCallback(async (status: Lead['status']) => {
+    const ids = Array.from(selectedIds)
+    if (!ids.length) return
+    setLeads(prev => prev.map(l => ids.includes(l.id) ? { ...l, status } : l))
+    setSelectedIds(new Set())
+    try {
+      await fetch('/api/leads/bulk', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, updates: { status } }),
+      })
+    } catch {}
+  }, [selectedIds])
+
+  // Available canal/plan options derived from data
+  const canales = useMemo(() => Array.from(new Set(leads.map(l => l.canal_adquisicion).filter((x): x is string => !!x))).sort(), [leads])
+  const planes = useMemo(() => Array.from(new Set(leads.map(l => l.plan).filter((x): x is string => !!x))).sort(), [leads])
+
+  // Filter + search + sort pipeline
+  const filtered = useMemo(() => {
+    const q = search.trim()
+    let rows = leads.filter(lead => {
+      const matchStatus = filterStatus === 'todos' || lead.status === filterStatus
+      const matchCanal = filterCanal === 'todos' || lead.canal_adquisicion === filterCanal
+      const matchPlan = filterPlan === 'todos' || (filterPlan === '__none__' ? !lead.plan : lead.plan === filterPlan)
+      return matchStatus && matchCanal && matchPlan
+    })
+    if (q) {
+      rows = rows
+        .map(l => ({ l, score: leadScore(q, l) }))
+        .filter(r => r.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map(r => r.l)
+    }
+    return rows
+  }, [leads, search, filterStatus, filterCanal, filterPlan])
+
+  const sorted = useMemo(() => {
+    if (!sort || search.trim()) return filtered  // when searching, fuzzy score already orders
+    const get = (l: Lead): string | number => {
+      switch (sort.key) {
+        case 'email': return (l.nombre || l.email).toLowerCase()
+        case 'empresa': return (l.empresa || '').toLowerCase()
+        case 'telefono': return l.telefono || ''
+        case 'canal': return l.canal_adquisicion || ''
+        case 'plan': return l.plan || ''
+        case 'status': return STATUS_ORDER.indexOf(l.status)
+        case 'contacto': return l.veces_contactado || 0
+        case 'fecha': return l.created_at
+      }
+    }
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => {
+      const av = get(a), bv = get(b)
+      if (av < bv) return -1 * dir
+      if (av > bv) return 1 * dir
+      return 0
+    })
+  }, [filtered, sort, search])
+
+  const onSort = (key: SortKey) => {
+    setSort(s => s?.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'fecha' || key === 'contacto' ? 'desc' : 'asc' })
+  }
+
+  const allVisibleSelected = sorted.length > 0 && sorted.every(l => selectedIds.has(l.id))
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => {
+      if (allVisibleSelected) {
+        const n = new Set(prev); for (const l of sorted) n.delete(l.id); return n
+      }
+      const n = new Set(prev); for (const l of sorted) n.add(l.id); return n
+    })
+  }
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
 
   const stats = {
     total: leads.length,
@@ -285,13 +555,33 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             </button>
           ))}
         </div>
+        {canales.length > 0 && (
+          <div className={styles.filterSection}>
+            <div className={styles.filterLabel}>Canal</div>
+            <select className={styles.filterSelect} value={filterCanal} onChange={e => setFilterCanal(e.target.value)}>
+              <option value="todos">Todos los canales</option>
+              {canales.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        )}
+        {planes.length > 0 && (
+          <div className={styles.filterSection}>
+            <div className={styles.filterLabel}>Plan</div>
+            <select className={styles.filterSelect} value={filterPlan} onChange={e => setFilterPlan(e.target.value)}>
+              <option value="todos">Todos los planes</option>
+              <option value="__none__">Sin plan</option>
+              {planes.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+        )}
       </aside>
 
       <main className={styles.main}>
         <div className={styles.topBar}>
           <div className={styles.searchWrap}>
             <span className={styles.searchIcon}>🔍</span>
-            <input className={styles.searchInput} type="text" placeholder="Buscar por email, empresa, nombre..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input ref={searchInputRef} className={styles.searchInput} type="text"
+              placeholder="Buscar (atajo: / )… tolera typos" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <div className={styles.topBarRight}>
             <div className={styles.liveIndicator}><span className={styles.liveDotGreen} />En vivo desde Slack</div>
@@ -300,20 +590,44 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
         {newLeadFlash && <div className={styles.flashBanner}>🆕 Nuevo lead: <strong>{newLeadFlash}</strong></div>}
 
+        {selectedIds.size > 0 && (
+          <BulkActionsBar count={selectedIds.size} onStatus={bulkStatus} onClear={() => setSelectedIds(new Set())} />
+        )}
+
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
-              <tr><th>Lead</th><th>Empresa</th><th>Teléfono</th><th>Canal</th><th>Plan</th><th>Status</th><th>Contacto</th><th>Fecha</th><th></th></tr>
+              <tr>
+                <th className={styles.checkboxCell}>
+                  <input type="checkbox" checked={allVisibleSelected}
+                    ref={el => { if (el) el.indeterminate = !allVisibleSelected && sorted.some(l => selectedIds.has(l.id)) }}
+                    onChange={toggleSelectAll} />
+                </th>
+                <SortableHeader label="Lead" sortKey="email" current={sort} onSort={onSort} />
+                <SortableHeader label="Empresa" sortKey="empresa" current={sort} onSort={onSort} />
+                <SortableHeader label="Teléfono" sortKey="telefono" current={sort} onSort={onSort} />
+                <SortableHeader label="Canal" sortKey="canal" current={sort} onSort={onSort} />
+                <SortableHeader label="Plan" sortKey="plan" current={sort} onSort={onSort} />
+                <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
+                <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
+                <SortableHeader label="Fecha" sortKey="fecha" current={sort} onSort={onSort} />
+                <th></th>
+              </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
-              {filtered.map(lead => {
+              {sorted.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
+              {sorted.map(lead => {
                 const pb = planBadge(lead.plan)
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
                 const isDescartadoPorIntentos = (lead.veces_contactado || 0) >= CONTACTO_LABELS.length - 1
+                const isSelected = selectedIds.has(lead.id)
                 return (
-                  <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash)} onClick={() => setSelectedLead(lead)}>
+                  <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash, isSelected && styles.rowSelected)}
+                      onClick={() => setSelectedLead(lead)}>
+                    <td className={styles.checkboxCell} onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(lead.id)} />
+                    </td>
                     <td>
                       <div className={styles.emailCell}>
                         <span className={styles.tipoIcon}>{tipoLabel(lead.tipo_evento)}</span>
@@ -333,7 +647,17 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                     </td>
                     <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
                     <td>{pb ? <span className={styles.planTag} style={{ '--pc': pb.color } as React.CSSProperties}>{pb.plan}</span> : <span className={styles.empty}>—</span>}</td>
-                    <td><span className={styles.statusTag} style={{ '--sc': statusColor(lead.status) } as React.CSSProperties}>{STATUS_LABELS[lead.status]}</span></td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button className={styles.statusInlineBtn}
+                        title="Click para cambiar status"
+                        onClick={(e) => {
+                          const r = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                          setPopover({ leadId: lead.id, current: lead.status, x: r.left + window.scrollX, y: r.bottom + window.scrollY + 4 })
+                        }}>
+                        <span className={styles.statusTag} style={{ '--sc': statusColor(lead.status) } as React.CSSProperties}>{STATUS_LABELS[lead.status]}</span>
+                        <span className={styles.statusInlineCaret}>▾</span>
+                      </button>
+                    </td>
                     <td>
                       {lead.veces_contactado > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
@@ -357,6 +681,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
       {selectedLead && <LeadModal lead={selectedLead} onClose={() => setSelectedLead(null)} onSave={handleSave} onDelete={handleDelete} />}
       {showAddModal && <AddLeadModal onClose={() => setShowAddModal(false)} onAdd={handleAdd} />}
+      {popover && (
+        <StatusPopover current={popover.current} anchor={{ x: popover.x, y: popover.y }}
+          onPick={(s) => { updateStatus(popover.leadId, s); setPopover(null) }}
+          onClose={() => setPopover(null)} />
+      )}
     </div>
   )
 }
