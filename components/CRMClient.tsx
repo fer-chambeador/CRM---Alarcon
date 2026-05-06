@@ -12,7 +12,7 @@ import {
   STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSING, PIPELINE_CLOSED,
   DEFAULT_MONTO, statusColor, fmtMoney,
 } from '@/lib/status'
-import { phoneToLocation } from '@/lib/lada'
+import { phoneToState, ALL_STATES } from '@/lib/lada'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
@@ -210,6 +210,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     puesto: lead.puesto || '', canal_adquisicion: lead.canal_adquisicion || '',
     status: lead.status, notas: lead.notas || '',
     monto: lead.monto ?? DEFAULT_MONTO,
+    estado: lead.estado || '',
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
   const [saving, setSaving] = useState(false)
@@ -220,7 +221,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     setSaving(true)
     const res = await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, veces_contactado: contactos }),
+      body: JSON.stringify({ ...form, estado: form.estado || null, veces_contactado: contactos }),
     })
     onSave(await res.json()); setSaving(false); onClose()
   }, [lead.id, form, contactos, onSave, onClose])
@@ -260,6 +261,12 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <label><span>Teléfono</span><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="55 XXXX XXXX" /></label>
             <label><span>Puesto / Rol</span><input value={form.puesto} onChange={e => setForm(f => ({ ...f, puesto: e.target.value }))} placeholder="Reclutador, Dueño, etc." /></label>
             <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Instagram, TikTok..." /></label>
+            <label><span>Ubicación (estado)</span>
+              <select value={form.estado} onChange={e => setForm(f => ({ ...f, estado: e.target.value }))}>
+                <option value="">Auto: {phoneToState(form.telefono) || '— sin detectar —'}</option>
+                {ALL_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
             <label><span>Monto pipeline (MXN)</span>
               <input type="number" min={0} step={1} value={form.monto}
                 onChange={e => setForm(f => ({ ...f, monto: Number(e.target.value) || 0 }))} />
@@ -466,7 +473,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'empresa': return (l.empresa || '').toLowerCase()
         case 'telefono': return l.telefono || ''
         case 'canal': return l.canal_adquisicion || ''
-        case 'ubicacion': return phoneToLocation(l.telefono) || ''
+        case 'ubicacion': return l.estado || phoneToState(l.telefono) || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
         case 'monto': return l.monto ?? 0
         case 'contacto': return l.veces_contactado || 0
@@ -618,8 +625,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td>{phoneToLocation(lead.telefono)
-                      ? <span className={styles.ubicacionTag}>{phoneToLocation(lead.telefono)}</span>
+                    <td>{(lead.estado || phoneToState(lead.telefono))
+                      ? <span className={styles.ubicacionTag} title={lead.estado ? 'manual' : 'auto desde LADA'}>{lead.estado || phoneToState(lead.telefono)}</span>
                       : <span className={styles.empty}>—</span>}</td>
                     <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
                     <td onClick={e => e.stopPropagation()}>

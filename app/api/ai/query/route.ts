@@ -45,15 +45,16 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const { data: leads, error } = await supabase
     .from('leads')
-    .select('email,nombre,empresa,telefono,puesto,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,plan')
+    .select('email,nombre,empresa,telefono,puesto,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,estado')
     .order('created_at', { ascending: false })
     .limit(2000)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // Annotate each lead with the derived state for cleaner reasoning
+  // Annotate each lead with the resolved state (manual override wins,
+  // otherwise derive from the LADA of the phone).
   const enriched = (leads || []).map(l => ({
     ...l,
-    estado: phoneToState(l.telefono),
+    estado: l.estado || phoneToState(l.telefono),
   }))
 
   const userMsg = `Aquí están los ${enriched.length} leads como JSON:\n\n\`\`\`json\n${JSON.stringify(enriched)}\n\`\`\`\n\nPregunta:\n${question}`

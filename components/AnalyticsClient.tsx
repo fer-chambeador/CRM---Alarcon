@@ -216,7 +216,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
   const byCanal = useMemo(() => makeBreakdown(scoped, l => l.canal_adquisicion), [scoped])
   const byPuesto = useMemo(() => makeBreakdown(scoped, l => l.puesto), [scoped])
-  const byEstado = useMemo(() => makeBreakdown(scoped, l => phoneToState(l.telefono)), [scoped])
+  const byEstado = useMemo(() => makeBreakdown(scoped, l => l.estado || phoneToState(l.telefono)), [scoped])
 
   return (
     <div className={styles.root}>
