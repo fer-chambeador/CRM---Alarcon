@@ -525,15 +525,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           ))}
         </div>
 
-        {canales.length > 0 && (
-          <div className={styles.filterSection}>
-            <div className={styles.filterLabel}>Canal</div>
-            <select className={styles.filterSelect} value={filterCanal} onChange={e => setFilterCanal(e.target.value)}>
-              <option value="todos">Todos los canales</option>
-              {canales.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        )}
       </aside>
 
       <main className={styles.main}>

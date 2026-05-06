@@ -187,7 +187,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'dashboard' | 'leads' | 'pendientes' | 'analytics' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'dashboard' | 'leads' | 'pendientes' | 'analytics' | 'asistente' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -202,6 +202,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
       {link('/pendientes', 'pendientes', 'Pendientes', '⏰')}
       {link('/leads', 'leads', 'Leads', '📋')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
+      {link('/asistente', 'asistente', 'Asistente', '🧠')}
     </nav>
   )
 }
@@ -256,6 +257,7 @@ function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
       { kind: 'nav', label: '⏰ Ver pendientes', href: '/pendientes' },
       { kind: 'nav', label: '📋 Lista de leads', href: '/leads' },
       { kind: 'nav', label: '📊 Analítica', href: '/analytics' },
+      { kind: 'nav', label: '🧠 Asistente', href: '/asistente' },
       { kind: 'create' },
     ]
     if (!q.trim()) return navs
