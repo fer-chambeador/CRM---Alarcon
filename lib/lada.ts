@@ -4,7 +4,8 @@
  */
 const TWO_DIGIT_LADA: Record<string, string> = {
   "33": "Jalisco",
-  "55": "Ciudad de México",
+  "55": "CDMX",
+  "56": "Estado de México",
   "81": "Nuevo León"
 }
 const THREE_DIGIT_LADA: Record<string, string> = {
