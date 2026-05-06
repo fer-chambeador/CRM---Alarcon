@@ -1,31 +1,16 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import Link from 'next/link'
 import { type Lead } from '@/lib/supabase'
 import { startOfDay, startOfWeek, startOfMonth, subDays, format, eachDayOfInterval } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './AnalyticsClient.module.css'
-
-const STATUS_LABELS: Record<Lead['status'], string> = {
-  nuevo: 'Nuevo',
-  contactado: 'Contactado',
-  llamada_agendada: 'Llamada agendada',
-  presentacion_enviada: 'Presentación enviada',
-  convertido: 'Convertido',
-  cliente_recurrente: 'Cliente recurrente',
-}
-const STATUS_ORDER: Lead['status'][] = [
-  'nuevo','contactado','llamada_agendada','presentacion_enviada','convertido','cliente_recurrente',
-]
-const PIPELINE_CLOSED: Lead['status'][] = ['convertido','cliente_recurrente']
-const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada']
-
-const DEFAULT_MONTO = 1160
-const CURRENCY = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 })
-const fmtMoney = (n: number) => CURRENCY.format(n)
-const fmtPct = (n: number) => isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—'
+import { Sidebar } from './CommandCenter'
+import {
+  STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSED, PIPELINE_CLOSING,
+  DEFAULT_MONTO, statusColor, fmtMoney, fmtPct,
+} from '@/lib/status'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'ultimos-30' | 'ultimos-90'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -46,13 +31,6 @@ function dateRangeStart(range: DateRange): Date | null {
     case 'ultimos-30': return subDays(now, 30)
     case 'ultimos-90': return subDays(now, 90)
   }
-}
-
-function statusColor(s: Lead['status']) {
-  return ({
-    nuevo: '#4ea8f5', contactado: '#f5c842', llamada_agendada: '#f5914e',
-    presentacion_enviada: '#a594ff', convertido: '#22d68a', cliente_recurrente: '#22d68a',
-  } as Record<Lead['status'], string>)[s]
 }
 
 const sumMonto = (rows: Lead[]) => rows.reduce((a, l) => a + (l.monto ?? DEFAULT_MONTO), 0)
@@ -221,10 +199,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     <div className={styles.root}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}><span className={styles.logoIcon}>⚡</span><span>Chambas CRM</span></div>
-        <nav className={styles.sidebarNav}>
-          <Link href="/dashboard" className={styles.navLink}>📋 Dashboard</Link>
-          <Link href="/analytics" className={clsx(styles.navLink, styles.navLinkActive)}>📊 Analítica</Link>
-        </nav>
+        <Sidebar active="analytics" />
         <div className={styles.dateBlock}>
           <div className={styles.dateLabel}>Rango</div>
           <select className={styles.dateSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
