@@ -23,7 +23,7 @@ export type Lead = {
   telefono: string | null
   puesto: string | null
   canal_adquisicion: string | null
-  status: 'nuevo' | 'contactado' | 'llamada_agendada' | 'presentacion_enviada' | 'convertido' | 'cliente_recurrente'
+  status: 'nuevo' | 'contactado' | 'llamada_agendada' | 'no_show_llamada' | 'presentacion_enviada' | 'espera_aprobacion' | 'convertido' | 'cliente_recurrente'
   veces_contactado: number
   ultimo_contacto: string | null
   plan: string | null
@@ -35,6 +35,7 @@ export type Lead = {
   slack_ts: string | null
   created_at: string
   updated_at: string
+  status_changed_at: string
 }
 
 export type LeadActividad = {

@@ -1,51 +1,19 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { supabase, type Lead, type LeadActividad } from '@/lib/supabase'
 import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './CRMClient.module.css'
-
-// ─── Status ─────────────────────────────────────────────────────────────────
-const STATUS_LABELS: Record<Lead['status'], string> = {
-  nuevo: 'Nuevo',
-  contactado: 'Contactado',
-  llamada_agendada: 'Llamada agendada',
-  presentacion_enviada: 'Presentación enviada',
-  convertido: 'Convertido',
-  cliente_recurrente: 'Cliente recurrente',
-}
-const STATUS_ORDER: Lead['status'][] = [
-  'nuevo','contactado','llamada_agendada','presentacion_enviada','convertido','cliente_recurrente',
-]
-const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada']
-const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
+import { Sidebar } from './CommandCenter'
+import {
+  STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSING, PIPELINE_CLOSED,
+  DEFAULT_MONTO, statusColor, fmtMoney,
+} from '@/lib/status'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
-
-const DEFAULT_MONTO = 1160
-
-const CURRENCY = new Intl.NumberFormat('es-MX', {
-  style: 'currency', currency: 'MXN', maximumFractionDigits: 0,
-})
-function fmtMoney(n: number | null | undefined) {
-  if (n == null || isNaN(n)) return '—'
-  return CURRENCY.format(n)
-}
-
-function statusColor(s: Lead['status']) {
-  const map: Record<Lead['status'], string> = {
-    nuevo: '#4ea8f5',
-    contactado: '#f5c842',
-    llamada_agendada: '#f5914e',
-    presentacion_enviada: '#a594ff',
-    convertido: '#22d68a',
-    cliente_recurrente: '#22d68a',
-  }
-  return map[s]
-}
 
 function tipoLabel(t: string | null) {
   if (!t) return ''
@@ -410,9 +378,15 @@ function SortableHeader({ label, sortKey, current, onSort }: {
 
 // ─── Main CRM ────────────────────────────────────────────────────────────────
 export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
+  const searchParams = useSearchParams()
+  const initialLeadId = searchParams.get('lead')
+  const initialNew = searchParams.get('new') === '1'
+
   const [leads, setLeads] = useState<Lead[]>(initialLeads)
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
-  const [showAddModal, setShowAddModal] = useState(false)
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(
+    initialLeadId ? initialLeads.find(l => l.id === initialLeadId) || null : null
+  )
+  const [showAddModal, setShowAddModal] = useState(initialNew)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
@@ -547,10 +521,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     <div className={styles.root}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}><span className={styles.logoIcon}>⚡</span><span>Chambas CRM</span></div>
-        <nav className={styles.sidebarNav}>
-          <Link href="/dashboard" className={clsx(styles.navLink, styles.navLinkActive)}>📋 Dashboard</Link>
-          <Link href="/analytics" className={styles.navLink}>📊 Analítica</Link>
-        </nav>
+        <Sidebar active="leads" />
         {liveCount > 0 && <div className={styles.livePill}><span className={styles.liveDot} />{liveCount} nuevo{liveCount > 1 ? 's' : ''} en vivo</div>}
 
         <div className={styles.statsGrid}>
