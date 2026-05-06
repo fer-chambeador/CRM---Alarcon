@@ -134,22 +134,22 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 
         <div className={styles.body}>
           <div className={styles.kpiRow}>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardTeal)}>
               <div className={styles.kpiLabel}>Pipeline cerrado · este mes</div>
-              <div className={styles.kpiValue} style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</div>
+              <div className={styles.kpiValue}>{fmtMoney(stats.pipelineCerrado)}</div>
               <div className={styles.kpiSub}>
                 {stats.pipelineCerradoCount} deals · meta {fmtMoney(MONTHLY_GOAL)} ({Math.round(stats.goalPct * 100)}%)
               </div>
               <div className={styles.kpiBar}>
-                <div className={styles.kpiBarFill} style={{ width: `${stats.goalPct * 100}%`, background: '#22d68a' }} />
+                <div className={styles.kpiBarFill} style={{ width: `${stats.goalPct * 100}%`, background: 'rgba(255,255,255,0.7)' }} />
               </div>
             </div>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardPurple)}>
               <div className={styles.kpiLabel}>En cierre · este mes</div>
-              <div className={styles.kpiValue} style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</div>
+              <div className={styles.kpiValue}>{fmtMoney(stats.pipelineCierre)}</div>
               <div className={styles.kpiSub}>{stats.pipelineCierreCount} leads en presentación / espera</div>
             </div>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardIndigo)}>
               <div className={styles.kpiLabel}>Conversion rate · este mes</div>
               <div className={styles.kpiValue}>{fmtPct(stats.conversion)}</div>
               <div className={styles.kpiSub}>

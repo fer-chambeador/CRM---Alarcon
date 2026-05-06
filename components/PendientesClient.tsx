@@ -92,17 +92,17 @@ export default function PendientesClient({ initialLeads }: { initialLeads: Lead[
 
         <div className={styles.body}>
           <div className={styles.kpiRow}>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardPurple)}>
               <div className={styles.kpiLabel}>Alertas activas</div>
-              <div className={styles.kpiValue} style={{ color: totalAlerts > 0 ? '#f5914e' : 'var(--text)' }}>{totalAlerts}</div>
+              <div className={styles.kpiValue}>{totalAlerts}</div>
               <div className={styles.kpiSub}>{groups.urgent.length} urgentes · {totalAlerts - groups.urgent.length} warning</div>
             </div>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardTeal)}>
               <div className={styles.kpiLabel}>Pipeline en riesgo</div>
-              <div className={styles.kpiValue} style={{ color: '#f5c842' }}>{fmtMoney(pipelineAtRisk)}</div>
+              <div className={styles.kpiValue}>{fmtMoney(pipelineAtRisk)}</div>
               <div className={styles.kpiSub}>Suma de montos en alerta</div>
             </div>
-            <div className={styles.kpiCard}>
+            <div className={clsx(styles.kpiCard, styles.kpiCardIndigo)}>
               <div className={styles.kpiLabel}>Leads nuevos hoy</div>
               <div className={styles.kpiValue}>{newToday.length}</div>
               <div className={styles.kpiSub}>{fmtMoney(sumMonto(newToday))} en pipeline · sin contactar</div>

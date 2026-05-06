@@ -2,14 +2,18 @@
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Sidebar ─────────────────────────────────────────── */
 .sidebar {
-  width: 240px;
+  width: 248px;
   flex-shrink: 0;
-  background: var(--bg2);
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -75,13 +79,13 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
-  padding: 16px;
+  padding: 14px 14px 6px;
 }
 
 .statCard {
-  background: var(--bg3);
+  background: var(--glass);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 12px 14px;
   min-width: 0;
   display: flex;
@@ -91,16 +95,18 @@
 }
 
 .statNum {
+  font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.04em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   color: var(--text);
   line-height: 1;
 }
 
 .statNumMoney {
-  font-size: 18px;
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text);
   line-height: 1;
@@ -157,34 +163,34 @@
   align-items: center;
   justify-content: space-between;
   background: transparent;
-  border: none;
-  color: var(--text2);
-  padding: 8px 10px;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  color: var(--text3);
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   transition: all 0.15s;
   cursor: pointer;
 }
 
 .filterBtn:hover {
-  background: var(--bg3);
+  background: var(--glass-hover);
   color: var(--text);
 }
 
 .filterBtnActive {
-  background: var(--bg3);
-  color: var(--sc, var(--accent));
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--sc, var(--accent)) 18%, transparent);
+  border-color: color-mix(in srgb, var(--sc, var(--accent)) 40%, transparent);
+  color: var(--text);
 }
 
 .filterCount {
-  background: var(--bg);
-  color: var(--text3);
+  background: rgba(255,255,255,0.05);
+  color: var(--text2);
   font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
   font-family: var(--mono);
 }
 
@@ -199,32 +205,39 @@
 .topBar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg2);
+  gap: 14px;
+  padding: 22px 32px 14px;
+  background: transparent;
 }
 
 .searchWrap {
   position: relative;
   flex: 1;
-  max-width: 480px;
+  max-width: 320px;
 }
 
 .searchIcon {
   position: absolute;
-  left: 12px;
+  left: 16px;
   top: 50%;
   transform: translateY(-50%);
   font-size: 14px;
   pointer-events: none;
+  opacity: 0.5;
 }
 
 .searchInput {
   width: 100%;
-  padding: 9px 14px 9px 38px !important;
-  font-size: 14px !important;
-  background: var(--bg3) !important;
+  padding: 10px 16px 10px 40px !important;
+  font-size: 13px !important;
+  background: var(--glass) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: var(--radius-pill) !important;
+  color: var(--text) !important;
+}
+.searchInput:focus {
+  background: var(--glass-strong) !important;
+  border-color: rgba(124,84,232,0.5) !important;
 }
 
 .topBarRight {
@@ -259,7 +272,12 @@
 .tableWrap {
   flex: 1;
   overflow: auto;
-  padding: 0;
+  margin: 0 32px 32px;
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
 }
 
 .table {
@@ -270,14 +288,14 @@
 
 .table thead th {
   text-align: left;
-  padding: 12px 16px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  padding: 14px 20px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text3);
   border-bottom: 1px solid var(--border);
-  background: var(--bg2);
+  background: rgba(255,255,255,0.025);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -287,11 +305,11 @@
 .row {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.15s;
 }
 
 .row:hover {
-  background: var(--bg2);
+  background: var(--glass-hover);
 }
 
 .row td {
@@ -371,15 +389,15 @@
 }
 
 .statusTag {
-  background: color-mix(in srgb, var(--sc) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--sc) 25%, transparent);
+  background: color-mix(in srgb, var(--sc) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sc) 30%, transparent);
   color: var(--sc);
-  border-radius: 20px;
-  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .contactCount {
@@ -403,8 +421,9 @@
 .modalOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
+  background: rgba(8, 8, 16, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -419,15 +438,17 @@
 }
 
 .modal {
-  background: var(--bg2);
+  background: rgba(20, 20, 42, 0.94);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
   border: 1px solid var(--border2);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   width: 100%;
-  max-width: 580px;
+  max-width: 600px;
   max-height: 90vh;
   overflow-y: auto;
   animation: slideUp 0.25s ease;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.04);
 }
 
 @keyframes slideUp {
@@ -526,15 +547,16 @@
 }
 
 .statusBtn {
-  background: var(--bg3);
+  background: var(--glass);
   border: 1px solid var(--border);
-  color: var(--text2);
-  border-radius: 20px;
+  color: var(--text3);
+  border-radius: var(--radius-pill);
   padding: 6px 14px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   transition: all 0.15s;
   font-family: var(--font);
+  cursor: pointer;
 }
 
 .statusBtn:hover {
@@ -574,31 +596,35 @@
 }
 
 .cancelBtn {
-  background: var(--bg3);
-  border: 1px solid var(--border);
+  background: var(--glass);
+  border: 1px solid var(--border2);
   color: var(--text2);
-  border-radius: 8px;
-  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  padding: 9px 18px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s;
 }
+.cancelBtn:hover { background: var(--glass-hover); color: var(--text); }
 
 .saveBtn {
-  background: var(--accent);
+  background: var(--gradient-mix);
   border: none;
   color: white;
-  border-radius: 8px;
-  padding: 9px 20px;
+  border-radius: var(--radius-pill);
+  padding: 9px 22px;
   font-size: 13px;
-  font-weight: 700;
-  transition: background 0.15s;
-  font-family: var(--font);
+  font-weight: 600;
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.05s;
 }
 
-.saveBtn:hover:not(:disabled) {
-  background: var(--accent2);
-}
+.saveBtn:hover:not(:disabled) { opacity: 0.92; }
+.saveBtn:active:not(:disabled) { transform: scale(0.98); }
 
 .saveBtn:disabled, .contactBtn:disabled {
   opacity: 0.5;
@@ -646,19 +672,20 @@
 
 .addLeadBtn {
   width: 100%;
-  background: var(--accent);
+  background: var(--gradient-mix);
   border: none;
   color: white;
-  border-radius: 8px;
-  padding: 10px 16px;
+  border-radius: var(--radius-pill);
+  padding: 11px 18px;
   font-size: 13px;
-  font-weight: 700;
-  font-family: var(--font);
+  font-weight: 600;
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: opacity 0.15s, transform 0.05s;
 }
-
-.addLeadBtn:hover { background: var(--accent2); }
+.addLeadBtn:hover { opacity: 0.92; }
+.addLeadBtn:active { transform: scale(0.98); }
 
 .telefonoCell {
   font-family: var(--mono);
