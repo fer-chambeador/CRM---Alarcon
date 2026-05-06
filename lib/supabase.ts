@@ -30,6 +30,7 @@ export type Lead = {
   cupon: string | null
   suscripcion_fecha: string | null
   monto: number
+  estado: string | null
   notas: string | null
   tipo_evento: string | null
   slack_ts: string | null
