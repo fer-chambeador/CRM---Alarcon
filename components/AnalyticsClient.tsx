@@ -11,6 +11,7 @@ import {
   STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSED, PIPELINE_CLOSING,
   DEFAULT_MONTO, statusColor, fmtMoney, fmtPct,
 } from '@/lib/status'
+import { phoneToState } from '@/lib/lada'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'ultimos-30' | 'ultimos-90'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -215,6 +216,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
   const byCanal = useMemo(() => makeBreakdown(scoped, l => l.canal_adquisicion), [scoped])
   const byPuesto = useMemo(() => makeBreakdown(scoped, l => l.puesto), [scoped])
+  const byEstado = useMemo(() => makeBreakdown(scoped, l => phoneToState(l.telefono)), [scoped])
 
   return (
     <div className={styles.root}>
@@ -247,6 +249,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         <div className={styles.body}>
           <FunnelChart leads={scoped} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
+          <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
           <BreakdownTable title="Por decision maker (puesto)" subtitle="Qué roles convierten mejor" rows={byPuesto} />
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
