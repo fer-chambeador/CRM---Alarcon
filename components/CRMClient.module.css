@@ -957,3 +957,91 @@
   color: var(--text);
   white-space: nowrap;
 }
+
+/* ── Page title in topbar ─────────────────────── */
+.pageTitle {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  margin: 0;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+/* ── KPI Hero row (above table on /leads) ────── */
+.kpiHero {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  padding: 0 32px 14px;
+}
+.kpiHeroCard {
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+.kpiHeroPurple { background: var(--gradient-purple); }
+.kpiHeroTeal   { background: var(--gradient-teal); }
+.kpiHeroIndigo { background: var(--gradient-indigo); border-color: var(--border); }
+.kpiHeroDark {
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: var(--border);
+}
+.kpiHeroLabel {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  color: rgba(255,255,255,0.7);
+}
+.kpiHeroValue {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--text);
+  margin-top: 10px;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.kpiHeroSub {
+  font-size: 12px;
+  color: rgba(255,255,255,0.6);
+  margin-top: 6px;
+}
+
+/* ── Ubicación tag ────────────────────────────── */
+.ubicacionTag {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Empresa cell (clickable to copy) ────────── */
+.empresaCopy {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s;
+}
+.empresaCopy .copyIcon {
+  opacity: 0;
+  font-size: 11px;
+  transition: opacity 0.15s;
+}
+.empresaCopy:hover { color: var(--accent2); }
+.empresaCopy:hover .copyIcon { opacity: 0.7; }

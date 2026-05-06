@@ -136,7 +136,7 @@ function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
   if (range === 'todo' || range === 'hoy') return null
   const start = dateRangeStart(range)!
   const days = eachDayOfInterval({ start, end: new Date() })
-  if (days.length > 95) return null  // bail if range too wide
+  if (days.length > 95) return null
 
   const data = days.map(d => {
     const dayKey = format(d, 'yyyy-MM-dd')
@@ -148,20 +148,42 @@ function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
     }
   })
   const max = Math.max(...data.map(d => d.leads), 1)
+  const total = data.reduce((a, d) => a + d.leads, 0)
+  const avg = total / data.length
+
+  // Show day-of-week labels only if the range is short enough to fit
+  const showLabels = days.length <= 14
+  const showWeekdays = days.length <= 31
 
   return (
     <section className={styles.section}>
       <header className={styles.sectionHeader}>
-        <h3>Por día</h3>
-        <span className={styles.sectionSubtitle}>Leads nuevos cada día en el rango</span>
+        <div>
+          <h3>Por día</h3>
+          <span className={styles.sectionSubtitle}>{total} leads · prom. {avg.toFixed(1)}/día · pico {max}</span>
+        </div>
       </header>
       <div className={styles.timelineChart}>
-        {data.map((d, i) => (
-          <div key={i} className={styles.timelineDay} title={`${format(d.day, "d 'de' MMM", { locale: es })} — ${d.leads} leads · ${fmtMoney(d.pipeline)}`}>
-            <div className={styles.timelineBar} style={{ height: `${(d.leads / max) * 100}%` }} />
-            <div className={styles.timelineDate}>{format(d.day, 'd', { locale: es })}</div>
-          </div>
-        ))}
+        {data.map((d, i) => {
+          const pct = max > 0 ? (d.leads / max) * 100 : 0
+          return (
+            <div key={i} className={styles.timelineDay}
+              title={`${format(d.day, "EEEE d 'de' MMM", { locale: es })} — ${d.leads} leads · ${fmtMoney(d.pipeline)}`}>
+              <div className={styles.timelineCount}>{d.leads || ''}</div>
+              <div className={styles.timelineBarWrap}>
+                <div className={styles.timelineBar}
+                  style={{ height: d.leads === 0 ? '4px' : `${Math.max(pct, 8)}%`, opacity: d.leads === 0 ? 0.25 : 1 }} />
+              </div>
+              <div className={styles.timelineDate}>
+                {showWeekdays && <span>{format(d.day, 'EEEEE', { locale: es }).toUpperCase()}</span>}
+                {showLabels && <strong>{format(d.day, 'd', { locale: es })}</strong>}
+                {!showLabels && (i === 0 || i === data.length - 1 || i % Math.ceil(days.length / 8) === 0) && (
+                  <strong>{format(d.day, 'd MMM', { locale: es })}</strong>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
     </section>
   )
@@ -193,7 +215,6 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
   const byCanal = useMemo(() => makeBreakdown(scoped, l => l.canal_adquisicion), [scoped])
   const byPuesto = useMemo(() => makeBreakdown(scoped, l => l.puesto), [scoped])
-  const byPlan = useMemo(() => makeBreakdown(scoped.filter(l => PIPELINE_CLOSED.includes(l.status)), l => l.plan), [scoped])
 
   return (
     <div className={styles.root}>
@@ -227,9 +248,6 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <FunnelChart leads={scoped} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por decision maker (puesto)" subtitle="Qué roles convierten mejor" rows={byPuesto} />
-          {byPlan.length > 0 && (
-            <BreakdownTable title="Cerrados por plan" subtitle="Solo leads convertidos / recurrentes" rows={byPlan} />
-          )}
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
       </main>
