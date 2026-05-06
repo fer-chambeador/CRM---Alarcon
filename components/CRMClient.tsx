@@ -12,21 +12,13 @@ import {
   STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSING, PIPELINE_CLOSED,
   DEFAULT_MONTO, statusColor, fmtMoney,
 } from '@/lib/status'
+import { phoneToLocation } from '@/lib/lada'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
 function tipoLabel(t: string | null) {
   if (!t) return ''
   return { usuario_nuevo: '👤', empresa_creada: '🏢', suscripcion_nueva: '💳', manual: '✏️', pago_confirmado: '💰' }[t] ?? ''
-}
-
-function planBadge(plan: string | null) {
-  if (!plan) return null
-  const colors: Record<string, string> = {
-    'Plan Starter': '#4ea8f5', 'Plan Pro': '#a594ff',
-    'Plan Premium': '#f5c842', 'Plan Enterprise': '#22d68a',
-  }
-  return { plan, color: colors[plan] || '#9090a8' }
 }
 
 function formatFecha(dateStr: string) {
@@ -79,7 +71,7 @@ function leadScore(query: string, lead: Lead): number {
   if (!query) return 1
   const fields: (string | null)[] = [
     lead.email, lead.nombre, lead.empresa, lead.telefono,
-    lead.canal_adquisicion, lead.puesto, lead.plan,
+    lead.canal_adquisicion, lead.puesto,
   ]
   let best = 0
   for (const f of fields) best = Math.max(best, fuzzyScore(query, f))
@@ -216,7 +208,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
   const [form, setForm] = useState({
     nombre: lead.nombre || '', empresa: lead.empresa || '', telefono: lead.telefono || '',
     puesto: lead.puesto || '', canal_adquisicion: lead.canal_adquisicion || '',
-    status: lead.status, notas: lead.notas || '', plan: lead.plan || '',
+    status: lead.status, notas: lead.notas || '',
     monto: lead.monto ?? DEFAULT_MONTO,
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
@@ -256,7 +248,6 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <div className={styles.modalEmail}>{tipoLabel(lead.tipo_evento)} {lead.email}</div>
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}
-              {lead.plan && <span className={styles.contactBadge}>💳 {lead.plan}</span>}
               <span className={styles.contactBadge}>💵 {fmtMoney(form.monto)}</span>
             </div>
           </div>
@@ -269,15 +260,6 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <label><span>Teléfono</span><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="55 XXXX XXXX" /></label>
             <label><span>Puesto / Rol</span><input value={form.puesto} onChange={e => setForm(f => ({ ...f, puesto: e.target.value }))} placeholder="Reclutador, Dueño, etc." /></label>
             <label><span>Canal</span><input value={form.canal_adquisicion} onChange={e => setForm(f => ({ ...f, canal_adquisicion: e.target.value }))} placeholder="Instagram, TikTok..." /></label>
-            <label><span>Plan</span>
-              <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))}>
-                <option value="">Sin plan</option>
-                <option value="Plan Starter">Plan Starter</option>
-                <option value="Plan Pro">Plan Pro</option>
-                <option value="Plan Premium">Plan Premium</option>
-                <option value="Plan Enterprise">Plan Enterprise</option>
-              </select>
-            </label>
             <label><span>Monto pipeline (MXN)</span>
               <input type="number" min={0} step={1} value={form.monto}
                 onChange={e => setForm(f => ({ ...f, monto: Number(e.target.value) || 0 }))} />
@@ -360,7 +342,7 @@ function StatusPopover({ current, anchor, onPick, onClose }: {
 }
 
 // ─── Sortable header ─────────────────────────────────────────────────────────
-type SortKey = 'email' | 'empresa' | 'telefono' | 'canal' | 'status' | 'monto' | 'contacto' | 'fecha'
+type SortKey = 'email' | 'empresa' | 'telefono' | 'ubicacion' | 'canal' | 'status' | 'monto' | 'contacto' | 'fecha'
 function SortableHeader({ label, sortKey, current, onSort }: {
   label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
   onSort: (k: SortKey) => void
@@ -484,6 +466,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'empresa': return (l.empresa || '').toLowerCase()
         case 'telefono': return l.telefono || ''
         case 'canal': return l.canal_adquisicion || ''
+        case 'ubicacion': return phoneToLocation(l.telefono) || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
         case 'monto': return l.monto ?? 0
         case 'contacto': return l.veces_contactado || 0
@@ -524,34 +507,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         <Sidebar active="leads" />
         {liveCount > 0 && <div className={styles.livePill}><span className={styles.liveDot} />{liveCount} nuevo{liveCount > 1 ? 's' : ''} en vivo</div>}
 
-        <div className={styles.statsGrid}>
-          <div className={styles.statCard}>
-            <div className={styles.statNum}>{stats.leads}</div>
-            <div className={styles.statLabel}>Leads</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className={styles.statNum} style={{ color: 'var(--status-nuevo, #4ea8f5)' }}>{stats.sinContactar}</div>
-            <div className={styles.statLabel}>Sin contactar</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className={styles.statNum} style={{ color: 'var(--status-convertido, #22d68a)' }}>{stats.convertidos}</div>
-            <div className={styles.statLabel}>Convertidos</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className={styles.statNumMoney}>{fmtMoney(stats.pipelineTotal)}</div>
-            <div className={styles.statLabel}>Pipeline total</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className={styles.statNumMoney} style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</div>
-            <div className={styles.statLabel}>Pipeline en cierre</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className={styles.statNumMoney} style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</div>
-            <div className={styles.statLabel}>Pipeline cerrado</div>
-          </div>
-        </div>
-
-        <div style={{ padding: '0 16px 12px' }}>
+        <div style={{ padding: '14px 14px 10px' }}>
           <button className={styles.addLeadBtn} onClick={() => setShowAddModal(true)}>+ Agregar lead</button>
         </div>
 
@@ -582,10 +538,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
       <main className={styles.main}>
         <div className={styles.topBar}>
+          <h1 className={styles.pageTitle}>Leads</h1>
           <div className={styles.searchWrap}>
             <span className={styles.searchIcon}>🔍</span>
             <input ref={searchInputRef} className={styles.searchInput} type="text"
-              placeholder="Buscar (atajo: / )… tolera typos" value={search} onChange={e => setSearch(e.target.value)} />
+              placeholder="Buscar (atajo: / )" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <select className={styles.dateSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
             {(Object.keys(DATE_LABELS) as DateRange[]).map(r => (
@@ -594,6 +551,29 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           </select>
           <div className={styles.topBarRight}>
             <div className={styles.liveIndicator}><span className={styles.liveDotGreen} />En vivo desde Slack</div>
+          </div>
+        </div>
+
+        <div className={styles.kpiHero}>
+          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroPurple)}>
+            <div className={styles.kpiHeroLabel}>Total leads</div>
+            <div className={styles.kpiHeroValue}>{stats.leads}</div>
+            <div className={styles.kpiHeroSub}>{DATE_LABELS[dateRange]}</div>
+          </div>
+          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroTeal)}>
+            <div className={styles.kpiHeroLabel}>Convertidos</div>
+            <div className={styles.kpiHeroValue}>{stats.convertidos}</div>
+            <div className={styles.kpiHeroSub}>{stats.leads > 0 ? `${(stats.convertidos / stats.leads * 100).toFixed(1)}% tasa` : '—'}</div>
+          </div>
+          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroIndigo)}>
+            <div className={styles.kpiHeroLabel}>Sin contactar</div>
+            <div className={styles.kpiHeroValue}>{stats.sinContactar}</div>
+            <div className={styles.kpiHeroSub}>Acción requerida</div>
+          </div>
+          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroDark)}>
+            <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
+            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerrado)}</div>
+            <div className={styles.kpiHeroSub}>{fmtMoney(stats.pipelineCierre)} en cierre</div>
           </div>
         </div>
 
@@ -606,6 +586,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 <SortableHeader label="Lead" sortKey="email" current={sort} onSort={onSort} />
                 <SortableHeader label="Empresa" sortKey="empresa" current={sort} onSort={onSort} />
                 <SortableHeader label="Teléfono" sortKey="telefono" current={sort} onSort={onSort} />
+                <SortableHeader label="Ubicación" sortKey="ubicacion" current={sort} onSort={onSort} />
                 <SortableHeader label="Canal" sortKey="canal" current={sort} onSort={onSort} />
                 <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
                 <SortableHeader label="Monto" sortKey="monto" current={sort} onSort={onSort} />
@@ -615,7 +596,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
+              {sorted.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
               {sorted.map(lead => {
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
@@ -632,7 +613,13 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         </div>
                       </div>
                     </td>
-                    <td className={styles.empresaCell}>{lead.empresa || <span className={styles.empty}>—</span>}</td>
+                    <td className={styles.empresaCell} onClick={e => e.stopPropagation()}>
+                      {lead.empresa
+                        ? <span className={styles.empresaCopy} onClick={() => navigator.clipboard.writeText(lead.empresa!)} title="Click para copiar">
+                            {lead.empresa} <span className={styles.copyIcon}>📋</span>
+                          </span>
+                        : <span className={styles.empty}>—</span>}
+                    </td>
                     <td onClick={e => e.stopPropagation()}>
                       {lead.telefono
                         ? <span className={styles.telefonoCell} onClick={() => navigator.clipboard.writeText(lead.telefono!)} title="Click para copiar">
@@ -640,6 +627,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
+                    <td>{phoneToLocation(lead.telefono)
+                      ? <span className={styles.ubicacionTag}>{phoneToLocation(lead.telefono)}</span>
+                      : <span className={styles.empty}>—</span>}</td>
                     <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <button className={styles.statusInlineBtn}
