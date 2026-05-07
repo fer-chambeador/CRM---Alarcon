@@ -12,7 +12,7 @@ import { startOfMonth, subMonths, isAfter } from 'date-fns'
 import clsx from 'clsx'
 import styles from './CommandCenter.module.css'
 
-const MONTHLY_GOAL = 15000
+const MONTHLY_GOAL = 200000
 
 type AlertedLead = { lead: Lead; alert: LeadAlert }
 

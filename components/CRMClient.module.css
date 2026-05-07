@@ -1062,3 +1062,35 @@
   font-weight: 500;
   white-space: nowrap;
 }
+
+/* ── Contactado sub-filter (intento de contacto) ── */
+.subFilter {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0 6px 16px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.subFilterBtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text3);
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all 0.15s;
+}
+.subFilterBtn:hover { background: var(--glass-hover); color: var(--text); }
+.subFilterBtnActive {
+  background: rgba(245, 200, 66, 0.16);
+  border-color: rgba(245, 200, 66, 0.4);
+  color: var(--text);
+}
