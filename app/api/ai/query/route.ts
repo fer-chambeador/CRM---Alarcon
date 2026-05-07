@@ -15,6 +15,12 @@ Te paso TODOS los leads como JSON al inicio. Cada lead tiene:
 - estado (estado mexicano derivado del LADA del teléfono)
 - status: nuevo | contactado | llamada_agendada | no_show_llamada | presentacion_enviada | espera_aprobacion | convertido | cliente_recurrente
 - monto (MXN, default 1160; el "pipeline" de ese lead)
+- presupuesto (tier de inversión declarado en onboarding):
+    none = "No invierte"
+    100_to_1000 = "$100 a $1,000"
+    2000_to_5000 = "$2,000 a $5,000"
+    10000_plus = "+$10,000"
+    null = "No registrado" (leads previos a la captura del campo)
 - created_at, status_changed_at (ISO)
 - veces_contactado (0..4)
 
@@ -45,7 +51,7 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const { data: leads, error } = await supabase
     .from('leads')
-    .select('email,nombre,empresa,telefono,puesto,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,estado')
+    .select('email,nombre,empresa,telefono,puesto,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,estado,presupuesto')
     .order('created_at', { ascending: false })
     .limit(2000)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

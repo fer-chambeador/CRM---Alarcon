@@ -1,4 +1,5 @@
 import { normalizeCanal } from './canales'
+import { normalizePresupuesto, type Presupuesto } from './budget'
 
 export type ParsedLead = {
   tipo_evento: 'usuario_nuevo' | 'empresa_creada' | 'suscripcion_nueva' | 'pago_confirmado'
@@ -11,6 +12,7 @@ export type ParsedLead = {
   plan: string | null
   cupon: string | null
   monto: number | null
+  presupuesto: Presupuesto | null
 }
 
 function extractEmail(text: string): string | null {
@@ -56,14 +58,14 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     const nombre = nombreMatch?.[1]?.trim() || null
     const plan = normalized.match(/Plan:\s*(.+)/)?.[1]?.trim() || null
 
-    return { tipo_evento: 'pago_confirmado', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon: null, monto }
+    return { tipo_evento: 'pago_confirmado', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon: null, monto, presupuesto: null }
   }
 
   // ── Usuario nuevo ────────────────────────────────────
   if (normalized.startsWith('Usuario nuevo:')) {
     const email = extractEmail(normalized)
     if (!email) return null
-    return { tipo_evento: 'usuario_nuevo', email, nombre: null, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan: null, cupon: null, monto: null }
+    return { tipo_evento: 'usuario_nuevo', email, nombre: null, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan: null, cupon: null, monto: null, presupuesto: null }
   }
 
   // ── Compañia creada ──────────────────────────────────
@@ -75,8 +77,10 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     const canalRaw = normalized.match(/Canal de adquisici[oó]n:\s*(.+)/)?.[1]?.trim() || null
     const canal = normalizeCanal(canalRaw)
     const empresa = normalized.match(/Nombre de la empresa:\s*(.+)/)?.[1]?.trim() || null
+    const presupuestoRaw = normalized.match(/Presupuesto de reclutamiento:\s*(.+)/)?.[1]?.trim() || null
+    const presupuesto = normalizePresupuesto(presupuestoRaw)
     if (puesto && puesto.toLowerCase().includes('soy candidato')) return null
-    return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null }
+    return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null, presupuesto }
   }
 
   // ── Suscripción nueva ────────────────────────────────
@@ -86,7 +90,7 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     const nombre = extractName(normalized)
     const plan = normalized.match(/Plan:\s*(.+)/)?.[1]?.trim() || null
     const cupon = normalized.match(/Cup[oó]n:\s*(.+)/)?.[1]?.trim() || null
-    return { tipo_evento: 'suscripcion_nueva', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon, monto: null }
+    return { tipo_evento: 'suscripcion_nueva', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon, monto: null, presupuesto: null }
   }
 
   return null

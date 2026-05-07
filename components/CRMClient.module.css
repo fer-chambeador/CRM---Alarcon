@@ -1045,3 +1045,14 @@
 }
 .empresaCopy:hover { color: var(--accent2); }
 .empresaCopy:hover .copyIcon { opacity: 0.7; }
+
+.presupuestoTag {
+  background: color-mix(in srgb, var(--pc, var(--accent)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pc, var(--accent)) 30%, transparent);
+  color: var(--pc, var(--accent));
+  border-radius: var(--radius-pill);
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
