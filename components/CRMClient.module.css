@@ -780,34 +780,39 @@
 /* ── Status popover ──────────────────────────────── */
 .statusPopover {
   position: fixed;
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-  z-index: 100;
+  background: rgba(20, 20, 42, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  z-index: 200;
   display: flex;
   flex-direction: column;
-  min-width: 180px;
+  min-width: 200px;
 }
 .statusPopoverItem {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: transparent;
   border: none;
   color: var(--text);
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
   font-family: var(--font);
+  transition: background 0.1s;
 }
-.statusPopoverItem:hover { background: var(--bg3); }
+.statusPopoverItem:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
 .statusPopoverItemActive {
-  background: color-mix(in srgb, var(--sc) 12%, transparent);
+  background: color-mix(in srgb, var(--sc) 18%, transparent);
   color: var(--sc);
   font-weight: 600;
 }
@@ -816,6 +821,7 @@
   height: 8px;
   border-radius: 50%;
   background: var(--sc, var(--accent));
+  flex-shrink: 0;
 }
 
 /* ── Bulk actions bar ────────────────────────────── */
