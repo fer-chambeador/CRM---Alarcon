@@ -5,10 +5,11 @@ export const STATUS_LABELS: Record<Lead['status'], string> = {
   contactado: 'Contactado',
   llamada_agendada: 'Llamada agendada',
   no_show_llamada: 'No show llamada',
-  presentacion_enviada: 'Presentación enviada',
+  presentacion_enviada: 'Propuesta enviada',
   espera_aprobacion: 'Espera de aprobación',
   convertido: 'Convertido',
   cliente_recurrente: 'Cliente recurrente',
+  descartado: 'Descartado',
 }
 
 export const STATUS_ORDER: Lead['status'][] = [
@@ -20,6 +21,7 @@ export const STATUS_ORDER: Lead['status'][] = [
   'espera_aprobacion',
   'convertido',
   'cliente_recurrente',
+  'descartado',
 ]
 
 export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
@@ -37,6 +39,7 @@ export function statusColor(s: Lead['status']): string {
     espera_aprobacion: '#ffba3d',
     convertido: '#22d68a',
     cliente_recurrente: '#22d68a',
+    descartado: '#606078',
   } as Record<Lead['status'], string>)[s]
 }
 

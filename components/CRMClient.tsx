@@ -387,6 +387,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [showAddModal, setShowAddModal] = useState(initialNew)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
+  const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
   const [dateRange, setDateRange] = useState<DateRange>('todo')
   const [newLeadFlash, setNewLeadFlash] = useState<string | null>(null)
@@ -462,7 +463,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     let rows = dateScoped.filter(lead => {
       const matchStatus = filterStatus === 'todos' || lead.status === filterStatus
       const matchCanal = filterCanal === 'todos' || lead.canal_adquisicion === filterCanal
-      return matchStatus && matchCanal
+      const matchAttempts = filterStatus !== 'contactado' || filterAttempts === 'todos'
+        || (lead.veces_contactado || 0) === filterAttempts
+      return matchStatus && matchCanal && matchAttempts
     })
     if (q) {
       rows = rows
@@ -472,7 +475,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         .map(r => r.l)
     }
     return rows
-  }, [dateScoped, search, filterStatus, filterCanal])
+  }, [dateScoped, search, filterStatus, filterAttempts, filterCanal])
 
   const sorted = useMemo(() => {
     if (!sort || search.trim()) return filtered
@@ -535,14 +538,34 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         <div className={styles.filterSection}>
           <div className={styles.filterLabel}>Filtrar por status</div>
           {(['todos', ...STATUS_ORDER] as const).map(s => (
-            <button key={s} className={clsx(styles.filterBtn, filterStatus === s && styles.filterBtnActive)}
-              onClick={() => setFilterStatus(s)}
-              style={s !== 'todos' ? { '--sc': statusColor(s as Lead['status']) } as React.CSSProperties : {}}>
-              {s === 'todos' ? 'Todos' : STATUS_LABELS[s as Lead['status']]}
-              <span className={styles.filterCount}>
-                {s === 'todos' ? dateScoped.length : dateScoped.filter(l => l.status === s).length}
-              </span>
-            </button>
+            <div key={s}>
+              <button className={clsx(styles.filterBtn, filterStatus === s && styles.filterBtnActive)}
+                onClick={() => { setFilterStatus(s); if (s !== 'contactado') setFilterAttempts('todos') }}
+                style={s !== 'todos' ? { '--sc': statusColor(s as Lead['status']) } as React.CSSProperties : {}}>
+                {s === 'todos' ? 'Todos' : STATUS_LABELS[s as Lead['status']]}
+                <span className={styles.filterCount}>
+                  {s === 'todos' ? dateScoped.length : dateScoped.filter(l => l.status === s).length}
+                </span>
+              </button>
+              {s === 'contactado' && filterStatus === 'contactado' && (
+                <div className={styles.subFilter}>
+                  <button className={clsx(styles.subFilterBtn, filterAttempts === 'todos' && styles.subFilterBtnActive)}
+                    onClick={() => setFilterAttempts('todos')}>
+                    Todos<span className={styles.filterCount}>{dateScoped.filter(l => l.status === 'contactado').length}</span>
+                  </button>
+                  {[1, 2, 3].map(n => (
+                    <button key={n}
+                      className={clsx(styles.subFilterBtn, filterAttempts === n && styles.subFilterBtnActive)}
+                      onClick={() => setFilterAttempts(n)}>
+                      {n}{n === 1 ? 'er' : n === 2 ? 'do' : 'er'} contacto
+                      <span className={styles.filterCount}>
+                        {dateScoped.filter(l => l.status === 'contactado' && (l.veces_contactado || 0) === n).length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
 

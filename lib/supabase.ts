@@ -23,7 +23,7 @@ export type Lead = {
   telefono: string | null
   puesto: string | null
   canal_adquisicion: string | null
-  status: 'nuevo' | 'contactado' | 'llamada_agendada' | 'no_show_llamada' | 'presentacion_enviada' | 'espera_aprobacion' | 'convertido' | 'cliente_recurrente'
+  status: 'nuevo' | 'contactado' | 'llamada_agendada' | 'no_show_llamada' | 'presentacion_enviada' | 'espera_aprobacion' | 'convertido' | 'cliente_recurrente' | 'descartado'
   veces_contactado: number
   ultimo_contacto: string | null
   plan: string | null
