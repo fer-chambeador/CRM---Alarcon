@@ -31,6 +31,7 @@ export type Lead = {
   suscripcion_fecha: string | null
   monto: number
   estado: string | null
+  presupuesto: 'none' | '100_to_1000' | '2000_to_5000' | '10000_plus' | null
   notas: string | null
   tipo_evento: string | null
   slack_ts: string | null

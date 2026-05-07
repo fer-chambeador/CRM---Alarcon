@@ -13,6 +13,8 @@ import {
   DEFAULT_MONTO, statusColor, fmtMoney,
 } from '@/lib/status'
 import { phoneToState, ALL_STATES } from '@/lib/lada'
+import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
+import type { Presupuesto } from '@/lib/budget'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
@@ -211,6 +213,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     status: lead.status, notas: lead.notas || '',
     monto: lead.monto ?? DEFAULT_MONTO,
     estado: lead.estado || '',
+    presupuesto: lead.presupuesto || '',
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
   const [saving, setSaving] = useState(false)
@@ -221,7 +224,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     setSaving(true)
     const res = await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, estado: form.estado || null, veces_contactado: contactos }),
+      body: JSON.stringify({ ...form, estado: form.estado || null, presupuesto: form.presupuesto || null, veces_contactado: contactos }),
     })
     onSave(await res.json()); setSaving(false); onClose()
   }, [lead.id, form, contactos, onSave, onClose])
@@ -265,6 +268,12 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
               <select value={form.estado} onChange={e => setForm(f => ({ ...f, estado: e.target.value }))}>
                 <option value="">Auto: {phoneToState(form.telefono) || '— sin detectar —'}</option>
                 {ALL_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label><span>Presupuesto</span>
+              <select value={form.presupuesto} onChange={e => setForm(f => ({ ...f, presupuesto: e.target.value as Presupuesto | '' }))}>
+                <option value="">No registrado</option>
+                {PRESUPUESTO_VALUES.map(p => <option key={p} value={p}>{PRESUPUESTO_LABELS[p]}</option>)}
               </select>
             </label>
             <label><span>Monto pipeline (MXN)</span>
@@ -349,7 +358,7 @@ function StatusPopover({ current, anchor, onPick, onClose }: {
 }
 
 // ─── Sortable header ─────────────────────────────────────────────────────────
-type SortKey = 'email' | 'empresa' | 'telefono' | 'ubicacion' | 'canal' | 'status' | 'monto' | 'contacto' | 'fecha'
+type SortKey = 'email' | 'empresa' | 'telefono' | 'ubicacion' | 'canal' | 'status' | 'monto' | 'presupuesto' | 'contacto' | 'fecha'
 function SortableHeader({ label, sortKey, current, onSort }: {
   label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
   onSort: (k: SortKey) => void
@@ -476,6 +485,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'ubicacion': return l.estado || phoneToState(l.telefono) || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
         case 'monto': return l.monto ?? 0
+        case 'presupuesto': {
+          // Sort by tier rank: none < 100_to_1000 < 2000_to_5000 < 10000_plus, null last
+          const rank: Record<string, number> = { none: 1, '100_to_1000': 2, '2000_to_5000': 3, '10000_plus': 4 }
+          return l.presupuesto ? rank[l.presupuesto] || 0 : 0
+        }
         case 'contacto': return l.veces_contactado || 0
         case 'fecha': return l.created_at
       }
@@ -588,13 +602,14 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 <SortableHeader label="Canal" sortKey="canal" current={sort} onSort={onSort} />
                 <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
                 <SortableHeader label="Monto" sortKey="monto" current={sort} onSort={onSort} />
+                <SortableHeader label="Presupuesto" sortKey="presupuesto" current={sort} onSort={onSort} />
                 <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
                 <SortableHeader label="Fecha" sortKey="fecha" current={sort} onSort={onSort} />
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {sorted.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
+              {sorted.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
               {sorted.map(lead => {
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
@@ -641,6 +656,14 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                       </button>
                     </td>
                     <td className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
+                    <td>
+                      {lead.presupuesto
+                        ? <span className={styles.presupuestoTag}
+                            style={{ '--pc': PRESUPUESTO_COLORS[lead.presupuesto as Presupuesto] } as React.CSSProperties}>
+                            {fmtPresupuesto(lead.presupuesto)}
+                          </span>
+                        : <span className={styles.empty}>No registrado</span>}
+                    </td>
                     <td>
                       {lead.veces_contactado > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
