@@ -1094,3 +1094,18 @@
   border-color: rgba(245, 200, 66, 0.4);
   color: var(--text);
 }
+
+/* ── Goal progress bar inside the dark KPI card ── */
+.kpiHeroBar {
+  height: 5px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.kpiHeroBarFill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #00c8a0, #6f3fc4);
+  transition: width 0.4s ease;
+}
