@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { supabase, type Lead } from '@/lib/supabase'
 import {
   STATUS_LABELS, statusColor, fmtMoney, fmtPct, fmtHours, sumMonto,
-  PIPELINE_CLOSED, PIPELINE_CLOSING, getLeadAlert, type LeadAlert, alertColor,
+  PIPELINE_CLOSED, PIPELINE_CLOSING, getLeadAlert, type LeadAlert, type AlertAction, alertColor,
 } from '@/lib/status'
 import { startOfMonth, subMonths, isAfter } from 'date-fns'
 import clsx from 'clsx'
@@ -67,6 +67,26 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
       if (u && u.id) setLeads(prev => prev.map(l => l.id === u.id ? u : l))
     } catch {}
   }, [])
+
+  // Optimistic bump of veces_contactado (server resets ultimo_contacto)
+  const bumpContacto = useCallback(async (leadId: string) => {
+    setLeads(prev => prev.map(l => l.id === leadId
+      ? { ...l, veces_contactado: (l.veces_contactado || 0) + 1, ultimo_contacto: new Date().toISOString() }
+      : l))
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incrementar_contacto: true }),
+      })
+      const u = await res.json()
+      if (u && u.id) setLeads(prev => prev.map(l => l.id === u.id ? u : l))
+    } catch {}
+  }, [])
+
+  const dispatchAction = useCallback((leadId: string, action: AlertAction) => {
+    if (action.incrementarContacto) bumpContacto(leadId)
+    else if (action.status) updateStatus(leadId, action.status)
+  }, [bumpContacto, updateStatus])
 
   // ── Stats ──
   const stats = useMemo(() => {
@@ -171,7 +191,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
               : (
                 <div className={styles.nbaList}>
                   {alerted.map(({ lead, alert }) => (
-                    <NBAItem key={lead.id} lead={lead} alert={alert} onAction={updateStatus} onOpen={() => router.push(`/leads?lead=${lead.id}`)} />
+                    <NBAItem key={lead.id} lead={lead} alert={alert} onAction={dispatchAction} onOpen={() => router.push(`/leads?lead=${lead.id}`)} />
                   ))}
                 </div>
               )}
@@ -209,7 +229,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
 
 // ─── NBA Item ────────────────────────────────────────────────────────────────
 function NBAItem({ lead, alert, onAction, onOpen }: {
-  lead: Lead; alert: LeadAlert; onAction: (id: string, s: Lead['status']) => void; onOpen: () => void
+  lead: Lead; alert: LeadAlert; onAction: (id: string, action: AlertAction) => void; onOpen: () => void
 }) {
   const ac = alertColor(alert.level)
   return (
@@ -224,9 +244,9 @@ function NBAItem({ lead, alert, onAction, onOpen }: {
       </div>
       <div className={styles.nbaActions}>
         {alert.actions.map((a, i) => (
-          <button key={a.status} className={clsx(styles.nbaActionBtn, i === 0 && styles.nbaActionPrimary)}
-            style={{ '--ac': statusColor(a.status) } as React.CSSProperties}
-            onClick={() => onAction(lead.id, a.status)}>
+          <button key={i} className={clsx(styles.nbaActionBtn, i === 0 && styles.nbaActionPrimary)}
+            style={{ '--ac': a.status ? statusColor(a.status) : '#7c54e8' } as React.CSSProperties}
+            onClick={() => onAction(lead.id, a)}>
             {a.label}
           </button>
         ))}
