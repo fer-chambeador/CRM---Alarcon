@@ -215,6 +215,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     monto: lead.monto ?? DEFAULT_MONTO,
     estado: lead.estado || '',
     presupuesto: lead.presupuesto || '',
+    vacante: lead.vacante || '',
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
   const [saving, setSaving] = useState(false)
@@ -225,7 +226,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     setSaving(true)
     const res = await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, estado: form.estado || null, presupuesto: form.presupuesto || null, veces_contactado: contactos }),
+      body: JSON.stringify({ ...form, estado: form.estado || null, presupuesto: form.presupuesto || null, vacante: form.vacante || null, veces_contactado: contactos }),
     })
     onSave(await res.json()); setSaving(false); onClose()
   }, [lead.id, form, contactos, onSave, onClose])
@@ -276,6 +277,10 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 <option value="">No registrado</option>
                 {PRESUPUESTO_VALUES.map(p => <option key={p} value={p}>{PRESUPUESTO_LABELS[p]}</option>)}
               </select>
+            </label>
+            <label><span>Vacante (puesto buscado)</span>
+              <input value={form.vacante} onChange={e => setForm(f => ({ ...f, vacante: e.target.value }))}
+                placeholder="Cocinero, Seguridad, Reclutador, etc." />
             </label>
             <label><span>Monto pipeline (MXN)</span>
               <input type="number" min={0} step={1} value={form.monto}

@@ -219,6 +219,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
   const byPuesto = useMemo(() => makeBreakdown(scoped, l => l.puesto), [scoped])
   const byEstado = useMemo(() => makeBreakdown(scoped, l => l.estado || phoneToState(l.telefono)), [scoped])
   const byPresupuesto = useMemo(() => makeBreakdown(scoped, l => fmtPresupuesto(l.presupuesto)), [scoped])
+  const byVacante = useMemo(() => makeBreakdown(scoped, l => l.vacante), [scoped])
 
   return (
     <div className={styles.root}>
@@ -253,6 +254,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
           <BreakdownTable title="Por presupuesto" subtitle="Tier de inversión declarado en onboarding" rows={byPresupuesto} />
+          <BreakdownTable title="Por vacante (puesto buscado)" subtitle="Qué roles está reclutando el cliente — clave para entender qué anuncios convierten mejor" rows={byVacante} />
           <BreakdownTable title="Por decision maker (puesto)" subtitle="Qué roles convierten mejor" rows={byPuesto} />
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
