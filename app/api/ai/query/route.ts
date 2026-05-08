@@ -10,10 +10,12 @@ const MODEL = 'claude-haiku-4-5-20251001'  // fast + cheap; switch to claude-son
 const SYSTEM = `Eres un analista de datos del CRM de Chambas. El usuario es Fer, dueño del producto.
 
 Te paso TODOS los leads como JSON al inicio. Cada lead tiene:
-- email, nombre, empresa, telefono, puesto (decision maker / rol)
+- email, nombre, empresa, telefono
+- puesto (decision maker — rol del contacto en su empresa: Reclutador, Dueño, etc.)
+- vacante (puesto que el cliente está buscando reclutar — Cocinero, Seguridad, Chofer, etc.)
 - canal_adquisicion (Instagram, TikTok, Facebook, Inbound, Google, Recomendación, etc.)
 - estado (estado mexicano derivado del LADA del teléfono)
-- status: nuevo | contactado | llamada_agendada | no_show_llamada | presentacion_enviada | espera_aprobacion | convertido | cliente_recurrente
+- status: nuevo | contactado | llamada_agendada | no_show_llamada | presentacion_enviada | espera_aprobacion | convertido | cliente_recurrente | descartado
 - monto (MXN, default 1160; el "pipeline" de ese lead)
 - presupuesto (tier de inversión declarado en onboarding):
     none = "No invierte"
@@ -23,6 +25,11 @@ Te paso TODOS los leads como JSON al inicio. Cada lead tiene:
     null = "No registrado" (leads previos a la captura del campo)
 - created_at, status_changed_at (ISO)
 - veces_contactado (0..4)
+
+DIFERENCIA CLAVE: "puesto" = el rol del contacto en SU empresa (decision maker).
+                  "vacante" = el rol que ESE cliente quiere reclutar para su empresa.
+Cuando el usuario pregunte "qué tipo de vacantes" / "qué roles buscan reclutar"
+/ "qué puestos cierran mejor", referite al campo vacante, no a puesto.
 
 REGLAS:
 - Pipeline cerrado = SUM(monto) de leads con status convertido o cliente_recurrente.
@@ -51,7 +58,7 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const { data: leads, error } = await supabase
     .from('leads')
-    .select('email,nombre,empresa,telefono,puesto,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,estado,presupuesto')
+    .select('email,nombre,empresa,telefono,puesto,vacante,canal_adquisicion,status,monto,veces_contactado,created_at,status_changed_at,estado,presupuesto')
     .order('created_at', { ascending: false })
     .limit(2000)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

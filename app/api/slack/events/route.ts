@@ -73,6 +73,7 @@ export async function POST(req: NextRequest) {
         if (parsed.puesto && !existing.puesto) updates.puesto = parsed.puesto
         if (parsed.canal_adquisicion && !existing.canal_adquisicion) updates.canal_adquisicion = parsed.canal_adquisicion
         if (parsed.presupuesto && !existing.presupuesto) updates.presupuesto = parsed.presupuesto
+        if (parsed.vacante && !existing.vacante) updates.vacante = parsed.vacante
         if (Object.keys(updates).length > 0) {
           await supabase.from('leads').update(updates).eq('id', existing.id)
         }
@@ -85,6 +86,7 @@ export async function POST(req: NextRequest) {
           puesto: parsed.puesto,
           canal_adquisicion: parsed.canal_adquisicion,
           presupuesto: parsed.presupuesto,
+          vacante: parsed.vacante,
           status: 'nuevo',
           tipo_evento: parsed.tipo_evento,
           slack_ts: event.ts,
