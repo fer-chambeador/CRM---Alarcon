@@ -81,7 +81,7 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     const presupuestoRaw = normalized.match(/Presupuesto de reclutamiento:\s*(.+)/)?.[1]?.trim() || null
     const presupuesto = normalizePresupuesto(presupuestoRaw)
     // "Puesto:" = vacante que el cliente quiere reclutar (NO confundir con "Rol en la empresa")
-    const vacanteMatch = normalized.match(/(?:^|\n|\s{2,})Puesto:\s*([^\n]+?)(?=\s{2,}\w[\wáéíóúñÁÉÍÓÚÑ ]*:|$)/)
+    const vacanteMatch = normalized.match(/Puesto:\s*([^\n]+)/)
     const vacante = vacanteMatch?.[1]?.trim() || null
     if (puesto && puesto.toLowerCase().includes('soy candidato')) return null
     return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null, presupuesto, vacante }
