@@ -6,7 +6,7 @@ import { supabase, type Lead } from '@/lib/supabase'
 import { Sidebar } from './CommandCenter'
 import {
   STATUS_LABELS, statusColor, fmtMoney, fmtHours, sumMonto,
-  PIPELINE_CLOSED, getLeadAlert, type LeadAlert, alertColor, DEFAULT_MONTO,
+  PIPELINE_CLOSED, getLeadAlert, type LeadAlert, type AlertAction, alertColor, DEFAULT_MONTO,
 } from '@/lib/status'
 import clsx from 'clsx'
 import styles from './CommandCenter.module.css'
@@ -49,6 +49,25 @@ export default function PendientesClient({ initialLeads }: { initialLeads: Lead[
       if (u && u.id) setLeads(prev => prev.map(l => l.id === u.id ? u : l))
     } catch {}
   }, [])
+
+  const bumpContacto = useCallback(async (leadId: string) => {
+    setLeads(prev => prev.map(l => l.id === leadId
+      ? { ...l, veces_contactado: (l.veces_contactado || 0) + 1, ultimo_contacto: new Date().toISOString() }
+      : l))
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incrementar_contacto: true }),
+      })
+      const u = await res.json()
+      if (u && u.id) setLeads(prev => prev.map(l => l.id === u.id ? u : l))
+    } catch {}
+  }, [])
+
+  const dispatchAction = useCallback((leadId: string, action: AlertAction) => {
+    if (action.incrementarContacto) bumpContacto(leadId)
+    else if (action.status) updateStatus(leadId, action.status)
+  }, [bumpContacto, updateStatus])
 
   const alerted = useMemo<AlertedLead[]>(() => {
     return leads
@@ -109,10 +128,10 @@ export default function PendientesClient({ initialLeads }: { initialLeads: Lead[
             </div>
           </div>
 
-          <Group title="🚨 Urgentes — último seguimiento (>96h)" rows={groups.urgent} onAction={updateStatus} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Nada urgente. Bien." />
-          <Group title="⏳ Follow up — contactados sin avance (>48h)" rows={groups.followUp} onAction={updateStatus} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Nada que fallowear." />
-          <Group title="📞 Llamadas agendadas pendientes de actualizar (>24h)" rows={groups.llamada} onAction={updateStatus} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Todas las llamadas al día." />
-          <Group title="📤 Presentaciones esperando resultado (>48h)" rows={groups.presentacion} onAction={updateStatus} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Sin presentaciones colgando." />
+          <Group title="🚨 Urgentes — descartar por intentos" rows={groups.urgent} onAction={dispatchAction} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Nada urgente. Bien." />
+          <Group title="⏳ Follow up — contactados sin avance 72 h hábiles" rows={groups.followUp} onAction={dispatchAction} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Sin follow-ups pendientes." />
+          <Group title="📞 Llamadas agendadas pendientes de actualizar (>24h)" rows={groups.llamada} onAction={dispatchAction} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Todas las llamadas al día." />
+          <Group title="📤 Propuestas esperando resultado (>48h)" rows={groups.presentacion} onAction={dispatchAction} onOpen={(l) => router.push(`/leads?lead=${l.id}`)} emptyText="Sin propuestas colgando." />
 
           {newToday.length > 0 && (
             <section className={styles.section}>
@@ -150,7 +169,7 @@ export default function PendientesClient({ initialLeads }: { initialLeads: Lead[
 
 function Group({ title, rows, onAction, onOpen, emptyText }: {
   title: string; rows: AlertedLead[];
-  onAction: (id: string, s: Lead['status']) => void;
+  onAction: (id: string, action: AlertAction) => void;
   onOpen: (l: Lead) => void;
   emptyText: string
 }) {
@@ -176,9 +195,9 @@ function Group({ title, rows, onAction, onOpen, emptyText }: {
                 </div>
                 <div className={styles.nbaActions}>
                   {alert.actions.map((a, i) => (
-                    <button key={a.status} className={clsx(styles.nbaActionBtn, i === 0 && styles.nbaActionPrimary)}
-                      style={{ '--ac': statusColor(a.status) } as React.CSSProperties}
-                      onClick={() => onAction(lead.id, a.status)}>
+                    <button key={i} className={clsx(styles.nbaActionBtn, i === 0 && styles.nbaActionPrimary)}
+                      style={{ '--ac': a.status ? statusColor(a.status) : '#7c54e8' } as React.CSSProperties}
+                      onClick={() => onAction(lead.id, a)}>
                       {a.label}
                     </button>
                   ))}

@@ -58,7 +58,11 @@ export const sumMonto = (rows: Lead[]) => rows.reduce((a, l) => a + (l.monto ?? 
 
 // ─── Business rules / alerts ────────────────────────────────────────────────
 export type AlertKind = 'follow_up' | 'last_chance' | 'llamada_pending' | 'presentacion_pending'
-export type AlertAction = { label: string; status: Lead['status'] }
+export type AlertAction = {
+  label: string
+  status?: Lead['status']
+  incrementarContacto?: boolean
+}
 export type LeadAlert = {
   kind: AlertKind
   level: 'warning' | 'urgent'
@@ -68,44 +72,101 @@ export type LeadAlert = {
 }
 
 const HOUR = 36e5
+const BUSINESS_HOURS_THRESHOLD = 72  // 9 working days of 8h
 
 /**
- * Compute the alert (if any) for a lead based on how long it has been
- * sitting in its current status.
- *
- * Rules:
- *  - contactado → 48h: follow up; 96h: último seguimiento
- *  - llamada_agendada → 24h: ¿presentación enviada o no show?
- *  - presentacion_enviada → 48h: ¿convertido o espera de aprobación?
+ * Hours of business time elapsed between two timestamps.
+ * Business hours = Mon–Fri, 10:00–18:00 (local time).
+ * Weekends and non-business hours don't count toward the total.
  */
-export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | null {
-  const ts = lead.status_changed_at ? new Date(lead.status_changed_at).getTime() : new Date(lead.updated_at).getTime()
-  const hours = (now - ts) / HOUR
-
-  if (lead.status === 'contactado') {
-    if (hours >= 96) return {
-      kind: 'last_chance', level: 'urgent', hours,
-      text: 'Último seguimiento — 96 h sin avance',
-      actions: [
-        { label: 'Llamada agendada', status: 'llamada_agendada' },
-        { label: 'Descartar', status: 'no_show_llamada' },
-      ],
+export function businessHoursElapsed(fromMs: number, toMs: number): number {
+  if (toMs <= fromMs) return 0
+  let total = 0
+  const cur = new Date(fromMs)
+  for (let i = 0; i < 600 && cur.getTime() < toMs; i++) {
+    const day = cur.getDay() // 0=Sun, 6=Sat
+    if (day === 0 || day === 6) {
+      // jump to next Monday 10:00
+      cur.setDate(cur.getDate() + (day === 0 ? 1 : 2))
+      cur.setHours(10, 0, 0, 0)
+      continue
     }
-    if (hours >= 48) return {
-      kind: 'follow_up', level: 'warning', hours,
-      text: 'Follow up — 48 h sin avance',
-      actions: [
-        { label: 'Llamada agendada', status: 'llamada_agendada' },
-      ],
+    const start = new Date(cur); start.setHours(10, 0, 0, 0)
+    const end = new Date(cur); end.setHours(18, 0, 0, 0)
+    if (cur.getTime() < start.getTime()) {
+      cur.setTime(start.getTime())
+      continue
+    }
+    if (cur.getTime() >= end.getTime()) {
+      cur.setDate(cur.getDate() + 1)
+      cur.setHours(10, 0, 0, 0)
+      continue
+    }
+    const stop = Math.min(end.getTime(), toMs)
+    total += (stop - cur.getTime()) / HOUR
+    cur.setTime(stop)
+    if (cur.getTime() < toMs) {
+      cur.setDate(cur.getDate() + 1)
+      cur.setHours(10, 0, 0, 0)
     }
   }
+  return total
+}
+
+/**
+ * Compute the alert (if any) for a lead.
+ *
+ * Rules:
+ *  - contactado: clock starts at ultimo_contacto (or status_changed_at fallback).
+ *      Trigger every 72 BUSINESS hours (Mon-Fri 10:00-18:00):
+ *        veces=1 → "Pasá a 2do contacto"
+ *        veces=2 → "Pasá a 3er contacto"
+ *        veces=3 → "Descartá por intentos" (urgent)
+ *  - llamada_agendada → 24 h calendario: ¿propuesta enviada o no show?
+ *  - presentacion_enviada → 48 h calendario: ¿convertido o espera de aprobación?
+ */
+export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | null {
+  if (lead.status === 'contactado') {
+    const ts = lead.ultimo_contacto
+      ? new Date(lead.ultimo_contacto).getTime()
+      : new Date(lead.status_changed_at || lead.updated_at).getTime()
+    const bizHours = businessHoursElapsed(ts, now)
+    const calHours = (now - ts) / HOUR
+    if (bizHours < BUSINESS_HOURS_THRESHOLD) return null
+
+    const veces = Math.max(1, lead.veces_contactado || 1)
+    if (veces === 1) {
+      return {
+        kind: 'follow_up', level: 'warning', hours: calHours,
+        text: '72 h hábiles sin avance — pasá a 2do contacto',
+        actions: [{ label: 'Pasá a 2do contacto', incrementarContacto: true }],
+      }
+    }
+    if (veces === 2) {
+      return {
+        kind: 'follow_up', level: 'warning', hours: calHours,
+        text: '72 h hábiles sin avance — pasá a 3er contacto',
+        actions: [{ label: 'Pasá a 3er contacto', incrementarContacto: true }],
+      }
+    }
+    // veces >= 3 → último intento
+    return {
+      kind: 'last_chance', level: 'urgent', hours: calHours,
+      text: '72 h hábiles sin avance tras 3er contacto — descartá por intentos',
+      actions: [{ label: 'Descartar por intentos', status: 'descartado' }],
+    }
+  }
+
+  // Other branches keep calendar time (real-world deadlines)
+  const ts = lead.status_changed_at ? new Date(lead.status_changed_at).getTime() : new Date(lead.updated_at).getTime()
+  const hours = (now - ts) / HOUR
 
   if (lead.status === 'llamada_agendada' && hours >= 24) {
     return {
       kind: 'llamada_pending', level: 'warning', hours,
       text: '24 h desde que agendaste. ¿Cómo fue?',
       actions: [
-        { label: 'Presentación enviada', status: 'presentacion_enviada' },
+        { label: 'Propuesta enviada', status: 'presentacion_enviada' },
         { label: 'No show', status: 'no_show_llamada' },
       ],
     }
@@ -114,7 +175,7 @@ export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | 
   if (lead.status === 'presentacion_enviada' && hours >= 48) {
     return {
       kind: 'presentacion_pending', level: 'warning', hours,
-      text: '48 h desde la presentación. ¿Resultado?',
+      text: '48 h desde la propuesta. ¿Resultado?',
       actions: [
         { label: 'Convertido', status: 'convertido' },
         { label: 'Espera aprobación', status: 'espera_aprobacion' },
