@@ -15,6 +15,7 @@ import {
 import { phoneToState, ALL_STATES } from '@/lib/lada'
 import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
 import type { Presupuesto } from '@/lib/budget'
+import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 const MONTHLY_GOAL = 200000
@@ -216,6 +217,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     estado: lead.estado || '',
     presupuesto: lead.presupuesto || '',
     vacante: lead.vacante || '',
+    llamada_at: lead.llamada_at ? lead.llamada_at.slice(0, 16) : '',
   })
   const [contactos, setContactos] = useState(lead.veces_contactado || 0)
   const [saving, setSaving] = useState(false)
@@ -226,7 +228,14 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     setSaving(true)
     const res = await fetch(`/api/leads/${lead.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, estado: form.estado || null, presupuesto: form.presupuesto || null, vacante: form.vacante || null, veces_contactado: contactos }),
+      body: JSON.stringify({
+        ...form,
+        estado: form.estado || null,
+        presupuesto: form.presupuesto || null,
+        vacante: form.vacante || null,
+        llamada_at: form.llamada_at ? new Date(form.llamada_at).toISOString() : null,
+        veces_contactado: contactos,
+      }),
     })
     onSave(await res.json()); setSaving(false); onClose()
   }, [lead.id, form, contactos, onSave, onClose])
@@ -282,6 +291,13 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
               <input value={form.vacante} onChange={e => setForm(f => ({ ...f, vacante: e.target.value }))}
                 placeholder="Cocinero, Seguridad, Reclutador, etc." />
             </label>
+            {form.status === 'llamada_agendada' && (
+              <label><span>📞 Fecha y hora de la llamada</span>
+                <input type="datetime-local"
+                  value={form.llamada_at}
+                  onChange={e => setForm(f => ({ ...f, llamada_at: e.target.value }))} />
+              </label>
+            )}
             <label><span>Monto pipeline (MXN)</span>
               <input type="number" min={0} step={1} value={form.monto}
                 onChange={e => setForm(f => ({ ...f, monto: Number(e.target.value) || 0 }))} />
@@ -364,7 +380,7 @@ function StatusPopover({ current, anchor, onPick, onClose }: {
 }
 
 // ─── Sortable header ─────────────────────────────────────────────────────────
-type SortKey = 'email' | 'empresa' | 'telefono' | 'ubicacion' | 'canal' | 'status' | 'monto' | 'presupuesto' | 'contacto' | 'fecha'
+type SortKey = 'email' | 'empresa' | 'telefono' | 'ubicacion' | 'canal' | 'status' | 'monto' | 'presupuesto' | 'contacto' | 'fecha' | 'score'
 function SortableHeader({ label, sortKey, current, onSort }: {
   label: string; sortKey: SortKey; current: { key: SortKey; dir: 'asc' | 'desc' } | null;
   onSort: (k: SortKey) => void
@@ -494,6 +510,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'ubicacion': return l.estado || phoneToState(l.telefono) || ''
         case 'status': return STATUS_ORDER.indexOf(l.status)
         case 'monto': return l.monto ?? 0
+        case 'score': return leadPriorityScore(l)
         case 'presupuesto': {
           // Sort by tier rank: none < 100_to_1000 < 2000_to_5000 < 10000_plus, null last
           const rank: Record<string, number> = { none: 1, '100_to_1000': 2, '2000_to_5000': 3, '10000_plus': 4 }
@@ -515,7 +532,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const onSort = (key: SortKey) => {
     setSort(s => s?.key === key
       ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-      : { key, dir: key === 'fecha' || key === 'contacto' || key === 'monto' ? 'desc' : 'asc' })
+      : { key, dir: key === 'fecha' || key === 'contacto' || key === 'monto' || key === 'score' ? 'desc' : 'asc' })
   }
 
   const stats = useMemo(() => {
@@ -653,6 +670,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
                 const isDescartadoPorIntentos = (lead.veces_contactado || 0) >= CONTACTO_LABELS.length - 1
+                const score = leadPriorityScore(lead)
+                const bucket = scoreBucket(score)
                 return (
                   <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash)}
                       onClick={() => setSelectedLead(lead)}>
@@ -660,7 +679,14 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                       <div className={styles.emailCell}>
                         <span className={styles.tipoIcon}>{tipoLabel(lead.tipo_evento)}</span>
                         <div>
-                          {lead.nombre && <div className={styles.leadName}>{lead.nombre}</div>}
+                          <div className={styles.leadName} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span className={styles.scorePill}
+                              style={{ '--sc': SCORE_BUCKET_COLOR[bucket] } as React.CSSProperties}
+                              title={`Score ${score} · ${bucket}`}>
+                              {SCORE_BUCKET_EMOJI[bucket]} {score}
+                            </span>
+                            {lead.nombre || ''}
+                          </div>
                           <div className={styles.leadEmail}>{lead.email}</div>
                         </div>
                       </div>

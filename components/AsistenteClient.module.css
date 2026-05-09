@@ -258,3 +258,21 @@
 .sendBtn:hover:not(:disabled) { opacity: 0.92; }
 .sendBtn:active:not(:disabled) { transform: scale(0.98); }
 .sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 768px) {
+  .root { flex-direction: column; height: auto; min-height: 100vh; }
+  .sidebar {
+    width: 100%; padding: 14px 14px 12px;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .logo { padding: 0 4px 10px; font-size: 18px; margin-bottom: 4px; }
+  .sidebarNav { flex-direction: row; padding: 0; overflow-x: auto; gap: 4px; }
+  .navLink { padding: 7px 10px; font-size: 12.5px; white-space: nowrap; }
+  .topBar { padding: 14px 16px; }
+  .topBar h1 { font-size: 22px; }
+  .body { padding: 12px 14px 16px; gap: 16px; }
+  .userBubble, .assistantBubble { max-width: 100%; padding: 12px 14px; }
+  .composer { padding: 10px 14px 16px; }
+  .input { font-size: 13.5px !important; padding: 10px 14px !important; }
+  .sendBtn { padding: 0 16px; }
+}
