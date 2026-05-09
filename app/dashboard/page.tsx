@@ -1,15 +1,6 @@
-import { createServiceClient } from '@/lib/supabase'
-import CommandCenter from '@/components/CommandCenter'
+import { redirect } from 'next/navigation'
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
-
-export default async function DashboardPage() {
-  const supabase = createServiceClient()
-  const { data: leads } = await supabase
-    .from('leads')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  return <CommandCenter initialLeads={leads || []} />
+// /dashboard se fusionó con /pendientes — redirigimos por compat de bookmarks.
+export default function DashboardPage() {
+  redirect('/pendientes')
 }

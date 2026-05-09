@@ -153,7 +153,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
     <div className={styles.root}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}><span className={styles.logoIcon}>⚡</span><span>Chambas CRM</span></div>
-        <Sidebar alertsCount={alertsCount} active="dashboard" />
+        <Sidebar alertsCount={alertsCount} active="pendientes" />
       </aside>
 
       <main className={styles.main}>
@@ -260,7 +260,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'dashboard' | 'leads' | 'pendientes' | 'analytics' | 'asistente' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -271,7 +271,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   )
   return (
     <nav className={styles.sidebarNav}>
-      {link('/dashboard', 'dashboard', 'Hoy', '🎯')}
       {link('/pendientes', 'pendientes', 'Pendientes', '⏰')}
       {link('/leads', 'leads', 'Leads', '📋')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
@@ -314,7 +313,7 @@ type PaletteItem =
   | { kind: 'lead'; lead: Lead }
   | { kind: 'create' }
 
-function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
+export function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
   leads: Lead[]; onClose: () => void; onUpdateStatus: (id: string, s: Lead['status']) => void
 }) {
   const router = useRouter()
@@ -403,7 +402,7 @@ function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
 }
 
 // ─── AI Insights section (proactive analysis from Claude Haiku) ──────────────
-function InsightsSection() {
+export function InsightsSection() {
   const [insights, setInsights] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
