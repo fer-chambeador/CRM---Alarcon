@@ -1,56 +1,97 @@
 import type { Lead } from './supabase'
+import { phoneToState } from './lada'
 
 /**
- * Heurística de calificación 0–100.
- * Combina señales actuales en el CRM:
- *  - presupuesto declarado en onboarding (max 40)
- *  - canal de adquisición (max 20)
- *  - decision maker / puesto (max 20)
- *  - completitud + engagement (max 20)
+ * Heurística de calificación 0–100 (v2).
  *
- * Es deterministic — no cachea, se computa cada vez. Cambiá los pesos
- * y todo el sistema (badge en tabla, sort, NBA priority) se actualiza.
+ * Pesos:
+ *   Presupuesto (25)  — entre mayor budget, mejor.
+ *   Canal (20)        — Recomendación e Inbound (vio CVs) son los más calientes;
+ *                       canales nuevos / desconocidos > RRSS (saturadas).
+ *   Estado (10)       — CDMX y Estado de México tienen prioridad.
+ *   Rol en empresa (15) — dueño / fundador > gerente de RH > otros gerentes.
+ *   Vacante (15)      — roles "generales" (volumen, fáciles de reclutar)
+ *                       > especializados (mecánico, ingeniero, contador, etc.).
+ *   Correo corporativo (10) — domain ≠ gmail/hotmail/yahoo/etc.
+ *   Engagement (5)    — empresa registrada y/o ya contactado al menos una vez.
+ *
+ * Buckets (no cambian): hot ≥60, warm ≥30, cold <30.
  */
 
 const PRESUPUESTO_POINTS: Record<string, number> = {
   none: 0,
-  '100_to_1000': 15,
-  '2000_to_5000': 28,
-  '10000_plus': 40,
+  '100_to_1000': 8,
+  '2000_to_5000': 17,
+  '10000_plus': 25,
 }
 
-const CANAL_POINTS: Record<string, number> = {
-  Inbound: 20,
-  'Recomendación': 20,
-  Google: 14,
-  LinkedIn: 14,
-  WhatsApp: 12,
-  Facebook: 10,
-  Instagram: 10,
-  TikTok: 6,
+// Heurística para canal — usamos regex sobre lower-case para tolerar variantes
+function canalPoints(canal: string | null): number {
+  if (!canal) return 0
+  const c = canal.toLowerCase()
+  if (/recomenda|referral/.test(c)) return 20
+  if (/inbound|cv|chambas/.test(c)) return 18  // "vio CVs de chambas" cae acá
+  if (/instagram|facebook|tiktok|linkedin|\big\b|\bfb\b/.test(c)) return 8  // RRSS — saturadas
+  return 12  // canal nuevo / desconocido / otro
 }
 
-function puestoPoints(p: string | null): number {
+// CDMX y Estado de México son el bullseye geográfico
+function estadoPoints(estado: string | null): number {
+  if (!estado) return 0
+  const e = estado.toLowerCase()
+  if (/cdmx|ciudad de m[ée]xico|distrito federal/.test(e)) return 10
+  if (/estado de m[ée]xico|edomex/.test(e)) return 10
+  return 0
+}
+
+// Rol en su empresa (decision maker)
+function rolEmpresaPoints(p: string | null): number {
   if (!p) return 0
   const s = p.toLowerCase()
-  if (/(due[ñn]|ceo|director|socio|fundador|owner)/i.test(s)) return 20
-  if (/(reclut|rh|recursos hum|gerente|head|manager|jefe)/i.test(s)) return 12
-  return 6
+  if (/(due[ñn]|ceo|director|socio|fundador|owner|presidente)/.test(s)) return 15
+  if (/(reclut|recursos hum|talent)/.test(s) || /\brh\b/.test(s)) return 12
+  if (/(gerente|manager|head|jefe)/.test(s)) return 8
+  return 4
+}
+
+// Vacante (puesto que el cliente quiere reclutar) — más "general" = mejor
+const VACANTE_GENERAL = /(general|ayudante|operario|operador|almacen|mozo|cargador|mensajer|limpieza|auxiliar|empacador|cajer|repartidor|chofer|seguridad|vigilante|recepcionista|asistente|montacarg|despacho|inventario|estibador|paquetero|merma|conserje|jardiner|pintor)/i
+
+const VACANTE_ESPECIALIZADA = /(ingenier|t[ée]cnico|especialista|supervisor|contador|abogad|m[ée]dico|enfermer|programador|desarroll|dise[ñn]ador|mec[áa]nico|electricista|plomer|soldador|arquitect|consultor|analista|director|farmac|qu[íi]mic|veterinari|odontolog|psicolog|maestro|profesor|chef\b)/i
+
+function vacantePoints(v: string | null): number {
+  if (!v) return 0
+  if (VACANTE_GENERAL.test(v)) return 15
+  if (VACANTE_ESPECIALIZADA.test(v)) return 6
+  return 10  // sin clasificar — neutro tirando a alto
+}
+
+// Email corporativo: dominio que NO es de proveedor masivo de email gratis
+const CONSUMER_EMAIL_DOMAINS = /@(gmail|hotmail|yahoo|outlook|icloud|me|live|aol|protonmail|proton|msn|googlemail|inbox|zoho|gmx|tutanota|mail)\./i
+
+function emailCorporativoPoints(email: string | null): number {
+  if (!email) return 0
+  if (CONSUMER_EMAIL_DOMAINS.test(email)) return 0
+  return /@[\w.-]+\.\w+/.test(email) ? 10 : 0
+}
+
+function engagementPoints(lead: Lead): number {
+  let s = 0
+  if (lead.empresa) s += 2
+  if ((lead.veces_contactado || 0) >= 1) s += 3
+  return s
 }
 
 export function leadScore(lead: Lead): number {
   let score = 0
 
   if (lead.presupuesto) score += PRESUPUESTO_POINTS[lead.presupuesto] ?? 0
-  if (lead.canal_adquisicion) score += CANAL_POINTS[lead.canal_adquisicion] ?? 0
-  score += puestoPoints(lead.puesto)
-
-  // Completitud + engagement (max 20)
-  if (lead.empresa) score += 5
-  if (lead.estado) score += 3
-  if (lead.vacante) score += 5
-  if ((lead.veces_contactado || 0) >= 1) score += 4
-  if ((lead.veces_contactado || 0) >= 2) score += 3
+  score += canalPoints(lead.canal_adquisicion)
+  score += estadoPoints(lead.estado || phoneToState(lead.telefono))
+  score += rolEmpresaPoints(lead.puesto)
+  score += vacantePoints(lead.vacante)
+  score += emailCorporativoPoints(lead.email)
+  score += engagementPoints(lead)
 
   return Math.max(0, Math.min(100, score))
 }
@@ -79,4 +120,19 @@ export const SCORE_BUCKET_EMOJI: Record<ScoreBucket, string> = {
   hot: '🔥',
   warm: '✨',
   cold: '❄️',
+}
+
+/**
+ * Breakdown por categoría — útil para tooltip "por qué este score".
+ */
+export function leadScoreBreakdown(lead: Lead) {
+  return {
+    presupuesto: lead.presupuesto ? PRESUPUESTO_POINTS[lead.presupuesto] ?? 0 : 0,
+    canal: canalPoints(lead.canal_adquisicion),
+    estado: estadoPoints(lead.estado || phoneToState(lead.telefono)),
+    rolEmpresa: rolEmpresaPoints(lead.puesto),
+    vacante: vacantePoints(lead.vacante),
+    correoCorporativo: emailCorporativoPoints(lead.email),
+    engagement: engagementPoints(lead),
+  }
 }
