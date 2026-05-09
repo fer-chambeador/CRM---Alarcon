@@ -302,3 +302,27 @@
   opacity: 0.7;
   letter-spacing: 0.04em;
 }
+
+@media (max-width: 768px) {
+  .root { flex-direction: column; height: auto; min-height: 100vh; }
+  .sidebar {
+    width: 100%; padding: 14px 14px 12px; gap: 4px;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .logo { padding: 0 4px 10px; font-size: 18px; margin-bottom: 4px; }
+  .sidebarNav { flex-direction: row; padding: 0; overflow-x: auto; gap: 4px; }
+  .navLink { padding: 7px 10px; font-size: 12.5px; white-space: nowrap; }
+  .dateBlock { padding: 10px 4px 6px; }
+  .kpiList { padding: 8px 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .kpi, .kpiMoney { padding: 8px 12px; }
+  .kpi strong { font-size: 16px; }
+  .kpiMoney strong { font-size: 13px; }
+  .topBar { padding: 14px 16px; }
+  .topBar h1 { font-size: 22px; }
+  .body { padding: 14px; gap: 14px; }
+  .section { padding: 14px 16px; border-radius: var(--radius-md); }
+  .breakdownTable { font-size: 12px; }
+  .breakdownTable th, .breakdownTable td { padding: 6px 8px; }
+  .funnelRow { grid-template-columns: 110px 1fr 36px 80px; gap: 8px; font-size: 12px; }
+  .funnelLabel { font-size: 12px; }
+}

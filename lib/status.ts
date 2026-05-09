@@ -161,14 +161,37 @@ export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | 
   const ts = lead.status_changed_at ? new Date(lead.status_changed_at).getTime() : new Date(lead.updated_at).getTime()
   const hours = (now - ts) / HOUR
 
-  if (lead.status === 'llamada_agendada' && hours >= 24) {
-    return {
-      kind: 'llamada_pending', level: 'warning', hours,
-      text: '24 h desde que agendaste. ¿Cómo fue?',
-      actions: [
-        { label: 'Propuesta enviada', status: 'presentacion_enviada' },
-        { label: 'No show', status: 'no_show_llamada' },
-      ],
+  if (lead.status === 'llamada_agendada') {
+    const callActions = [
+      { label: 'Propuesta enviada', status: 'presentacion_enviada' as Lead['status'] },
+      { label: 'No show', status: 'no_show_llamada' as Lead['status'] },
+    ]
+    // Si capturaste la fecha/hora exacta, alertá en torno a esa hora
+    if (lead.llamada_at) {
+      const callMs = new Date(lead.llamada_at).getTime()
+      const minsUntil = (callMs - now) / 60000
+      if (minsUntil > 0 && minsUntil <= 60) {
+        return {
+          kind: 'llamada_pending', level: 'urgent', hours: 0,
+          text: `Llamada en ${Math.round(minsUntil)} min`,
+          actions: callActions,
+        }
+      }
+      const hoursAfter = (now - callMs) / HOUR
+      if (hoursAfter >= 1) {
+        return {
+          kind: 'llamada_pending', level: 'warning', hours: hoursAfter,
+          text: `La llamada fue hace ${hoursAfter < 24 ? Math.round(hoursAfter) + ' h' : Math.floor(hoursAfter / 24) + ' días'}. ¿Cómo fue?`,
+          actions: callActions,
+        }
+      }
+    } else if (hours >= 24) {
+      // Fallback legacy si no se capturó la hora exacta
+      return {
+        kind: 'llamada_pending', level: 'warning', hours,
+        text: '24 h desde que agendaste. ¿Cómo fue?',
+        actions: callActions,
+      }
     }
   }
 
