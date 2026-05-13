@@ -16,6 +16,7 @@ type Cliente = {
   meses: string[]
   notas: string | null
   has_override: boolean
+  hidden: boolean
 }
 
 type Payload = {
@@ -23,6 +24,7 @@ type Payload = {
   meses_leidos: string[]
   meses_intentados: string[]
   total_pagado_global: number
+  hidden_count: number
   generated_at: string
   error?: string
 }
@@ -90,6 +92,7 @@ export default function RecurrentesClient() {
   const [search, setSearch] = useState('')
   const [dateRange, setDateRange] = useState<DateRange>('todo')
   const [bucket, setBucket] = useState<TicketBucket>('todos')
+  const [showHidden, setShowHidden] = useState(false)
   const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg'; dir: 'asc' | 'desc' }>(
     { key: 'total', dir: 'desc' }
   )
@@ -117,6 +120,8 @@ export default function RecurrentesClient() {
     const { from, to } = dateRangeBounds(dateRange)
     const q = search.trim().toLowerCase()
     return data.clientes.filter(c => {
+      // Hidden filter
+      if (c.hidden && !showHidden) return false
       // Date filter: usa fecha_inicio del cliente
       if (from || to) {
         if (!c.fecha_inicio) return false
@@ -133,7 +138,7 @@ export default function RecurrentesClient() {
       }
       return true
     })
-  }, [data, dateRange, bucket, search])
+  }, [data, dateRange, bucket, search, showHidden])
 
   // ── Sorted ──
   const clientes = useMemo(() => {
@@ -219,6 +224,13 @@ export default function RecurrentesClient() {
               <option key={b} value={b}>{TICKET_LABELS[b]}</option>
             ))}
           </select>
+          {data && data.hidden_count > 0 && (
+            <button
+              className={showHidden ? styles.toggleActive : styles.toggle}
+              onClick={() => setShowHidden(v => !v)}>
+              {showHidden ? '👁 Ocultando' : '👁‍🗨 Mostrar'} eliminados ({data.hidden_count})
+            </button>
+          )}
           {(dateRange !== 'todo' || bucket !== 'todos' || search) && (
             <button className={styles.clearFilter} onClick={() => { setDateRange('todo'); setBucket('todos'); setSearch('') }}>
               Limpiar filtros
@@ -346,11 +358,12 @@ export default function RecurrentesClient() {
                       <tr><td colSpan={8} className={styles.empty}>Sin matches con los filtros actuales.</td></tr>
                     )}
                     {clientes.map(c => (
-                      <tr key={c.key} className={styles.row} onClick={() => setEditing(c)}>
+                      <tr key={c.key} className={styles.row + (c.hidden ? ' ' + styles.rowHidden : '')} onClick={() => setEditing(c)}>
                         <td>
                           <div className={styles.clienteName}>
                             {c.cliente}
-                            {c.has_override && <span className={styles.overrideTag} title="Editado manualmente">✏️</span>}
+                            {c.hidden && <span className={styles.hiddenTag} title="Oculto">👁‍🗨</span>}
+                            {c.has_override && !c.hidden && <span className={styles.overrideTag} title="Editado manualmente">✏️</span>}
                           </div>
                           {c.meses.length > 1 && (
                             <div className={styles.mesesBadge} title={c.meses.join(' · ')}>en {c.meses.length} meses</div>
@@ -442,6 +455,24 @@ function EditModal({ cliente, onClose, onSaved }: {
     }
   }
 
+  const toggleHidden = async () => {
+    const nextHidden = !cliente.hidden
+    if (nextHidden && !confirm(`¿Eliminar "${cliente.cliente}" de la lista?\n\nQueda oculto en /recurrentes pero el sheet no se toca. Lo podés restaurar desde el botón "Mostrar eliminados".`)) return
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch(`/api/recurrentes/${encodeURIComponent(cliente.key)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden: nextHidden }),
+      })
+      const json = await res.json()
+      if (json.error) throw new Error(json.error)
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'operación falló')
+      setSaving(false)
+    }
+  }
+
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
@@ -501,14 +532,19 @@ function EditModal({ cliente, onClose, onSaved }: {
         </div>
 
         <footer className={styles.modalFooter}>
-          {cliente.has_override && (
-            <button className={styles.deleteBtn} onClick={clearOverride} disabled={saving}>
-              🗑 Volver al sheet
+          <button className={cliente.hidden ? styles.restoreBtn : styles.deleteBtn}
+            onClick={toggleHidden} disabled={saving}
+            title={cliente.hidden ? 'Volver a mostrar este cliente' : 'Ocultar de la lista (reversible)'}>
+            {cliente.hidden ? '↩️ Restaurar' : '🗑 Eliminar'}
+          </button>
+          {cliente.has_override && !cliente.hidden && (
+            <button className={styles.clearOverrideBtn} onClick={clearOverride} disabled={saving} title="Borrar nombre, email, canal y notas editados — vuelve a los valores del sheet">
+              Limpiar ediciones
             </button>
           )}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button className={styles.cancelBtn} onClick={onClose} disabled={saving}>Cancelar</button>
-            <button className={styles.saveBtn} onClick={save} disabled={saving}>
+            <button className={styles.saveBtn} onClick={save} disabled={saving || cliente.hidden}>
               {saving ? 'Guardando…' : 'Guardar'}
             </button>
           </div>

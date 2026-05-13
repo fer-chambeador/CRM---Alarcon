@@ -594,3 +594,56 @@
   .readonlyGrid { grid-template-columns: 1fr; }
   .timeline { height: 120px; gap: 4px; }
 }
+
+/* ── Soft-delete / hidden ─────────────────────────── */
+.toggle, .toggleActive {
+  background: var(--glass);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.toggle:hover { color: var(--text); border-color: var(--accent); }
+.toggleActive {
+  background: rgba(124,84,232,0.18);
+  border-color: rgba(124,84,232,0.5);
+  color: var(--accent2);
+}
+.rowHidden td {
+  opacity: 0.5;
+  background: rgba(255,255,255,0.012) !important;
+}
+.rowHidden .clienteName { text-decoration: line-through; }
+.hiddenTag {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.restoreBtn {
+  background: rgba(34,214,138,0.1);
+  border: 1px solid rgba(34,214,138,0.3);
+  color: var(--green);
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.restoreBtn:hover:not(:disabled) { background: rgba(34,214,138,0.18); }
+.restoreBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.clearOverrideBtn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text3);
+  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.clearOverrideBtn:hover:not(:disabled) { color: var(--text); border-color: var(--border2); }

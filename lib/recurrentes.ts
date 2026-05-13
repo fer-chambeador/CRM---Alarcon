@@ -111,6 +111,7 @@ export type ClienteRecurrente = {
   meses: string[]
   notas: string | null
   has_override: boolean
+  hidden: boolean
 }
 
 type FetchOpts = { sheetId?: string; signal?: AbortSignal }
@@ -135,6 +136,7 @@ type Override = {
   fecha_inicio: string | null
   canal: string | null
   notas: string | null
+  hidden: boolean | null
 }
 
 async function fetchOverrides(): Promise<Map<string, Override>> {
@@ -142,7 +144,7 @@ async function fetchOverrides(): Promise<Map<string, Override>> {
     const supabase = createServiceClient()
     const { data, error } = await supabase
       .from('clientes_recurrentes_meta')
-      .select('key,nombre,email,fecha_inicio,canal,notas')
+      .select('key,nombre,email,fecha_inicio,canal,notas,hidden')
     if (error || !data) return new Map()
     return new Map((data as Override[]).map(d => [d.key, d]))
   } catch {
@@ -155,6 +157,7 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
   meses_leidos: string[]
   meses_intentados: string[]
   total_pagado_global: number
+  hidden_count: number
   generated_at: string
 }> {
   const sheetId = opts.sheetId || process.env.RECURRENTES_SHEET_ID || DEFAULT_SHEET_ID
@@ -230,6 +233,7 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
           meses: [name],
           notas: null,
           has_override: false,
+          hidden: false,
         })
       }
     }
@@ -245,16 +249,21 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     if (ov.fecha_inicio) c.fecha_inicio = ov.fecha_inicio
     if (ov.canal) c.canales = [ov.canal]
     c.notas = ov.notas
+    c.hidden = ov.hidden === true
   }
 
   const clientes = Array.from(map.values()).sort((a, b) => b.total_pagado - a.total_pagado)
-  const total_pagado_global = clientes.reduce((s, c) => s + c.total_pagado, 0)
+  const total_pagado_global = clientes
+    .filter(c => !c.hidden)
+    .reduce((s, c) => s + c.total_pagado, 0)
+  const hidden_count = clientes.filter(c => c.hidden).length
 
   return {
     clientes,
     meses_leidos: mesesLeidos,
     meses_intentados: intentados,
     total_pagado_global,
+    hidden_count,
     generated_at: new Date().toISOString(),
   }
 }
