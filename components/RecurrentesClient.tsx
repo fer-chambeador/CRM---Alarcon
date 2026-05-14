@@ -10,6 +10,7 @@ type Cliente = {
   cliente: string
   email: string | null
   fecha_inicio: string | null
+  ultima_aparicion: string | null
   total_pagado: number
   veces: number
   canales: string[]
@@ -85,6 +86,28 @@ function bucketOf(c: Cliente): TicketBucket {
   return 'low'
 }
 
+type Vigencia = 'todos' | 'activo-30' | 'activo-90' | 'inactivo-90' | 'inactivo-180'
+const VIGENCIA_LABELS: Record<Vigencia, string> = {
+  todos: 'Cualquier vigencia',
+  'activo-30': 'Activos (últimos 30 días)',
+  'activo-90': 'Activos (últimos 90 días)',
+  'inactivo-90': 'Inactivos (>90 días)',
+  'inactivo-180': 'Inactivos (>180 días)',
+}
+function isInRange(lastSeen: string | null, vigencia: Vigencia, now = Date.now()): boolean {
+  if (vigencia === 'todos') return true
+  if (!lastSeen) return vigencia.startsWith('inactivo')
+  const t = new Date(lastSeen + 'T00:00:00').getTime()
+  const days = (now - t) / 86400_000
+  switch (vigencia) {
+    case 'activo-30': return days <= 30
+    case 'activo-90': return days <= 90
+    case 'inactivo-90': return days > 90
+    case 'inactivo-180': return days > 180
+  }
+  return true
+}
+
 export default function RecurrentesClient() {
   const [data, setData] = useState<Payload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,8 +115,8 @@ export default function RecurrentesClient() {
   const [search, setSearch] = useState('')
   const [dateRange, setDateRange] = useState<DateRange>('todo')
   const [bucket, setBucket] = useState<TicketBucket>('todos')
-  const [showHidden, setShowHidden] = useState(false)
-  const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg'; dir: 'asc' | 'desc' }>(
+  const [vigencia, setVigencia] = useState<Vigencia>('todos')
+  const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima'; dir: 'asc' | 'desc' }>(
     { key: 'total', dir: 'desc' }
   )
   const [editing, setEditing] = useState<Cliente | null>(null)
@@ -120,9 +143,9 @@ export default function RecurrentesClient() {
     const { from, to } = dateRangeBounds(dateRange)
     const q = search.trim().toLowerCase()
     return data.clientes.filter(c => {
-      // Hidden filter
-      if (c.hidden && !showHidden) return false
-      // Date filter: usa fecha_inicio del cliente
+      // Eliminados nunca aparecen (sin toggle)
+      if (c.hidden) return false
+      // Fecha de inicio
       if (from || to) {
         if (!c.fecha_inicio) return false
         const t = new Date(c.fecha_inicio + 'T00:00:00').getTime()
@@ -131,6 +154,8 @@ export default function RecurrentesClient() {
       }
       // Bucket
       if (bucket !== 'todos' && bucketOf(c) !== bucket) return false
+      // Vigencia (basado en última aparición)
+      if (!isInRange(c.ultima_aparicion, vigencia)) return false
       // Search
       if (q) {
         const hay = (c.cliente + ' ' + (c.email || '') + ' ' + c.canales.join(' ') + ' ' + (c.notas || '')).toLowerCase()
@@ -138,7 +163,7 @@ export default function RecurrentesClient() {
       }
       return true
     })
-  }, [data, dateRange, bucket, search, showHidden])
+  }, [data, dateRange, bucket, vigencia, search])
 
   // ── Sorted ──
   const clientes = useMemo(() => {
@@ -149,17 +174,16 @@ export default function RecurrentesClient() {
         case 'veces': return dir * (a.veces - b.veces)
         case 'avg': return dir * (avgTicket(a) - avgTicket(b))
         case 'fecha': return dir * (String(a.fecha_inicio || '').localeCompare(String(b.fecha_inicio || '')))
+        case 'ultima': return dir * (String(a.ultima_aparicion || '').localeCompare(String(b.ultima_aparicion || '')))
         case 'cliente': return dir * a.cliente.localeCompare(b.cliente)
       }
     })
   }, [filtered, sort])
 
-  // ── Analytics del tab (sobre los filtrados) ──
+  // ── Top 5 + bucket dist (basados en filtered) ──
   const analytics = useMemo(() => {
     const total = filtered.reduce((s, c) => s + c.total_pagado, 0)
     const pagos = filtered.reduce((s, c) => s + c.veces, 0)
-    const avgTotal = filtered.length > 0 ? total / filtered.length : 0
-    const avgTicketAll = pagos > 0 ? total / pagos : 0
     const top5 = [...filtered].sort((a, b) => b.total_pagado - a.total_pagado).slice(0, 5)
     const byBucket: Record<TicketBucket, { count: number; total: number }> = {
       todos: { count: 0, total: 0 }, low: { count: 0, total: 0 },
@@ -170,19 +194,7 @@ export default function RecurrentesClient() {
       byBucket[b].count += 1
       byBucket[b].total += c.total_pagado
     }
-    // Revenue por mes (agrupar meses de todos los clientes)
-    const monthRevenue = new Map<string, number>()
-    for (const c of filtered) {
-      // Repartimos el total entre los meses en que aparece (aproximación; el sheet
-      // tiene una fila por pago pero acá agrupamos; este reparto es ilustrativo)
-      const share = c.veces > 0 ? c.total_pagado / c.veces : 0
-      for (const m of c.meses) {
-        monthRevenue.set(m, (monthRevenue.get(m) || 0) + share)
-      }
-    }
-    const monthsSorted = Array.from(monthRevenue.entries())
-      .sort((a, b) => monthCompare(a[0], b[0]))
-    return { total, pagos, avgTotal, avgTicketAll, top5, byBucket, monthsSorted }
+    return { total, pagos, top5, byBucket }
   }, [filtered])
 
   const onSort = (key: typeof sort.key) => {
@@ -210,7 +222,6 @@ export default function RecurrentesClient() {
           </button>
         </header>
 
-        {/* Filters bar */}
         <div className={styles.filtersBar}>
           <label className={styles.filterLabel}>Fecha de inicio:</label>
           <select className={styles.filterSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
@@ -218,21 +229,20 @@ export default function RecurrentesClient() {
               <option key={r} value={r}>{DATE_LABELS[r]}</option>
             ))}
           </select>
-          <label className={styles.filterLabel}>Ticket promedio:</label>
+          <label className={styles.filterLabel}>Monto (ticket):</label>
           <select className={styles.filterSelect} value={bucket} onChange={e => setBucket(e.target.value as TicketBucket)}>
             {(Object.keys(TICKET_LABELS) as TicketBucket[]).map(b => (
               <option key={b} value={b}>{TICKET_LABELS[b]}</option>
             ))}
           </select>
-          {data && data.hidden_count > 0 && (
-            <button
-              className={showHidden ? styles.toggleActive : styles.toggle}
-              onClick={() => setShowHidden(v => !v)}>
-              {showHidden ? '👁 Ocultando' : '👁‍🗨 Mostrar'} eliminados ({data.hidden_count})
-            </button>
-          )}
-          {(dateRange !== 'todo' || bucket !== 'todos' || search) && (
-            <button className={styles.clearFilter} onClick={() => { setDateRange('todo'); setBucket('todos'); setSearch('') }}>
+          <label className={styles.filterLabel}>Vigencia:</label>
+          <select className={styles.filterSelect} value={vigencia} onChange={e => setVigencia(e.target.value as Vigencia)}>
+            {(Object.keys(VIGENCIA_LABELS) as Vigencia[]).map(v => (
+              <option key={v} value={v}>{VIGENCIA_LABELS[v]}</option>
+            ))}
+          </select>
+          {(dateRange !== 'todo' || bucket !== 'todos' || vigencia !== 'todos' || search) && (
+            <button className={styles.clearFilter} onClick={() => { setDateRange('todo'); setBucket('todos'); setVigencia('todos'); setSearch('') }}>
               Limpiar filtros
             </button>
           )}
@@ -243,33 +253,21 @@ export default function RecurrentesClient() {
           {error && <div className={styles.error}>⚠️ {error}</div>}
           {data && (
             <>
-              {/* Summary cards (basados en el subset filtrado) */}
+              {/* Summary: 2 cards */}
               <div className={styles.summary}>
                 <div className={styles.summaryCard}>
                   <div className={styles.summaryLabel}>Clientes</div>
                   <div className={styles.summaryValue}>{filtered.length}</div>
-                  <div className={styles.summarySub}>de {data.clientes.length} totales</div>
+                  <div className={styles.summarySub}>{analytics.pagos} pagos totales</div>
                 </div>
                 <div className={styles.summaryCard}>
                   <div className={styles.summaryLabel}>Total pagado</div>
                   <div className={styles.summaryValue}>{fmtMoney(analytics.total)}</div>
-                  <div className={styles.summarySub}>{analytics.pagos} pagos</div>
-                </div>
-                <div className={styles.summaryCard}>
-                  <div className={styles.summaryLabel}>Promedio por cliente</div>
-                  <div className={styles.summaryValue}>{fmtMoney(analytics.avgTotal)}</div>
-                  <div className={styles.summarySub}>ticket prom. {fmtMoney(analytics.avgTicketAll)}</div>
-                </div>
-                <div className={styles.summaryCard}>
-                  <div className={styles.summaryLabel}>Meses leídos</div>
-                  <div className={styles.summaryValue}>{data.meses_leidos.length} / {data.meses_intentados.length}</div>
-                  <div className={styles.summarySub}>
-                    {data.meses_leidos.length === 0 ? '⚠️ Ninguna tab cargó' : `desde ${data.meses_leidos[0]}`}
-                  </div>
+                  <div className={styles.summarySub}>en el filtro actual</div>
                 </div>
               </div>
 
-              {/* Analytics blocks */}
+              {/* Analytics row: top 5 + dist */}
               <div className={styles.analyticsRow}>
                 <section className={styles.analyticsCard}>
                   <h3>Top 5 por total pagado</h3>
@@ -284,9 +282,7 @@ export default function RecurrentesClient() {
                               <div className={styles.topRank}>{i + 1}</div>
                               <div className={styles.topBody}>
                                 <div className={styles.topName}>{c.cliente}</div>
-                                <div className={styles.topBar}>
-                                  <div className={styles.topBarFill} style={{ width: `${pct}%` }} />
-                                </div>
+                                <div className={styles.topBar}><div className={styles.topBarFill} style={{ width: `${pct}%` }} /></div>
                               </div>
                               <div className={styles.topAmount}>{fmtMoney(c.total_pagado)}</div>
                             </li>
@@ -316,29 +312,7 @@ export default function RecurrentesClient() {
                 </section>
               </div>
 
-              {analytics.monthsSorted.length > 0 && (
-                <section className={styles.timelineCard}>
-                  <h3>Revenue por mes (estimado)</h3>
-                  <div className={styles.timeline}>
-                    {analytics.monthsSorted.map(([month, rev]) => {
-                      const max = Math.max(...analytics.monthsSorted.map(x => x[1]), 1)
-                      const pct = (rev / max) * 100
-                      return (
-                        <div key={month} className={styles.timelineBar}>
-                          <div className={styles.timelineFill} style={{ height: `${pct}%` }} title={`${month}: ${fmtMoney(rev)}`} />
-                          <div className={styles.timelineLabel}>{shortMonth(month)}</div>
-                          <div className={styles.timelineValue}>{fmtMoneyShort(rev)}</div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <div className={styles.timelineNote}>
-                    Estimación: el sheet tiene una fila por pago pero acá agrupo por cliente. Cada cliente reparte su total entre los meses en que aparece. Útil para ver tendencia, no para reportes contables.
-                  </div>
-                </section>
-              )}
-
-              {/* Tabla */}
+              {/* Tabla principal */}
               <section className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
@@ -346,6 +320,7 @@ export default function RecurrentesClient() {
                       <th onClick={() => onSort('cliente')}>Cliente{arrow('cliente')}</th>
                       <th>Email</th>
                       <th onClick={() => onSort('fecha')}>Inicio{arrow('fecha')}</th>
+                      <th onClick={() => onSort('ultima')}>Última aparición{arrow('ultima')}</th>
                       <th onClick={() => onSort('veces')} className={styles.right}>Pagos{arrow('veces')}</th>
                       <th onClick={() => onSort('avg')} className={styles.right}>Ticket prom.{arrow('avg')}</th>
                       <th onClick={() => onSort('total')} className={styles.right}>Total{arrow('total')}</th>
@@ -355,15 +330,14 @@ export default function RecurrentesClient() {
                   </thead>
                   <tbody>
                     {clientes.length === 0 && (
-                      <tr><td colSpan={8} className={styles.empty}>Sin matches con los filtros actuales.</td></tr>
+                      <tr><td colSpan={9} className={styles.empty}>Sin matches con los filtros actuales.</td></tr>
                     )}
                     {clientes.map(c => (
-                      <tr key={c.key} className={styles.row + (c.hidden ? ' ' + styles.rowHidden : '')} onClick={() => setEditing(c)}>
+                      <tr key={c.key} className={styles.row} onClick={() => setEditing(c)}>
                         <td>
                           <div className={styles.clienteName}>
                             {c.cliente}
-                            {c.hidden && <span className={styles.hiddenTag} title="Oculto">👁‍🗨</span>}
-                            {c.has_override && !c.hidden && <span className={styles.overrideTag} title="Editado manualmente">✏️</span>}
+                            {c.has_override && <span className={styles.overrideTag} title="Editado manualmente">✏️</span>}
                           </div>
                           {c.meses.length > 1 && (
                             <div className={styles.mesesBadge} title={c.meses.join(' · ')}>en {c.meses.length} meses</div>
@@ -372,6 +346,7 @@ export default function RecurrentesClient() {
                         </td>
                         <td className={styles.mono}>{c.email || '—'}</td>
                         <td>{fmtDate(c.fecha_inicio)}</td>
+                        <td>{fmtDate(c.ultima_aparicion)}</td>
                         <td className={styles.right}>{c.veces}</td>
                         <td className={styles.right + ' ' + styles.mono}>{fmtMoney(avgTicket(c))}</td>
                         <td className={styles.right + ' ' + styles.money}>{fmtMoney(c.total_pagado)}</td>
@@ -457,7 +432,7 @@ function EditModal({ cliente, onClose, onSaved }: {
 
   const toggleHidden = async () => {
     const nextHidden = !cliente.hidden
-    if (nextHidden && !confirm(`¿Eliminar "${cliente.cliente}" de la lista?\n\nQueda oculto en /recurrentes pero el sheet no se toca. Lo podés restaurar desde el botón "Mostrar eliminados".`)) return
+    if (nextHidden && !confirm(`¿Eliminar "${cliente.cliente}" de la lista?\n\nQueda oculto en /recurrentes pero el sheet no se toca.`)) return
     setSaving(true); setError(null)
     try {
       const res = await fetch(`/api/recurrentes/${encodeURIComponent(cliente.key)}`, {
@@ -526,7 +501,7 @@ function EditModal({ cliente, onClose, onSaved }: {
               <div><span>Total pagado</span><strong>{fmtMoney(cliente.total_pagado)}</strong></div>
               <div><span>Cantidad de pagos</span><strong>{cliente.veces}</strong></div>
               <div><span>Ticket promedio</span><strong>{fmtMoney(avgTicket(cliente))}</strong></div>
-              <div><span>Meses</span><strong>{cliente.meses.join(' · ')}</strong></div>
+              <div><span>Última aparición</span><strong>{fmtDate(cliente.ultima_aparicion)}</strong></div>
             </div>
           </div>
         </div>
@@ -552,22 +527,4 @@ function EditModal({ cliente, onClose, onSaved }: {
       </div>
     </div>
   )
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────
-const MESES_LIST = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-function monthCompare(a: string, b: string): number {
-  const pa = a.split(' '), pb = b.split(' ')
-  const ya = parseInt(pa[1] || '0'), yb = parseInt(pb[1] || '0')
-  if (ya !== yb) return ya - yb
-  return MESES_LIST.indexOf(pa[0]) - MESES_LIST.indexOf(pb[0])
-}
-function shortMonth(m: string): string {
-  const [mes, y] = m.split(' ')
-  return `${mes.slice(0, 3)} ${y.slice(2)}`
-}
-function fmtMoneyShort(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`
-  return `$${n.toFixed(0)}`
 }

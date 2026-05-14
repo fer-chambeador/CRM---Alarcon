@@ -105,6 +105,7 @@ export type ClienteRecurrente = {
   cliente: string
   email: string | null
   fecha_inicio: string | null
+  ultima_aparicion: string | null
   total_pagado: number
   veces: number
   canales: string[]
@@ -215,6 +216,9 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
         if (tabDate && (!existing.fecha_inicio || tabDate < existing.fecha_inicio)) {
           existing.fecha_inicio = tabDate
         }
+        if (tabDate && (!existing.ultima_aparicion || tabDate > existing.ultima_aparicion)) {
+          existing.ultima_aparicion = tabDate
+        }
         if (canal && !existing.canales.includes(canal)) existing.canales.push(canal)
         if (!existing.meses.includes(name)) existing.meses.push(name)
         if (!existing.email && email) existing.email = email
@@ -227,6 +231,7 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
           cliente: cleanName || email || '—',
           email,
           fecha_inicio: tabDate,
+          ultima_aparicion: tabDate,
           total_pagado: monto,
           veces: 1,
           canales: canal ? [canal] : [],
