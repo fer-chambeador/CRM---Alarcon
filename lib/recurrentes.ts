@@ -86,6 +86,82 @@ function parseMonto(raw: string): number {
 }
 
 /**
+ * Parse a date cell into YYYY-MM-DD. Tolerant to:
+ *  - DD/MM/YYYY, D/M/YYYY (con / - .)
+ *  - YYYY-MM-DD
+ *  - "12 de noviembre de 2025" / "12 noviembre 2025"
+ *  - "12/11" (sin año → usa fallbackYear)
+ * Returns null if it can't make sense of it.
+ */
+function parseFecha(raw: string, fallbackYear?: number): string | null {
+  if (!raw) return null
+  const s = raw.trim()
+  if (!s) return null
+
+  // ISO YYYY-MM-DD or YYYY/MM/DD
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
+  if (m) {
+    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10)
+    if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
+  // DD/MM/YYYY  or DD-MM-YYYY  or DD.MM.YYYY  (2 or 4 digit year)
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/)
+  if (m) {
+    const d = parseInt(m[1], 10), mo = parseInt(m[2], 10)
+    let y = parseInt(m[3], 10)
+    if (y < 100) y += 2000
+    if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
+  // "DD/MM" (no year)  → use fallbackYear
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})$/)
+  if (m && fallbackYear) {
+    const d = parseInt(m[1], 10), mo = parseInt(m[2], 10)
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${fallbackYear}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
+  // Spanish long form: "12 de noviembre de 2025"  /  "12 noviembre 2025"
+  m = s.toLowerCase().match(/^(\d{1,2})\s*(?:de\s+)?([a-záéíóúñ]+)(?:\s+de)?\s+(\d{2,4})$/)
+  if (m) {
+    const d = parseInt(m[1], 10)
+    const monthName = norm(m[2])
+    let y = parseInt(m[3], 10)
+    if (y < 100) y += 2000
+    const moIdx = MESES.findIndex(x => norm(x).startsWith(monthName) || monthName.startsWith(norm(x).slice(0, 3)))
+    if (moIdx >= 0 && d >= 1 && d <= 31 && y) {
+      return `${y}-${String(moIdx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
+  // "DD <mes>" (no year) → fallbackYear
+  m = s.toLowerCase().match(/^(\d{1,2})\s*(?:de\s+)?([a-záéíóúñ]+)$/)
+  if (m && fallbackYear) {
+    const d = parseInt(m[1], 10)
+    const monthName = norm(m[2])
+    const moIdx = MESES.findIndex(x => norm(x).startsWith(monthName) || monthName.startsWith(norm(x).slice(0, 3)))
+    if (moIdx >= 0 && d >= 1 && d <= 31) {
+      return `${fallbackYear}-${String(moIdx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
+  // Last resort: let Date.parse() try (handles "Nov 12, 2025" etc.)
+  const t = Date.parse(s)
+  if (!isNaN(t)) {
+    const d = new Date(t)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  return null
+}
+
+/**
  * Extrae email del campo cliente cuando viene como "Nombre | email@dominio".
  * También cubre separadores · — , / \ y guiones.
  */
@@ -188,9 +264,13 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     const idxEmail = findCol(headers, ['email', 'correo', 'mail'])
     const idxMonto = findCol(headers, ['monto', 'importe', 'total', 'cantidad', 'amount', 'precio', 'pago'])
     const idxCanal = findCol(headers, ['canal', 'metodo', 'forma', 'via'])
+    const idxFecha = findCol(headers, ['fecha', 'date', 'dia', 'día'])
 
     if (idxQuien < 0) continue
     mesesLeidos.push(name)
+
+    // Año del tab — para resolver fechas que vienen sin año en la celda.
+    const tabYear = tabDate ? parseInt(tabDate.slice(0, 4), 10) : undefined
 
     for (const row of rows.slice(1)) {
       const quien = (row[idxQuien] || '').trim()
@@ -204,6 +284,9 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
       const email = emailFromCol || emailFromName
       const monto = idxMonto >= 0 ? parseMonto(row[idxMonto] || '') : 0
       const canal = idxCanal >= 0 ? (row[idxCanal] || '').trim() : ''
+      const fechaRaw = idxFecha >= 0 ? (row[idxFecha] || '').trim() : ''
+      // Día EXACTO del pago: de la columna fecha, con fallback al día 1 del tab.
+      const rowDate = parseFecha(fechaRaw, tabYear) || tabDate
 
       if (!cleanName && !email) continue
 
@@ -213,11 +296,11 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
       if (existing) {
         existing.total_pagado += monto
         existing.veces += 1
-        if (tabDate && (!existing.fecha_inicio || tabDate < existing.fecha_inicio)) {
-          existing.fecha_inicio = tabDate
+        if (rowDate && (!existing.fecha_inicio || rowDate < existing.fecha_inicio)) {
+          existing.fecha_inicio = rowDate
         }
-        if (tabDate && (!existing.ultima_aparicion || tabDate > existing.ultima_aparicion)) {
-          existing.ultima_aparicion = tabDate
+        if (rowDate && (!existing.ultima_aparicion || rowDate > existing.ultima_aparicion)) {
+          existing.ultima_aparicion = rowDate
         }
         if (canal && !existing.canales.includes(canal)) existing.canales.push(canal)
         if (!existing.meses.includes(name)) existing.meses.push(name)
@@ -230,8 +313,8 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
           key,
           cliente: cleanName || email || '—',
           email,
-          fecha_inicio: tabDate,
-          ultima_aparicion: tabDate,
+          fecha_inicio: rowDate,
+          ultima_aparicion: rowDate,
           total_pagado: monto,
           veces: 1,
           canales: canal ? [canal] : [],
