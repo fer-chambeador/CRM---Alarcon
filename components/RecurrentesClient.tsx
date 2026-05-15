@@ -38,37 +38,6 @@ const fmtDate = (s: string | null) => {
 }
 
 // ─── Filters ──────────────────────────────────────────────────────────────
-type DateRange = 'todo' | '30d' | '90d' | '6m' | 'ytd' | 'year-current' | 'year-prev'
-const DATE_LABELS: Record<DateRange, string> = {
-  todo: 'Todo el tiempo',
-  '30d': 'Últimos 30 días',
-  '90d': 'Últimos 90 días',
-  '6m': 'Últimos 6 meses',
-  ytd: 'Este año',
-  'year-current': new Date().getFullYear().toString(),
-  'year-prev': (new Date().getFullYear() - 1).toString(),
-}
-function dateRangeBounds(r: DateRange): { from: Date | null; to: Date | null } {
-  const now = new Date()
-  switch (r) {
-    case 'todo': return { from: null, to: null }
-    case '30d': return { from: new Date(now.getTime() - 30 * 86400_000), to: null }
-    case '90d': return { from: new Date(now.getTime() - 90 * 86400_000), to: null }
-    case '6m': {
-      const d = new Date(now); d.setMonth(d.getMonth() - 6); return { from: d, to: null }
-    }
-    case 'ytd': return { from: new Date(now.getFullYear(), 0, 1), to: null }
-    case 'year-current': {
-      const y = now.getFullYear()
-      return { from: new Date(y, 0, 1), to: new Date(y + 1, 0, 1) }
-    }
-    case 'year-prev': {
-      const y = now.getFullYear() - 1
-      return { from: new Date(y, 0, 1), to: new Date(y + 1, 0, 1) }
-    }
-  }
-}
-
 type TicketBucket = 'todos' | 'low' | 'mid' | 'high'
 const TICKET_LABELS: Record<TicketBucket, string> = {
   todos: 'Todos los tickets',
@@ -113,7 +82,8 @@ export default function RecurrentesClient() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [dateRange, setDateRange] = useState<DateRange>('todo')
+  const [fechaDesde, setFechaDesde] = useState<string>('')
+  const [fechaHasta, setFechaHasta] = useState<string>('')
   const [bucket, setBucket] = useState<TicketBucket>('todos')
   const [vigencia, setVigencia] = useState<Vigencia>('todos')
   const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima'; dir: 'asc' | 'desc' }>(
@@ -140,17 +110,15 @@ export default function RecurrentesClient() {
   // ── Filtros aplicados ──
   const filtered = useMemo(() => {
     if (!data) return []
-    const { from, to } = dateRangeBounds(dateRange)
     const q = search.trim().toLowerCase()
     return data.clientes.filter(c => {
       // Eliminados nunca aparecen (sin toggle)
       if (c.hidden) return false
-      // Fecha de inicio
-      if (from || to) {
+      // Fecha de inicio — calendar range (inclusive en ambos extremos)
+      if (fechaDesde || fechaHasta) {
         if (!c.fecha_inicio) return false
-        const t = new Date(c.fecha_inicio + 'T00:00:00').getTime()
-        if (from && t < from.getTime()) return false
-        if (to && t >= to.getTime()) return false
+        if (fechaDesde && c.fecha_inicio < fechaDesde) return false
+        if (fechaHasta && c.fecha_inicio > fechaHasta) return false
       }
       // Bucket
       if (bucket !== 'todos' && bucketOf(c) !== bucket) return false
@@ -163,7 +131,7 @@ export default function RecurrentesClient() {
       }
       return true
     })
-  }, [data, dateRange, bucket, vigencia, search])
+  }, [data, fechaDesde, fechaHasta, bucket, vigencia, search])
 
   // ── Sorted ──
   const clientes = useMemo(() => {
@@ -180,21 +148,12 @@ export default function RecurrentesClient() {
     })
   }, [filtered, sort])
 
-  // ── Top 5 + bucket dist (basados en filtered) ──
+  // ── KPIs (basados en filtered) ──
   const analytics = useMemo(() => {
     const total = filtered.reduce((s, c) => s + c.total_pagado, 0)
     const pagos = filtered.reduce((s, c) => s + c.veces, 0)
-    const top5 = [...filtered].sort((a, b) => b.total_pagado - a.total_pagado).slice(0, 5)
-    const byBucket: Record<TicketBucket, { count: number; total: number }> = {
-      todos: { count: 0, total: 0 }, low: { count: 0, total: 0 },
-      mid: { count: 0, total: 0 }, high: { count: 0, total: 0 },
-    }
-    for (const c of filtered) {
-      const b = bucketOf(c)
-      byBucket[b].count += 1
-      byBucket[b].total += c.total_pagado
-    }
-    return { total, pagos, top5, byBucket }
+    const avgPorCliente = filtered.length > 0 ? total / filtered.length : 0
+    return { total, pagos, avgPorCliente }
   }, [filtered])
 
   const onSort = (key: typeof sort.key) => {
@@ -222,13 +181,34 @@ export default function RecurrentesClient() {
           </button>
         </header>
 
+        {/* KPI Hero (estilo /leads) */}
+        {data && (
+          <div className={styles.kpiHero}>
+            <div className={styles.kpiHeroCard + ' ' + styles.kpiHeroPurple}>
+              <div className={styles.kpiHeroLabel}>Clientes recurrentes</div>
+              <div className={styles.kpiHeroValue}>{filtered.length}</div>
+              <div className={styles.kpiHeroSub}>{analytics.pagos} pagos totales</div>
+            </div>
+            <div className={styles.kpiHeroCard + ' ' + styles.kpiHeroTeal}>
+              <div className={styles.kpiHeroLabel}>Total pagado</div>
+              <div className={styles.kpiHeroValue}>{fmtMoney(analytics.total)}</div>
+              <div className={styles.kpiHeroSub}>en el filtro actual</div>
+            </div>
+            <div className={styles.kpiHeroCard + ' ' + styles.kpiHeroIndigo}>
+              <div className={styles.kpiHeroLabel}>Promedio por cliente</div>
+              <div className={styles.kpiHeroValue}>{fmtMoney(analytics.avgPorCliente)}</div>
+              <div className={styles.kpiHeroSub}>histórico por cuenta</div>
+            </div>
+          </div>
+        )}
+
         <div className={styles.filtersBar}>
-          <label className={styles.filterLabel}>Fecha de inicio:</label>
-          <select className={styles.filterSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
-            {(Object.keys(DATE_LABELS) as DateRange[]).map(r => (
-              <option key={r} value={r}>{DATE_LABELS[r]}</option>
-            ))}
-          </select>
+          <label className={styles.filterLabel}>Inicio desde:</label>
+          <input type="date" className={styles.dateInput} value={fechaDesde}
+            onChange={e => setFechaDesde(e.target.value)} max={fechaHasta || undefined} />
+          <label className={styles.filterLabel}>hasta:</label>
+          <input type="date" className={styles.dateInput} value={fechaHasta}
+            onChange={e => setFechaHasta(e.target.value)} min={fechaDesde || undefined} />
           <label className={styles.filterLabel}>Monto (ticket):</label>
           <select className={styles.filterSelect} value={bucket} onChange={e => setBucket(e.target.value as TicketBucket)}>
             {(Object.keys(TICKET_LABELS) as TicketBucket[]).map(b => (
@@ -241,8 +221,8 @@ export default function RecurrentesClient() {
               <option key={v} value={v}>{VIGENCIA_LABELS[v]}</option>
             ))}
           </select>
-          {(dateRange !== 'todo' || bucket !== 'todos' || vigencia !== 'todos' || search) && (
-            <button className={styles.clearFilter} onClick={() => { setDateRange('todo'); setBucket('todos'); setVigencia('todos'); setSearch('') }}>
+          {(fechaDesde || fechaHasta || bucket !== 'todos' || vigencia !== 'todos' || search) && (
+            <button className={styles.clearFilter} onClick={() => { setFechaDesde(''); setFechaHasta(''); setBucket('todos'); setVigencia('todos'); setSearch('') }}>
               Limpiar filtros
             </button>
           )}
@@ -253,65 +233,6 @@ export default function RecurrentesClient() {
           {error && <div className={styles.error}>⚠️ {error}</div>}
           {data && (
             <>
-              {/* Summary: 2 cards */}
-              <div className={styles.summary}>
-                <div className={styles.summaryCard}>
-                  <div className={styles.summaryLabel}>Clientes</div>
-                  <div className={styles.summaryValue}>{filtered.length}</div>
-                  <div className={styles.summarySub}>{analytics.pagos} pagos totales</div>
-                </div>
-                <div className={styles.summaryCard}>
-                  <div className={styles.summaryLabel}>Total pagado</div>
-                  <div className={styles.summaryValue}>{fmtMoney(analytics.total)}</div>
-                  <div className={styles.summarySub}>en el filtro actual</div>
-                </div>
-              </div>
-
-              {/* Analytics row: top 5 + dist */}
-              <div className={styles.analyticsRow}>
-                <section className={styles.analyticsCard}>
-                  <h3>Top 5 por total pagado</h3>
-                  {analytics.top5.length === 0
-                    ? <div className={styles.empty}>—</div>
-                    : <ul className={styles.topList}>
-                        {analytics.top5.map((c, i) => {
-                          const max = analytics.top5[0]?.total_pagado || 1
-                          const pct = (c.total_pagado / max) * 100
-                          return (
-                            <li key={c.key} onClick={() => setEditing(c)}>
-                              <div className={styles.topRank}>{i + 1}</div>
-                              <div className={styles.topBody}>
-                                <div className={styles.topName}>{c.cliente}</div>
-                                <div className={styles.topBar}><div className={styles.topBarFill} style={{ width: `${pct}%` }} /></div>
-                              </div>
-                              <div className={styles.topAmount}>{fmtMoney(c.total_pagado)}</div>
-                            </li>
-                          )
-                        })}
-                      </ul>}
-                </section>
-
-                <section className={styles.analyticsCard}>
-                  <h3>Distribución por ticket promedio</h3>
-                  <ul className={styles.bucketList}>
-                    {(['high','mid','low'] as TicketBucket[]).map(b => {
-                      const v = analytics.byBucket[b]
-                      const pctClients = filtered.length > 0 ? (v.count / filtered.length) * 100 : 0
-                      return (
-                        <li key={b}>
-                          <div className={styles.bucketHeader}>
-                            <span>{TICKET_LABELS[b]}</span>
-                            <span className={styles.bucketCount}>{v.count}</span>
-                          </div>
-                          <div className={styles.topBar}><div className={styles.topBarFill} style={{ width: `${pctClients}%` }} /></div>
-                          <div className={styles.bucketSub}>{fmtMoney(v.total)} en total</div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
-              </div>
-
               {/* Tabla principal */}
               <section className={styles.tableWrap}>
                 <table className={styles.table}>
