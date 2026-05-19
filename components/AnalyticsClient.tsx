@@ -13,6 +13,8 @@ import {
 } from '@/lib/status'
 import { phoneToState } from '@/lib/lada'
 import { fmtPresupuesto } from '@/lib/budget'
+import { forecastLeads, forecastByStage } from '@/lib/forecast'
+import { agingByStage, cycleStats, agingBucket, AGING_COLOR } from '@/lib/velocity'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -225,6 +227,118 @@ function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
   )
 }
 
+// ─── Forecast section ──────────────────────────────────────────────────────
+function ForecastSection({ buckets, forecast, cerradoReal }: {
+  buckets: ReturnType<typeof forecastByStage>
+  forecast: number
+  cerradoReal: number
+}) {
+  const max = buckets.length ? Math.max(...buckets.map(b => b.contribution)) : 0
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Proyección del periodo</h3>
+          <span className={styles.sectionSubtitle}>
+            Σ (monto × probabilidad de cierre por stage). Cerrado real {fmtMoney(cerradoReal)} · forecast total <strong style={{ color: '#7c6af7' }}>{fmtMoney(forecast)}</strong>
+          </span>
+        </div>
+      </header>
+      {buckets.length === 0
+        ? <div className={styles.empty}>Sin leads en este rango.</div>
+        : (
+          <table className={styles.breakdownTable}>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Leads</th>
+                <th>Monto nominal</th>
+                <th>Prob.</th>
+                <th>Aporta al forecast</th>
+              </tr>
+            </thead>
+            <tbody>
+              {buckets.map(b => (
+                <tr key={b.status}>
+                  <td className={styles.breakdownKey}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(b.status) }} />
+                      <span>{STATUS_LABELS[b.status]}</span>
+                    </div>
+                    <Bar value={b.contribution} max={max} color={statusColor(b.status)} />
+                  </td>
+                  <td>{b.count}</td>
+                  <td>{fmtMoney(b.monto)}</td>
+                  <td>{Math.round(b.probability * 100)}%</td>
+                  <td><strong>{fmtMoney(b.contribution)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </section>
+  )
+}
+
+// ─── Velocity section ──────────────────────────────────────────────────────
+function VelocitySection({ rows, cycle }: {
+  rows: ReturnType<typeof agingByStage>
+  cycle: ReturnType<typeof cycleStats>
+}) {
+  const rowsWithLeads = rows.filter(r => r.count > 0)
+  const max = rowsWithLeads.length ? Math.max(...rowsWithLeads.map(r => r.medianDays)) : 0
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Velocidad del funnel</h3>
+          <span className={styles.sectionSubtitle}>
+            Días promedio que llevan los leads en su stage actual.{' '}
+            {cycle.count > 0
+              ? <>Ciclo Nuevo→Cerrado: mediana <strong>{cycle.medianDays.toFixed(0)} días</strong> · promedio {cycle.avgDays.toFixed(0)} d ({cycle.count} cerrados).</>
+              : <>Aún no hay leads cerrados en este rango para medir el ciclo.</>}
+          </span>
+        </div>
+      </header>
+      {rowsWithLeads.length === 0
+        ? <div className={styles.empty}>Sin leads en este rango.</div>
+        : (
+          <table className={styles.breakdownTable}>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Leads aquí</th>
+                <th>Mediana (días)</th>
+                <th>Promedio (días)</th>
+                <th>Estancados &gt;14 d</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsWithLeads.map(r => {
+                const ab = agingBucket(r.medianDays)
+                return (
+                  <tr key={r.status}>
+                    <td className={styles.breakdownKey}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(r.status) }} />
+                        <span>{r.label}</span>
+                      </div>
+                      <Bar value={r.medianDays} max={max} color={AGING_COLOR[ab]} />
+                    </td>
+                    <td>{r.count}</td>
+                    <td><strong style={{ color: AGING_COLOR[ab] }}>{r.medianDays.toFixed(1)}</strong></td>
+                    <td>{r.avgDays.toFixed(1)}</td>
+                    <td>{r.stuckCount > 0 ? <strong style={{ color: '#f05a5a' }}>{r.stuckCount}</strong> : '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+    </section>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
@@ -251,8 +365,13 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
       pipelineCerrado: sumMonto(scoped.filter(l => PIPELINE_CLOSED.includes(l.status))),
       conversionRate: total > 0 ? cerrados / total : 0,
       cerrados,
+      forecast: forecastLeads(scoped),
+      cycle: cycleStats(scoped),
     }
   }, [scoped])
+
+  const stageAging = useMemo(() => agingByStage(scoped), [scoped])
+  const forecastBuckets = useMemo(() => forecastByStage(scoped), [scoped])
 
   const byCanal = useMemo(() => makeBreakdown(scoped, l => l.canal_adquisicion), [scoped])
   const byPuesto = useMemo(() => makeBreakdown(scoped, l => l.puesto), [scoped])
@@ -277,9 +396,18 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <div className={styles.kpi}><span>Leads</span><strong>{stats.total}</strong></div>
           <div className={styles.kpi}><span>Convertidos</span><strong>{stats.cerrados}</strong></div>
           <div className={styles.kpi}><span>Conv. rate</span><strong>{fmtPct(stats.conversionRate)}</strong></div>
+          <div className={styles.kpi}
+            title="Mediana de días entre la creación del lead y el cambio a 'convertido' o 'cliente recurrente'">
+            <span>Ciclo Nuevo→Cerrado</span>
+            <strong>{stats.cycle.count > 0 ? `${stats.cycle.medianDays.toFixed(0)} d` : '—'}</strong>
+          </div>
           <div className={styles.kpiMoney}><span>Pipeline total</span><strong>{fmtMoney(stats.pipeline)}</strong></div>
           <div className={styles.kpiMoney}><span>En cierre</span><strong style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</strong></div>
           <div className={styles.kpiMoney}><span>Cerrado</span><strong style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</strong></div>
+          <div className={styles.kpiMoney}
+            title="Σ (monto × probabilidad de cierre por stage). Proyección ponderada del periodo.">
+            <span>Forecast</span><strong style={{ color: '#7c6af7' }}>{fmtMoney(stats.forecast)}</strong>
+          </div>
         </div>
       </aside>
 
@@ -290,6 +418,8 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
         <div className={styles.body}>
           <FunnelChart leads={scoped} />
+          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} />
+          <VelocitySection rows={stageAging} cycle={stats.cycle} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
           <BreakdownTable title="Por presupuesto" subtitle="Tier de inversión declarado en onboarding" rows={byPresupuesto} />

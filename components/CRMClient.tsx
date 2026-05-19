@@ -16,6 +16,8 @@ import { phoneToState, ALL_STATES } from '@/lib/lada'
 import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
 import type { Presupuesto } from '@/lib/budget'
 import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
+import { forecastLeads } from '@/lib/forecast'
+import { daysInCurrentStage, agingBucket, AGING_COLOR, fmtAgingShort } from '@/lib/velocity'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 const MONTHLY_GOAL = 200000
@@ -527,6 +529,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       pipelineCierre: sumMonto(dateScoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
       pipelineCerrado: sumMonto(cerrados),
       pipelineCerradoCount: cerrados.length,
+      forecast: forecastLeads(dateScoped),
     }
   }, [dateScoped])
 
@@ -623,6 +626,18 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 style={{ width: `${Math.min(100, (stats.pipelineCerrado / MONTHLY_GOAL) * 100)}%` }} />
             </div>
           </div>
+          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroForecast)} title="Σ (monto × probabilidad de cierre por stage)">
+            <div className={styles.kpiHeroLabel}>Forecast del periodo</div>
+            <div className={styles.kpiHeroValue}>{fmtMoney(stats.forecast)}</div>
+            <div className={styles.kpiHeroSub}>
+              Proyección ponderada · meta {fmtMoney(MONTHLY_GOAL)}
+              {' '}({Math.round(Math.min(1, stats.forecast / MONTHLY_GOAL) * 100)}%)
+            </div>
+            <div className={styles.kpiHeroBar}>
+              <div className={styles.kpiHeroBarFill}
+                style={{ width: `${Math.min(100, (stats.forecast / MONTHLY_GOAL) * 100)}%` }} />
+            </div>
+          </div>
         </div>
 
         {newLeadFlash && <div className={styles.flashBanner}>🆕 Nuevo lead: <strong>{newLeadFlash}</strong></div>}
@@ -690,15 +705,28 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                       : <span className={styles.empty}>—</span>}</td>
                     <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
                     <td onClick={e => e.stopPropagation()}>
-                      <button className={styles.statusInlineBtn}
-                        title="Click para cambiar status"
-                        onClick={(e) => {
-                          const r = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                          setPopover({ leadId: lead.id, current: lead.status, x: r.left + window.scrollX, y: r.bottom + window.scrollY + 4 })
-                        }}>
-                        <span className={styles.statusTag} style={{ '--sc': statusColor(lead.status) } as React.CSSProperties}>{STATUS_LABELS[lead.status]}</span>
-                        <span className={styles.statusInlineCaret}>▾</span>
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <button className={styles.statusInlineBtn}
+                          title="Click para cambiar status"
+                          onClick={(e) => {
+                            const r = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                            setPopover({ leadId: lead.id, current: lead.status, x: r.left + window.scrollX, y: r.bottom + window.scrollY + 4 })
+                          }}>
+                          <span className={styles.statusTag} style={{ '--sc': statusColor(lead.status) } as React.CSSProperties}>{STATUS_LABELS[lead.status]}</span>
+                          <span className={styles.statusInlineCaret}>▾</span>
+                        </button>
+                        {!PIPELINE_CLOSED.includes(lead.status) && lead.status !== 'descartado' && (() => {
+                          const d = daysInCurrentStage(lead)
+                          const ab = agingBucket(d)
+                          return (
+                            <span className={styles.agingChip}
+                              style={{ '--ac': AGING_COLOR[ab] } as React.CSSProperties}
+                              title={`${Math.round(d)} días en ${STATUS_LABELS[lead.status]}`}>
+                              ⏱ {fmtAgingShort(d)}
+                            </span>
+                          )
+                        })()}
+                      </div>
                     </td>
                     <td className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
                     <td>
