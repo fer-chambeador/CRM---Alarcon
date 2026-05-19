@@ -24,6 +24,7 @@ export const STATUS_ORDER: Lead['status'][] = [
   'descartado',
 ]
 
+export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada']
 export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 

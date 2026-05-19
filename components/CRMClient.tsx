@@ -3,13 +3,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase, type Lead, type LeadActividad } from '@/lib/supabase'
-import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, subDays } from 'date-fns'
+import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './CRMClient.module.css'
 import { Sidebar } from './CommandCenter'
 import {
-  STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSING, PIPELINE_CLOSED,
+  STATUS_LABELS, STATUS_ORDER, PIPELINE_ACTIVE, PIPELINE_CLOSING, PIPELINE_CLOSED,
   DEFAULT_MONTO, statusColor, fmtMoney,
 } from '@/lib/status'
 import { phoneToState, ALL_STATES } from '@/lib/lada'
@@ -31,55 +31,40 @@ function formatFecha(dateStr: string) {
 }
 
 // ─── Date filter ─────────────────────────────────────────────────────────────
-type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'ultimos-30'
+type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
   todo: 'Todo el tiempo',
   hoy: 'Hoy',
   semana: 'Esta semana',
   mes: 'Este mes',
-  'ultimos-30': 'Últimos 30 días',
+  'mes-pasado': 'Mes pasado',
 }
-function dateRangeStart(range: DateRange): Date | null {
+function dateRangeBounds(range: DateRange): { from: Date | null; to: Date | null } {
   const now = new Date()
   switch (range) {
-    case 'todo': return null
-    case 'hoy': return startOfDay(now)
-    case 'semana': return startOfWeek(now, { weekStartsOn: 1 })
-    case 'mes': return startOfMonth(now)
-    case 'ultimos-30': return subDays(now, 30)
+    case 'todo':       return { from: null, to: null }
+    case 'hoy':        return { from: startOfDay(now), to: null }
+    case 'semana':     return { from: startOfWeek(now, { weekStartsOn: 1 }), to: null }
+    case 'mes':        return { from: startOfMonth(now), to: null }
+    case 'mes-pasado': {
+      const prev = subMonths(now, 1)
+      return { from: startOfMonth(prev), to: endOfMonth(prev) }
+    }
   }
 }
 
-// ─── Fuzzy search ────────────────────────────────────────────────────────────
-function bigrams(s: string): string[] {
-  const out: string[] = []
-  for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2))
-  return out
-}
-function fuzzyScore(query: string, target: string | null | undefined): number {
-  if (!target) return 0
-  const q = query.toLowerCase().trim()
-  const t = target.toLowerCase()
-  if (!q) return 0
-  if (t.includes(q)) return 100 + (q.length / t.length) * 20
-  if (q.length < 3) return 0
-  const qb = bigrams(q), tb = bigrams(t)
-  if (!qb.length || !tb.length) return 0
-  const tbSet = new Set(tb)
-  let hits = 0
-  for (const b of qb) if (tbSet.has(b)) hits++
-  const overlap = hits / qb.length
-  return overlap > 0.5 ? overlap * 50 : 0
-}
-function leadScore(query: string, lead: Lead): number {
-  if (!query) return 1
-  const fields: (string | null)[] = [
+// ─── Search (exact substring, case-insensitive) ──────────────────────────────
+function leadMatchesQuery(query: string, lead: Lead): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const fields: (string | null | undefined)[] = [
     lead.email, lead.nombre, lead.empresa, lead.telefono,
     lead.canal_adquisicion, lead.puesto,
   ]
-  let best = 0
-  for (const f of fields) best = Math.max(best, fuzzyScore(query, f))
-  return best
+  for (const f of fields) {
+    if (f && f.toLowerCase().includes(q)) return true
+  }
+  return false
 }
 
 function ContactoSelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
@@ -475,32 +460,30 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   )
 
   const dateScoped = useMemo(() => {
-    const start = dateRangeStart(dateRange)
-    if (!start) return leads
-    return leads.filter(l => new Date(l.created_at) >= start)
+    const { from, to } = dateRangeBounds(dateRange)
+    if (!from && !to) return leads
+    return leads.filter(l => {
+      const t = new Date(l.created_at).getTime()
+      if (from && t < from.getTime()) return false
+      if (to && t > to.getTime()) return false
+      return true
+    })
   }, [leads, dateRange])
 
   const filtered = useMemo(() => {
     const q = search.trim()
-    let rows = dateScoped.filter(lead => {
+    return dateScoped.filter(lead => {
       const matchStatus = filterStatus === 'todos' || lead.status === filterStatus
       const matchCanal = filterCanal === 'todos' || lead.canal_adquisicion === filterCanal
       const matchAttempts = filterStatus !== 'contactado' || filterAttempts === 'todos'
         || (lead.veces_contactado || 0) === filterAttempts
-      return matchStatus && matchCanal && matchAttempts
+      const matchSearch = !q || leadMatchesQuery(q, lead)
+      return matchStatus && matchCanal && matchAttempts && matchSearch
     })
-    if (q) {
-      rows = rows
-        .map(l => ({ l, score: leadScore(q, l) }))
-        .filter(r => r.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .map(r => r.l)
-    }
-    return rows
   }, [dateScoped, search, filterStatus, filterAttempts, filterCanal])
 
   const sorted = useMemo(() => {
-    if (!sort || search.trim()) return filtered
+    if (!sort) return filtered
     const get = (l: Lead): string | number => {
       switch (sort.key) {
         case 'email': return (l.nombre || l.email).toLowerCase()
@@ -527,7 +510,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       if (av > bv) return 1 * dir
       return 0
     })
-  }, [filtered, sort, search])
+  }, [filtered, sort])
 
   const onSort = (key: SortKey) => {
     setSort(s => s?.key === key
@@ -537,18 +520,15 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
   const stats = useMemo(() => {
     const sumMonto = (rows: Lead[]) => rows.reduce((acc, l) => acc + (l.monto ?? DEFAULT_MONTO), 0)
-    const monthStart = startOfMonth(new Date())
-    const closedThisMonth = leads.filter(l =>
-      PIPELINE_CLOSED.includes(l.status) && new Date(l.created_at) >= monthStart
-    )
+    const cerrados = dateScoped.filter(l => PIPELINE_CLOSED.includes(l.status))
     return {
       leads: dateScoped.length,
-      pipelineTotal: sumMonto(dateScoped),
+      pipelineActivo: sumMonto(dateScoped.filter(l => PIPELINE_ACTIVE.includes(l.status))),
       pipelineCierre: sumMonto(dateScoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
-      pipelineCerradoMes: sumMonto(closedThisMonth),
-      pipelineCerradoMesCount: closedThisMonth.length,
+      pipelineCerrado: sumMonto(cerrados),
+      pipelineCerradoCount: cerrados.length,
     }
-  }, [dateScoped, leads])
+  }, [dateScoped])
 
   return (
     <div className={styles.root}>
@@ -622,25 +602,25 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             <div className={styles.kpiHeroSub}>{DATE_LABELS[dateRange]}</div>
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroTeal)}>
-            <div className={styles.kpiHeroLabel}>Pipeline total</div>
-            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineTotal)}</div>
-            <div className={styles.kpiHeroSub}>{stats.leads} leads · {DATE_LABELS[dateRange]}</div>
+            <div className={styles.kpiHeroLabel}>Pipeline del periodo</div>
+            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineActivo)}</div>
+            <div className={styles.kpiHeroSub}>Nuevo, contactado, llamada agendada, no show</div>
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroIndigo)}>
-            <div className={styles.kpiHeroLabel}>Pipeline en cierre</div>
+            <div className={styles.kpiHeroLabel}>Pipeline por cerrar</div>
             <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCierre)}</div>
             <div className={styles.kpiHeroSub}>Propuesta enviada + espera de aprobación</div>
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroDark)}>
-            <div className={styles.kpiHeroLabel}>Pipeline cerrado · este mes</div>
-            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerradoMes)}</div>
+            <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
+            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerrado)}</div>
             <div className={styles.kpiHeroSub}>
-              {stats.pipelineCerradoMesCount} deals · meta {fmtMoney(MONTHLY_GOAL)}
-              {' '}({Math.round(Math.min(1, stats.pipelineCerradoMes / MONTHLY_GOAL) * 100)}%)
+              {stats.pipelineCerradoCount} deals · meta {fmtMoney(MONTHLY_GOAL)}
+              {' '}({Math.round(Math.min(1, stats.pipelineCerrado / MONTHLY_GOAL) * 100)}%)
             </div>
             <div className={styles.kpiHeroBar}>
               <div className={styles.kpiHeroBarFill}
-                style={{ width: `${Math.min(100, (stats.pipelineCerradoMes / MONTHLY_GOAL) * 100)}%` }} />
+                style={{ width: `${Math.min(100, (stats.pipelineCerrado / MONTHLY_GOAL) * 100)}%` }} />
             </div>
           </div>
         </div>
