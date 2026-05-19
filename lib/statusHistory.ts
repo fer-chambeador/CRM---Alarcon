@@ -1,0 +1,122 @@
+import type { Lead } from './supabase'
+import { STATUS_PROJECTION_ORDER, STATUS_LABELS } from './status'
+
+/**
+ * Histórico de cambios de status — reconstruido desde lead_actividad.
+ *
+ * Cada cambio se inserta en lead_actividad con tipo='status_change' y
+ * `descripcion = 'Status cambiado a: <new_status>'`. Aquí parseamos eso
+ * y calculamos agregados.
+ */
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Una fila de actividad relevante. */
+export type StatusChangeRow = {
+  lead_id: string
+  to_status: Lead['status']
+  changed_at: string  // ISO
+}
+
+/** Parsea el campo descripcion de lead_actividad → status destino. */
+export function parseStatusFromDesc(desc: string | null | undefined): Lead['status'] | null {
+  if (!desc) return null
+  // formato: "Status cambiado a: <status>"
+  const m = desc.match(/Status cambiado a:\s*([a-z_]+)/i)
+  if (!m) return null
+  const s = m[1].trim() as Lead['status']
+  if (STATUS_PROJECTION_ORDER.includes(s)) return s
+  return null
+}
+
+/** Histograma: cuántos leads ÚNICOS pasaron por cada stage en el rango. */
+export type StagePassCount = {
+  status: Lead['status']
+  label: string
+  unique_leads: number     // distinct lead_id que tocaron este stage
+  changes: number          // total de transiciones hacia este stage (≥ unique_leads)
+}
+
+export function passCounts(rows: StatusChangeRow[]): StagePassCount[] {
+  const counts = new Map<Lead['status'], { changes: number; leads: Set<string> }>()
+  for (const r of rows) {
+    const cur = counts.get(r.to_status) || { changes: 0, leads: new Set() }
+    cur.changes += 1
+    cur.leads.add(r.lead_id)
+    counts.set(r.to_status, cur)
+  }
+  return STATUS_PROJECTION_ORDER.map(s => {
+    const c = counts.get(s)
+    return {
+      status: s,
+      label: STATUS_LABELS[s],
+      unique_leads: c ? c.leads.size : 0,
+      changes: c ? c.changes : 0,
+    }
+  }).filter(r => r.changes > 0)
+}
+
+/**
+ * Para cada par (stage_from → stage_to) que tomó al menos un lead,
+ * calcula el tiempo entre transiciones.
+ *
+ * Esto reconstruye la trayectoria de cada lead: ordena sus cambios por
+ * fecha, mira pares consecutivos, y mide el tiempo entre uno y el siguiente.
+ */
+export type TransitionStats = {
+  from: Lead['status']
+  to: Lead['status']
+  label: string  // "Contactado → Propuesta enviada"
+  count: number
+  avgDays: number
+  medianDays: number
+}
+
+function median(xs: number[]): number {
+  if (!xs.length) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+export function transitionStats(rows: StatusChangeRow[]): TransitionStats[] {
+  // Agrupar por lead, ordenar por fecha, sacar pares consecutivos.
+  const byLead = new Map<string, StatusChangeRow[]>()
+  for (const r of rows) {
+    const arr = byLead.get(r.lead_id) || []
+    arr.push(r)
+    byLead.set(r.lead_id, arr)
+  }
+
+  const pairs = new Map<string, number[]>()  // key = "from→to", val = [days...]
+  for (const arr of Array.from(byLead.values())) {
+    arr.sort((a, b) => a.changed_at.localeCompare(b.changed_at))
+    for (let i = 1; i < arr.length; i++) {
+      const prev = arr[i - 1], cur = arr[i]
+      const t1 = new Date(prev.changed_at).getTime()
+      const t2 = new Date(cur.changed_at).getTime()
+      const days = (t2 - t1) / DAY_MS
+      if (days < 0) continue
+      const key = `${prev.to_status}→${cur.to_status}`
+      const list = pairs.get(key) || []
+      list.push(days)
+      pairs.set(key, list)
+    }
+  }
+
+  const out: TransitionStats[] = []
+  for (const [key, days] of Array.from(pairs.entries())) {
+    const [from, to] = key.split('→') as [Lead['status'], Lead['status']]
+    out.push({
+      from,
+      to,
+      label: `${STATUS_LABELS[from]} → ${STATUS_LABELS[to]}`,
+      count: days.length,
+      avgDays: days.reduce((a, b) => a + b, 0) / days.length,
+      medianDays: median(days),
+    })
+  }
+
+  // Ordenar por count desc (las transiciones más frecuentes primero).
+  return out.sort((a, b) => b.count - a.count)
+}

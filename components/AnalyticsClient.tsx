@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { type Lead } from '@/lib/supabase'
 import { startOfDay, startOfWeek, startOfMonth, endOfMonth, subMonths, format, eachDayOfInterval } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -8,7 +8,7 @@ import clsx from 'clsx'
 import styles from './AnalyticsClient.module.css'
 import { Sidebar } from './CommandCenter'
 import {
-  STATUS_LABELS, STATUS_ORDER, PIPELINE_CLOSED, PIPELINE_CLOSING,
+  STATUS_LABELS, STATUS_PROJECTION_ORDER, PIPELINE_CLOSED, PIPELINE_CLOSING,
   DEFAULT_MONTO, statusColor, fmtMoney, fmtPct,
 } from '@/lib/status'
 import { phoneToState } from '@/lib/lada'
@@ -16,6 +16,7 @@ import { fmtPresupuesto } from '@/lib/budget'
 import { forecastLeads, forecastByStage } from '@/lib/forecast'
 import { agingByStage, cycleStats, agingBucket, AGING_COLOR } from '@/lib/velocity'
 import { goalForPeriod, goalLabel } from '@/lib/goal'
+import type { StagePassCount, TransitionStats } from '@/lib/statusHistory'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -142,7 +143,7 @@ function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: st
 
 // ─── Funnel ──────────────────────────────────────────────────────────────────
 function FunnelChart({ leads }: { leads: Lead[] }) {
-  const counts = STATUS_ORDER.map(s => ({
+  const counts = STATUS_PROJECTION_ORDER.map(s => ({
     s, label: STATUS_LABELS[s], count: leads.filter(l => l.status === s).length,
     monto: sumMonto(leads.filter(l => l.status === s)),
   }))
@@ -530,9 +531,118 @@ function TacticsSection({ tactics }: { tactics: Tactic[] }) {
   )
 }
 
+// ─── Movement section (status history) ────────────────────────────────────
+function MovementSection({ data }: { data: MovementData | null }) {
+  if (data === null) {
+    return (
+      <section className={styles.section}>
+        <header className={styles.sectionHeader}>
+          <h3>Movimiento del funnel</h3>
+          <span className={styles.sectionSubtitle}>Cargando histórico de cambios…</span>
+        </header>
+      </section>
+    )
+  }
+
+  const passMax = data.passCounts.length ? Math.max(...data.passCounts.map(p => p.unique_leads)) : 0
+  const visibleTransitions = data.transitions.slice(0, 12)
+
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Movimiento del funnel</h3>
+          <span className={styles.sectionSubtitle}>
+            Cuántos leads tocaron cada stage en el periodo, y el tiempo que tardan
+            en pasar de un stage al siguiente. Reconstruido del histórico real.
+          </span>
+        </div>
+      </header>
+      {data.passCounts.length === 0
+        ? <div className={styles.empty}>Sin cambios de status registrados en este rango.</div>
+        : (
+          <>
+            <div style={{ marginBottom: 18 }}>
+              <h4 style={{ margin: '0 0 10px', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text3)', fontWeight: 700 }}>
+                Leads que pasaron por cada stage
+              </h4>
+              <table className={styles.breakdownTable}>
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th>Leads únicos</th>
+                    <th>Total de transiciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.passCounts.map(p => (
+                    <tr key={p.status}>
+                      <td className={styles.breakdownKey}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(p.status) }} />
+                          <span>{p.label}</span>
+                        </div>
+                        <Bar value={p.unique_leads} max={passMax} color={statusColor(p.status)} />
+                      </td>
+                      <td><strong>{p.unique_leads}</strong></td>
+                      <td>{p.changes}{p.changes > p.unique_leads && <span style={{ color: 'var(--text3)', fontSize: 11 }}> (rebotes)</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {visibleTransitions.length > 0 && (
+              <div>
+                <h4 style={{ margin: '0 0 10px', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text3)', fontWeight: 700 }}>
+                  Tiempo entre stages
+                </h4>
+                <table className={styles.breakdownTable}>
+                  <thead>
+                    <tr>
+                      <th>Transición</th>
+                      <th>Veces</th>
+                      <th>Mediana (días)</th>
+                      <th>Promedio (días)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleTransitions.map(t => (
+                      <tr key={`${t.from}-${t.to}`}>
+                        <td className={styles.breakdownKey}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, background: statusColor(t.from) }} />
+                            <span style={{ color: 'var(--text2)' }}>{STATUS_LABELS[t.from]}</span>
+                            <span style={{ color: 'var(--text3)' }}>→</span>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, background: statusColor(t.to) }} />
+                            <span>{STATUS_LABELS[t.to]}</span>
+                          </div>
+                        </td>
+                        <td>{t.count}</td>
+                        <td><strong>{t.medianDays.toFixed(1)}</strong></td>
+                        <td>{t.avgDays.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+    </section>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
+type MovementData = {
+  passCounts: StagePassCount[]
+  transitions: TransitionStats[]
+  sample_size: number
+}
+
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
+  const [movement, setMovement] = useState<MovementData | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>('mes')
 
   const scoped = useMemo(() => {
@@ -572,6 +682,21 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
   const periodGoal = goalForPeriod(dateRange)
   const periodGoalLabel = goalLabel(dateRange)
+
+  // Fetch movement data when range changes
+  useEffect(() => {
+    const { from, to } = dateRangeBounds(dateRange)
+    const qs = new URLSearchParams()
+    if (from) qs.set('from', from.toISOString())
+    if (to)   qs.set('to', to.toISOString())
+    let cancelled = false
+    setMovement(null)
+    fetch(`/api/analytics/movement?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then((j: MovementData) => { if (!cancelled) setMovement(j) })
+      .catch(() => { if (!cancelled) setMovement({ passCounts: [], transitions: [], sample_size: 0 }) })
+    return () => { cancelled = true }
+  }, [dateRange])
 
   const tactics = useMemo(() => generateTactics({
     goal: periodGoal,
@@ -625,6 +750,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} />
           <TacticsSection tactics={tactics} />
           <FunnelChart leads={scoped} />
+          <MovementSection data={movement} />
           <VelocitySection rows={stageAging} cycle={stats.cycle} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />

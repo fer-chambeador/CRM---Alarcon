@@ -28,6 +28,23 @@ export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamad
 export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
+/**
+ * Orden para la VISTA de proyección/funnel en /analytics:
+ * de cerrado a "más lejos del cierre". Lo pidió Fer así para que el
+ * top de la tabla sean los más cercanos a conversión.
+ */
+export const STATUS_PROJECTION_ORDER: Lead['status'][] = [
+  'convertido',
+  'cliente_recurrente',
+  'espera_aprobacion',
+  'presentacion_enviada',
+  'llamada_agendada',
+  'contactado',
+  'no_show_llamada',
+  'nuevo',
+  'descartado',
+]
+
 export const DEFAULT_MONTO = 1160
 
 export function statusColor(s: Lead['status']): string {
