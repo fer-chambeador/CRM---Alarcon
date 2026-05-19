@@ -16,7 +16,7 @@ import { fmtPresupuesto } from '@/lib/budget'
 import { forecastLeads, forecastByStage } from '@/lib/forecast'
 import { agingByStage, cycleStats, agingBucket, AGING_COLOR } from '@/lib/velocity'
 import { goalForPeriod, goalLabel } from '@/lib/goal'
-import type { StagePassCount, TransitionStats } from '@/lib/statusHistory'
+import type { StagePassCount, TransitionStats, ForwardAdvance } from '@/lib/statusHistory'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -308,42 +308,54 @@ function ForecastSection({ buckets, forecast, cerradoReal, goal, goalLabel }: {
   )
 }
 
-// ─── Velocity section ──────────────────────────────────────────────────────
-function VelocitySection({ rows, cycle }: {
-  rows: ReturnType<typeof agingByStage>
+// ─── Funnel health (movimiento + velocidad unificados) ───────────────────
+function FunnelHealthSection({ aging, cycle, movement }: {
+  aging: ReturnType<typeof agingByStage>
   cycle: ReturnType<typeof cycleStats>
+  movement: MovementData | null
 }) {
-  const rowsWithLeads = rows.filter(r => r.count > 0)
-  const max = rowsWithLeads.length ? Math.max(...rowsWithLeads.map(r => r.medianDays)) : 0
+  // Indexar pasaron-por-stage y tiempo-para-avanzar por status
+  const passBy = new Map<Lead['status'], number>()
+  if (movement) {
+    for (const p of movement.passCounts) passBy.set(p.status, p.unique_leads)
+  }
+  const advanceBy = movement?.advance || {}
+
+  // Mostrar solo stages con actividad relevante en el periodo
+  const rows = aging.filter(a => a.count > 0 || (passBy.get(a.status) || 0) > 0)
+
   return (
     <section className={styles.section}>
       <header className={styles.sectionHeader}>
         <div>
-          <h3>Velocidad del funnel</h3>
+          <h3>Funnel — movimiento y velocidad</h3>
           <span className={styles.sectionSubtitle}>
-            Días promedio que llevan los leads en su stage actual.{' '}
+            Cuántos leads pasaron por cada stage en el periodo, cuántos siguen ahí y cuánto tardan en avanzar.{' '}
             {cycle.count > 0
-              ? <>Ciclo Nuevo→Cerrado: mediana <strong>{cycle.medianDays.toFixed(0)} días</strong> · promedio {cycle.avgDays.toFixed(0)} d ({cycle.count} cerrados).</>
-              : <>Aún no hay leads cerrados en este rango para medir el ciclo.</>}
+              ? <>Ciclo Nuevo→Cerrado: mediana <strong>{cycle.medianDays.toFixed(0)} días</strong> ({cycle.count} cerrados).</>
+              : <>Aún no hay cierres en el rango para medir el ciclo completo.</>}
           </span>
         </div>
       </header>
-      {rowsWithLeads.length === 0
-        ? <div className={styles.empty}>Sin leads en este rango.</div>
+      {rows.length === 0
+        ? <div className={styles.empty}>Sin actividad en este rango.</div>
         : (
           <table className={styles.breakdownTable}>
             <thead>
               <tr>
                 <th>Stage</th>
-                <th>Leads aquí</th>
-                <th>Mediana (días)</th>
-                <th>Promedio (días)</th>
-                <th>Estancados &gt;14 d</th>
+                <th title="Leads únicos que tocaron este stage durante el periodo">Pasaron</th>
+                <th title="Leads que están en este stage ahora mismo">Ahora</th>
+                <th title="Días que llevan los leads que están aquí (mediana)">Días aquí</th>
+                <th title="Tiempo que tardaron en pasar al siguiente stage del funnel (mediana). Excluye retrocesos y stages laterales como Descartado.">→ avanzar</th>
+                <th title="Leads que llevan más de 14 días en el stage sin avanzar">Estancados</th>
               </tr>
             </thead>
             <tbody>
-              {rowsWithLeads.map(r => {
+              {rows.map(r => {
                 const ab = agingBucket(r.medianDays)
+                const pass = passBy.get(r.status) || 0
+                const adv = advanceBy[r.status]
                 return (
                   <tr key={r.status}>
                     <td className={styles.breakdownKey}>
@@ -351,11 +363,19 @@ function VelocitySection({ rows, cycle }: {
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(r.status) }} />
                         <span>{r.label}</span>
                       </div>
-                      <Bar value={r.medianDays} max={max} color={AGING_COLOR[ab]} />
                     </td>
-                    <td>{r.count}</td>
-                    <td><strong style={{ color: AGING_COLOR[ab] }}>{r.medianDays.toFixed(1)}</strong></td>
-                    <td>{r.avgDays.toFixed(1)}</td>
+                    <td><strong>{pass || '—'}</strong></td>
+                    <td>{r.count > 0 ? r.count : '—'}</td>
+                    <td>
+                      {r.count > 0
+                        ? <strong style={{ color: AGING_COLOR[ab] }}>{r.medianDays.toFixed(1)} d</strong>
+                        : '—'}
+                    </td>
+                    <td>
+                      {adv
+                        ? <span><strong>{adv.medianDays.toFixed(1)} d</strong> <span style={{ color: 'var(--text3)', fontSize: 11 }}>(n={adv.count})</span></span>
+                        : '—'}
+                    </td>
                     <td>{r.stuckCount > 0 ? <strong style={{ color: '#f05a5a' }}>{r.stuckCount}</strong> : '—'}</td>
                   </tr>
                 )
@@ -531,112 +551,11 @@ function TacticsSection({ tactics }: { tactics: Tactic[] }) {
   )
 }
 
-// ─── Movement section (status history) ────────────────────────────────────
-function MovementSection({ data }: { data: MovementData | null }) {
-  if (data === null) {
-    return (
-      <section className={styles.section}>
-        <header className={styles.sectionHeader}>
-          <h3>Movimiento del funnel</h3>
-          <span className={styles.sectionSubtitle}>Cargando histórico de cambios…</span>
-        </header>
-      </section>
-    )
-  }
-
-  const passMax = data.passCounts.length ? Math.max(...data.passCounts.map(p => p.unique_leads)) : 0
-  const visibleTransitions = data.transitions.slice(0, 12)
-
-  return (
-    <section className={styles.section}>
-      <header className={styles.sectionHeader}>
-        <div>
-          <h3>Movimiento del funnel</h3>
-          <span className={styles.sectionSubtitle}>
-            Cuántos leads tocaron cada stage en el periodo, y el tiempo que tardan
-            en pasar de un stage al siguiente. Reconstruido del histórico real.
-          </span>
-        </div>
-      </header>
-      {data.passCounts.length === 0
-        ? <div className={styles.empty}>Sin cambios de status registrados en este rango.</div>
-        : (
-          <>
-            <div style={{ marginBottom: 18 }}>
-              <h4 style={{ margin: '0 0 10px', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text3)', fontWeight: 700 }}>
-                Leads que pasaron por cada stage
-              </h4>
-              <table className={styles.breakdownTable}>
-                <thead>
-                  <tr>
-                    <th>Stage</th>
-                    <th>Leads únicos</th>
-                    <th>Total de transiciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.passCounts.map(p => (
-                    <tr key={p.status}>
-                      <td className={styles.breakdownKey}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(p.status) }} />
-                          <span>{p.label}</span>
-                        </div>
-                        <Bar value={p.unique_leads} max={passMax} color={statusColor(p.status)} />
-                      </td>
-                      <td><strong>{p.unique_leads}</strong></td>
-                      <td>{p.changes}{p.changes > p.unique_leads && <span style={{ color: 'var(--text3)', fontSize: 11 }}> (rebotes)</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {visibleTransitions.length > 0 && (
-              <div>
-                <h4 style={{ margin: '0 0 10px', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text3)', fontWeight: 700 }}>
-                  Tiempo entre stages
-                </h4>
-                <table className={styles.breakdownTable}>
-                  <thead>
-                    <tr>
-                      <th>Transición</th>
-                      <th>Veces</th>
-                      <th>Mediana (días)</th>
-                      <th>Promedio (días)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleTransitions.map(t => (
-                      <tr key={`${t.from}-${t.to}`}>
-                        <td className={styles.breakdownKey}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ width: 7, height: 7, borderRadius: 999, background: statusColor(t.from) }} />
-                            <span style={{ color: 'var(--text2)' }}>{STATUS_LABELS[t.from]}</span>
-                            <span style={{ color: 'var(--text3)' }}>→</span>
-                            <span style={{ width: 7, height: 7, borderRadius: 999, background: statusColor(t.to) }} />
-                            <span>{STATUS_LABELS[t.to]}</span>
-                          </div>
-                        </td>
-                        <td>{t.count}</td>
-                        <td><strong>{t.medianDays.toFixed(1)}</strong></td>
-                        <td>{t.avgDays.toFixed(1)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
-    </section>
-  )
-}
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 type MovementData = {
   passCounts: StagePassCount[]
   transitions: TransitionStats[]
+  advance: Partial<Record<Lead['status'], ForwardAdvance>>
   sample_size: number
 }
 
@@ -694,7 +613,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     fetch(`/api/analytics/movement?${qs}`, { cache: 'no-store' })
       .then(r => r.json())
       .then((j: MovementData) => { if (!cancelled) setMovement(j) })
-      .catch(() => { if (!cancelled) setMovement({ passCounts: [], transitions: [], sample_size: 0 }) })
+      .catch(() => { if (!cancelled) setMovement({ passCounts: [], transitions: [], advance: {}, sample_size: 0 }) })
     return () => { cancelled = true }
   }, [dateRange])
 
@@ -750,8 +669,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} />
           <TacticsSection tactics={tactics} />
           <FunnelChart leads={scoped} />
-          <MovementSection data={movement} />
-          <VelocitySection rows={stageAging} cycle={stats.cycle} />
+          <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
           <BreakdownTable title="Por presupuesto" subtitle="Tier de inversión declarado en onboarding" rows={byPresupuesto} />
