@@ -1,5 +1,5 @@
 import type { Lead } from './supabase'
-import { DEFAULT_MONTO, PIPELINE_CLOSED } from './status'
+import { DEFAULT_MONTO, PIPELINE_CLOSED, STATUS_PROJECTION_ORDER } from './status'
 
 /**
  * Probabilidad de cierre por stage (V1, hardcoded).
@@ -71,7 +71,12 @@ export function forecastByStage(leads: Lead[]): ForecastBucket[] {
       })
     }
   }
-  return Array.from(map.values()).sort((a, b) => b.contribution - a.contribution)
+  // Ordenamos según la jerarquía del funnel (más cercano a cierre primero).
+  const rank = (s: Lead['status']) => {
+    const i = STATUS_PROJECTION_ORDER.indexOf(s)
+    return i < 0 ? 999 : i
+  }
+  return Array.from(map.values()).sort((a, b) => rank(a.status) - rank(b.status))
 }
 
 /** Sumatoria del cerrado real (convertido + recurrente) en este set. */

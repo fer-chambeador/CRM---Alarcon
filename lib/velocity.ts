@@ -1,5 +1,5 @@
 import type { Lead } from './supabase'
-import { PIPELINE_CLOSED, STATUS_ORDER, STATUS_LABELS } from './status'
+import { PIPELINE_CLOSED, STATUS_PROJECTION_ORDER, STATUS_LABELS } from './status'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -56,7 +56,7 @@ export type StageAging = {
   stuckCount: number          // leads con > 14 días en stage
 }
 export function agingByStage(leads: Lead[], now: number = Date.now()): StageAging[] {
-  return STATUS_ORDER.map(status => {
+  return STATUS_PROJECTION_ORDER.map(status => {
     const inStage = leads.filter(l => l.status === status)
     const ages = inStage.map(l => daysInCurrentStage(l, now))
     const avg = ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : 0
