@@ -79,6 +79,68 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
+/**
+ * Rank "natural" del funnel para detectar avances vs retrocesos.
+ * Mayor número = más cerca de cierre. -1 = terminal lateral (descartado).
+ */
+const FUNNEL_RANK: Record<Lead['status'], number> = {
+  nuevo: 0,
+  contactado: 1,
+  llamada_agendada: 2,
+  no_show_llamada: 2,
+  presentacion_enviada: 3,
+  espera_aprobacion: 4,
+  convertido: 5,
+  cliente_recurrente: 5,
+  descartado: -1,
+}
+
+/**
+ * Para cada stage de origen, tiempo (en días) que tardan los leads en
+ * AVANZAR al siguiente stage del funnel. Excluye self-loops y retrocesos.
+ */
+export type ForwardAdvance = {
+  from: Lead['status']
+  count: number
+  avgDays: number
+  medianDays: number
+}
+
+export function forwardAdvanceByStage(rows: StatusChangeRow[]): Map<Lead['status'], ForwardAdvance> {
+  const byLead = new Map<string, StatusChangeRow[]>()
+  for (const r of rows) {
+    const arr = byLead.get(r.lead_id) || []
+    arr.push(r)
+    byLead.set(r.lead_id, arr)
+  }
+  const byFrom = new Map<Lead['status'], number[]>()  // from → array de días
+  for (const arr of Array.from(byLead.values())) {
+    arr.sort((a, b) => a.changed_at.localeCompare(b.changed_at))
+    for (let i = 1; i < arr.length; i++) {
+      const prev = arr[i - 1], cur = arr[i]
+      if (prev.to_status === cur.to_status) continue                  // self-loop
+      if (FUNNEL_RANK[cur.to_status] <= FUNNEL_RANK[prev.to_status]) continue  // retroceso o lateral
+      const t1 = new Date(prev.changed_at).getTime()
+      const t2 = new Date(cur.changed_at).getTime()
+      const days = (t2 - t1) / DAY_MS
+      if (days < 0) continue
+      const list = byFrom.get(prev.to_status) || []
+      list.push(days)
+      byFrom.set(prev.to_status, list)
+    }
+  }
+  const out = new Map<Lead['status'], ForwardAdvance>()
+  for (const [from, days] of Array.from(byFrom.entries())) {
+    out.set(from, {
+      from,
+      count: days.length,
+      avgDays: days.reduce((a, b) => a + b, 0) / days.length,
+      medianDays: median(days),
+    })
+  }
+  return out
+}
+
 export function transitionStats(rows: StatusChangeRow[]): TransitionStats[] {
   // Agrupar por lead, ordenar por fecha, sacar pares consecutivos.
   const byLead = new Map<string, StatusChangeRow[]>()

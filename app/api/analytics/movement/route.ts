@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { parseStatusFromDesc, passCounts, transitionStats, type StatusChangeRow } from '@/lib/statusHistory'
+import { parseStatusFromDesc, passCounts, transitionStats, forwardAdvanceByStage, type StatusChangeRow, type ForwardAdvance } from '@/lib/statusHistory'
+import type { Lead } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -37,10 +38,11 @@ export async function GET(req: NextRequest) {
     if (s) inRange.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
   }
 
-  // Para transitions: TODOS los cambios, pero solo de los leads que tuvieron
+  // Para transitions y advance: TODOS los cambios de los leads que tuvieron
   // movimiento en el rango (optimización para no traer todo).
   const leadIds = Array.from(new Set(inRange.map(r => r.lead_id)))
   let transitions: ReturnType<typeof transitionStats> = []
+  let advance: Record<Lead['status'], ForwardAdvance> | Record<string, never> = {}
   if (leadIds.length > 0) {
     const { data: allRows, error: e2 } = await supabase
       .from('lead_actividad')
@@ -55,12 +57,15 @@ export async function GET(req: NextRequest) {
       if (s) allParsed.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
     }
     transitions = transitionStats(allParsed)
+    const advMap = forwardAdvanceByStage(allParsed)
+    advance = Object.fromEntries(advMap.entries()) as Record<Lead['status'], ForwardAdvance>
   }
 
   return NextResponse.json({
     range: { from: fromISO, to: toISO },
     passCounts: passCounts(inRange),
     transitions,
+    advance,
     sample_size: inRange.length,
   })
 }
