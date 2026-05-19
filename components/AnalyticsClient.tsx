@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { type Lead } from '@/lib/supabase'
-import { startOfDay, startOfWeek, startOfMonth, subDays, format, eachDayOfInterval } from 'date-fns'
+import { startOfDay, startOfWeek, startOfMonth, endOfMonth, subMonths, format, eachDayOfInterval } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './AnalyticsClient.module.css'
@@ -14,24 +14,25 @@ import {
 import { phoneToState } from '@/lib/lada'
 import { fmtPresupuesto } from '@/lib/budget'
 
-type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'ultimos-30' | 'ultimos-90'
+type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
   todo: 'Todo el tiempo',
   hoy: 'Hoy',
   semana: 'Esta semana',
   mes: 'Este mes',
-  'ultimos-30': 'Últimos 30 días',
-  'ultimos-90': 'Últimos 90 días',
+  'mes-pasado': 'Mes pasado',
 }
-function dateRangeStart(range: DateRange): Date | null {
+function dateRangeBounds(range: DateRange): { from: Date | null; to: Date | null } {
   const now = new Date()
   switch (range) {
-    case 'todo': return null
-    case 'hoy': return startOfDay(now)
-    case 'semana': return startOfWeek(now, { weekStartsOn: 1 })
-    case 'mes': return startOfMonth(now)
-    case 'ultimos-30': return subDays(now, 30)
-    case 'ultimos-90': return subDays(now, 90)
+    case 'todo':       return { from: null, to: null }
+    case 'hoy':        return { from: startOfDay(now), to: null }
+    case 'semana':     return { from: startOfWeek(now, { weekStartsOn: 1 }), to: null }
+    case 'mes':        return { from: startOfMonth(now), to: null }
+    case 'mes-pasado': {
+      const prev = subMonths(now, 1)
+      return { from: startOfMonth(prev), to: endOfMonth(prev) }
+    }
   }
 }
 
@@ -45,6 +46,8 @@ function Bar({ value, max, color = '#7c6af7' }: { value: number; max: number; co
 
 // ─── Breakdown table ─────────────────────────────────────────────────────────
 type BreakdownRow = { key: string; leads: number; pipeline: number; cerrados: number; pipelineCerrado: number }
+type BreakdownSortKey = 'key' | 'leads' | 'pipeline' | 'cerrados' | 'convrate' | 'pipelineCerrado'
+
 function makeBreakdown(leads: Lead[], keyOf: (l: Lead) => string | null): BreakdownRow[] {
   const map = new Map<string, BreakdownRow>()
   for (const l of leads) {
@@ -58,10 +61,40 @@ function makeBreakdown(leads: Lead[], keyOf: (l: Lead) => string | null): Breakd
     }
     map.set(k, row)
   }
-  return Array.from(map.values()).sort((a, b) => b.pipeline - a.pipeline)
+  return Array.from(map.values())
 }
 
 function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: string; rows: BreakdownRow[] }) {
+  const [sort, setSort] = useState<{ key: BreakdownSortKey; dir: 'asc' | 'desc' }>({ key: 'pipeline', dir: 'desc' })
+
+  const sorted = useMemo(() => {
+    const dir = sort.dir === 'asc' ? 1 : -1
+    const get = (r: BreakdownRow): number | string => {
+      switch (sort.key) {
+        case 'key':            return r.key.toLowerCase()
+        case 'leads':          return r.leads
+        case 'pipeline':       return r.pipeline
+        case 'cerrados':       return r.cerrados
+        case 'convrate':       return r.leads > 0 ? r.cerrados / r.leads : 0
+        case 'pipelineCerrado':return r.pipelineCerrado
+      }
+    }
+    return [...rows].sort((a, b) => {
+      const av = get(a), bv = get(b)
+      if (av < bv) return -1 * dir
+      if (av > bv) return  1 * dir
+      return 0
+    })
+  }, [rows, sort])
+
+  const onSort = (key: BreakdownSortKey) => {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'key' ? 'asc' : 'desc' })
+  }
+  const arrow = (key: BreakdownSortKey) =>
+    sort.key === key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''
+
   const max = rows.length ? Math.max(...rows.map(r => r.pipeline)) : 0
   return (
     <section className={styles.section}>
@@ -75,16 +108,16 @@ function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: st
           <table className={styles.breakdownTable}>
             <thead>
               <tr>
-                <th>Categoría</th>
-                <th>Leads</th>
-                <th>Pipeline</th>
-                <th>Convertidos</th>
-                <th>Conv. rate</th>
-                <th>Cerrado</th>
+                <th onClick={() => onSort('key')}              style={{ cursor: 'pointer' }}>Categoría{arrow('key')}</th>
+                <th onClick={() => onSort('leads')}            style={{ cursor: 'pointer' }}>Leads{arrow('leads')}</th>
+                <th onClick={() => onSort('pipeline')}         style={{ cursor: 'pointer' }}>Pipeline{arrow('pipeline')}</th>
+                <th onClick={() => onSort('cerrados')}         style={{ cursor: 'pointer' }}>Convertidos{arrow('cerrados')}</th>
+                <th onClick={() => onSort('convrate')}         style={{ cursor: 'pointer' }}>Conv. rate{arrow('convrate')}</th>
+                <th onClick={() => onSort('pipelineCerrado')}  style={{ cursor: 'pointer' }}>Cerrado{arrow('pipelineCerrado')}</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {sorted.map(r => (
                 <tr key={r.key}>
                   <td className={styles.breakdownKey}>
                     <div>{r.key}</div>
@@ -136,8 +169,9 @@ function FunnelChart({ leads }: { leads: Lead[] }) {
 // ─── Daily timeline ──────────────────────────────────────────────────────────
 function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
   if (range === 'todo' || range === 'hoy') return null
-  const start = dateRangeStart(range)!
-  const days = eachDayOfInterval({ start, end: new Date() })
+  const { from, to } = dateRangeBounds(range)
+  if (!from) return null
+  const days = eachDayOfInterval({ start: from, end: to || new Date() })
   if (days.length > 95) return null
 
   const data = days.map(d => {
@@ -197,9 +231,14 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
   const [dateRange, setDateRange] = useState<DateRange>('mes')
 
   const scoped = useMemo(() => {
-    const start = dateRangeStart(dateRange)
-    if (!start) return leads
-    return leads.filter(l => new Date(l.created_at) >= start)
+    const { from, to } = dateRangeBounds(dateRange)
+    if (!from && !to) return leads
+    return leads.filter(l => {
+      const t = new Date(l.created_at).getTime()
+      if (from && t < from.getTime()) return false
+      if (to && t > to.getTime()) return false
+      return true
+    })
   }, [leads, dateRange])
 
   const stats = useMemo(() => {
