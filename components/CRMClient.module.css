@@ -979,7 +979,7 @@
 /* ── KPI Hero row (above table on /leads) ────── */
 .kpiHero {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 14px;
   padding: 0 32px 14px;
 }
@@ -990,9 +990,10 @@
   overflow: hidden;
   border: 1px solid transparent;
 }
-.kpiHeroPurple { background: var(--gradient-purple); }
-.kpiHeroTeal   { background: var(--gradient-teal); }
-.kpiHeroIndigo { background: var(--gradient-indigo); border-color: var(--border); }
+.kpiHeroPurple   { background: var(--gradient-purple); }
+.kpiHeroTeal     { background: var(--gradient-teal); }
+.kpiHeroIndigo   { background: var(--gradient-indigo); border-color: var(--border); }
+.kpiHeroForecast { background: linear-gradient(135deg, #1d2b5f 0%, #3a4ea8 100%); border-color: var(--border); }
 .kpiHeroDark {
   background: var(--glass-strong);
   backdrop-filter: blur(20px);
@@ -1020,6 +1021,26 @@
   font-size: 12px;
   color: rgba(255,255,255,0.6);
   margin-top: 6px;
+}
+
+@media (max-width: 1280px) {
+  .kpiHero { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ── Aging chip (lead row, junto al status) ────── */
+.agingChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--ac, var(--accent)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ac, var(--accent)) 35%, transparent);
+  color: var(--ac, var(--accent));
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ── Ubicación tag ────────────────────────────── */
