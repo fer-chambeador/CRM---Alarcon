@@ -15,6 +15,7 @@ import { phoneToState } from '@/lib/lada'
 import { fmtPresupuesto } from '@/lib/budget'
 import { forecastLeads, forecastByStage } from '@/lib/forecast'
 import { agingByStage, cycleStats, agingBucket, AGING_COLOR } from '@/lib/velocity'
+import { goalForPeriod, goalLabel } from '@/lib/goal'
 
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
@@ -228,22 +229,48 @@ function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
 }
 
 // ─── Forecast section ──────────────────────────────────────────────────────
-function ForecastSection({ buckets, forecast, cerradoReal }: {
+function ForecastSection({ buckets, forecast, cerradoReal, goal, goalLabel }: {
   buckets: ReturnType<typeof forecastByStage>
   forecast: number
   cerradoReal: number
+  goal: number
+  goalLabel: string
 }) {
   const max = buckets.length ? Math.max(...buckets.map(b => b.contribution)) : 0
+  const goalPct = goal > 0 ? Math.min(100, (cerradoReal / goal) * 100) : 0
+  const forecastPct = goal > 0 ? Math.min(100, (forecast / goal) * 100) : 0
   return (
     <section className={styles.section}>
       <header className={styles.sectionHeader}>
-        <div>
+        <div style={{ flex: 1 }}>
           <h3>Proyección del periodo</h3>
           <span className={styles.sectionSubtitle}>
-            Σ (monto × probabilidad de cierre por stage). Cerrado real {fmtMoney(cerradoReal)} · forecast total <strong style={{ color: '#7c6af7' }}>{fmtMoney(forecast)}</strong>
+            Σ (monto × probabilidad de cierre por stage)
           </span>
         </div>
       </header>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 14, marginBottom: 16,
+      }}>
+        <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>Cerrado real</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, color: '#22d68a', marginTop: 6 }}>{fmtMoney(cerradoReal)}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>{goalLabel} {fmtMoney(goal)} · {goalPct.toFixed(0)}%</div>
+        </div>
+        <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>Forecast ponderado</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, color: '#7c6af7', marginTop: 6 }}>{fmtMoney(forecast)}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>vs meta · {forecastPct.toFixed(0)}%</div>
+        </div>
+        <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>Gap a meta</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, color: cerradoReal >= goal ? '#22d68a' : '#f5c842', marginTop: 6 }}>
+            {cerradoReal >= goal ? `+${fmtMoney(cerradoReal - goal)}` : `−${fmtMoney(goal - cerradoReal)}`}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>{cerradoReal >= goal ? 'meta superada' : 'faltan para meta'}</div>
+        </div>
+      </div>
       {buckets.length === 0
         ? <div className={styles.empty}>Sin leads en este rango.</div>
         : (
@@ -339,6 +366,170 @@ function VelocitySection({ rows, cycle }: {
   )
 }
 
+// ─── Tactical suggestions ──────────────────────────────────────────────────
+type Tactic = {
+  emoji: string
+  title: string
+  body: React.ReactNode
+  level: 'good' | 'neutral' | 'warn' | 'urgent'
+}
+
+function generateTactics(args: {
+  goal: number
+  forecast: number
+  cerradoReal: number
+  buckets: ReturnType<typeof forecastByStage>
+  stageAging: ReturnType<typeof agingByStage>
+  byCanal: BreakdownRow[]
+  byPresupuesto: BreakdownRow[]
+  rangeLabel: string
+}): Tactic[] {
+  const { goal, forecast, cerradoReal, buckets, stageAging, byCanal, byPresupuesto, rangeLabel } = args
+  const tactics: Tactic[] = []
+
+  // 1. Gap a meta
+  const gap = goal - cerradoReal
+  if (gap > 0) {
+    tactics.push({
+      emoji: '🎯',
+      title: `Faltan ${fmtMoney(gap)} para la meta ${rangeLabel.toLowerCase()}`,
+      body: forecast >= gap
+        ? <>El forecast proyecta <strong>{fmtMoney(forecast)}</strong> — si los leads en pipeline cierran como esperás, llegás. Foco: confirmar las propuestas pendientes.</>
+        : <>El forecast solo proyecta <strong>{fmtMoney(forecast)}</strong>. No te alcanza con lo que tenés. Generá pipeline nuevo o acelerá cierres en Propuesta/Espera.</>,
+      level: forecast >= gap ? 'good' : 'urgent',
+    })
+  } else if (goal > 0) {
+    tactics.push({
+      emoji: '🏆',
+      title: `Meta superada en ${fmtMoney(cerradoReal - goal)}`,
+      body: <>Cerraste {fmtMoney(cerradoReal)} vs meta {fmtMoney(goal)}. Conservá el ritmo y empujá el pipeline activo para abrir el siguiente periodo arriba.</>,
+      level: 'good',
+    })
+  }
+
+  // 2. Cierres en Espera = palanca más rápida
+  const espera = buckets.find(b => b.status === 'espera_aprobacion')
+  if (gap > 0 && espera && espera.count > 0) {
+    const avgTicket = espera.monto / espera.count
+    const needed = Math.ceil(gap / avgTicket)
+    if (needed <= espera.count) {
+      tactics.push({
+        emoji: '✅',
+        title: `${needed} cierre${needed === 1 ? '' : 's'} en Espera te alcanza${needed === 1 ? '' : 'n'}`,
+        body: <>Con ticket promedio de {fmtMoney(avgTicket)}, cerrar <strong>{needed} de los {espera.count}</strong> en Espera de aprobación cubre el gap. Es la palanca más corta — hablales hoy.</>,
+        level: 'good',
+      })
+    } else {
+      tactics.push({
+        emoji: '⚡',
+        title: `Espera no alcanza para llegar a meta`,
+        body: <>Cerrando los {espera.count} de Espera generás {fmtMoney(espera.monto)}. Necesitás complementar con Propuestas o pipeline nuevo.</>,
+        level: 'warn',
+      })
+    }
+  }
+
+  // 3. Stage que más aporta al forecast
+  if (buckets.length > 0 && forecast > 0) {
+    const top = [...buckets].sort((a, b) => b.contribution - a.contribution)[0]
+    if (top && top.status !== 'convertido' && top.status !== 'cliente_recurrente') {
+      const share = (top.contribution / forecast) * 100
+      tactics.push({
+        emoji: '🏗',
+        title: `${STATUS_LABELS[top.status]} aporta ${share.toFixed(0)}% del forecast`,
+        body: <>{top.count} leads, ticket promedio {fmtMoney(top.monto / top.count)}. Cada lead que avanzás de este stage al siguiente sube tu probabilidad de cierre del {Math.round(top.probability * 100)}% al siguiente nivel.</>,
+        level: 'neutral',
+      })
+    }
+  }
+
+  // 4. Estancados >14 d — fuga
+  const stalled = stageAging.filter(s => s.stuckCount >= 3).sort((a, b) => b.stuckCount - a.stuckCount)
+  for (const s of stalled.slice(0, 2)) {
+    tactics.push({
+      emoji: '⚠️',
+      title: `${s.stuckCount} estancados en ${s.label}`,
+      body: <>Llevan más de 14 días sin moverse. Tomá la decisión hoy: avanzá si tiene aire o descartá. Cada día parado les baja la probabilidad real de cierre.</>,
+      level: 'warn',
+    })
+  }
+
+  // 5. Mejor canal
+  if (byCanal.length >= 2) {
+    const candidatos = byCanal.filter(c => c.leads >= 3 && c.cerrados > 0)
+    const sorted = [...candidatos].sort((a, b) => (b.cerrados / b.leads) - (a.cerrados / a.leads))
+    if (sorted.length) {
+      const best = sorted[0]
+      const rate = (best.cerrados / best.leads) * 100
+      tactics.push({
+        emoji: '🚀',
+        title: `${best.key} convierte ${rate.toFixed(0)}%`,
+        body: <>Tu mejor canal en conversion rate — {best.cerrados} cierres de {best.leads} leads, {fmtMoney(best.pipelineCerrado)} cerrado. Si podés mover presupuesto de paid o esfuerzo de outreach, este es el lugar.</>,
+        level: 'good',
+      })
+    }
+  }
+
+  // 6. Mejor tier de presupuesto
+  if (byPresupuesto.length >= 2) {
+    const candidatos = byPresupuesto.filter(c => c.leads >= 3 && c.cerrados > 0 && c.key !== '— sin dato —')
+    const sorted = [...candidatos].sort((a, b) => (b.cerrados / b.leads) - (a.cerrados / a.leads))
+    if (sorted.length) {
+      const best = sorted[0]
+      const rate = (best.cerrados / best.leads) * 100
+      tactics.push({
+        emoji: '💰',
+        title: `Presupuesto "${best.key}" convierte ${rate.toFixed(0)}%`,
+        body: <>Es el tier que mejor cierra. Calificá leads por presupuesto temprano en el outreach — vale más responder rápido a un "{best.key}" que a un lead sin info.</>,
+        level: 'good',
+      })
+    }
+  }
+
+  return tactics
+}
+
+const TACTIC_COLOR: Record<Tactic['level'], string> = {
+  good:    '#22d68a',
+  neutral: '#7c6af7',
+  warn:    '#f5c842',
+  urgent:  '#f05a5a',
+}
+
+function TacticsSection({ tactics }: { tactics: Tactic[] }) {
+  if (tactics.length === 0) return null
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Sugerencias tácticas</h3>
+          <span className={styles.sectionSubtitle}>
+            Recomendaciones calculadas a partir del pipeline, velocity y canales del periodo seleccionado.
+          </span>
+        </div>
+      </header>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+        {tactics.map((t, i) => (
+          <div key={i}
+            style={{
+              background: 'var(--glass)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${TACTIC_COLOR[t.level]}`,
+              borderRadius: 12,
+              padding: '14px 16px',
+            }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 18 }}>{t.emoji}</span>
+              <strong style={{ fontSize: 13.5, color: 'var(--text)' }}>{t.title}</strong>
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>{t.body}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
@@ -379,6 +570,20 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
   const byPresupuesto = useMemo(() => makeBreakdown(scoped, l => fmtPresupuesto(l.presupuesto)), [scoped])
   const byVacante = useMemo(() => makeBreakdown(scoped, l => l.vacante), [scoped])
 
+  const periodGoal = goalForPeriod(dateRange)
+  const periodGoalLabel = goalLabel(dateRange)
+
+  const tactics = useMemo(() => generateTactics({
+    goal: periodGoal,
+    forecast: stats.forecast,
+    cerradoReal: stats.pipelineCerrado,
+    buckets: forecastBuckets,
+    stageAging,
+    byCanal,
+    byPresupuesto,
+    rangeLabel: DATE_LABELS[dateRange],
+  }), [periodGoal, stats.forecast, stats.pipelineCerrado, forecastBuckets, stageAging, byCanal, byPresupuesto, dateRange])
+
   return (
     <div className={styles.root}>
       <aside className={styles.sidebar}>
@@ -417,8 +622,9 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         </header>
 
         <div className={styles.body}>
+          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} />
+          <TacticsSection tactics={tactics} />
           <FunnelChart leads={scoped} />
-          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} />
           <VelocitySection rows={stageAging} cycle={stats.cycle} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />

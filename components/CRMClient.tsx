@@ -16,11 +16,10 @@ import { phoneToState, ALL_STATES } from '@/lib/lada'
 import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
 import type { Presupuesto } from '@/lib/budget'
 import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
-import { forecastLeads } from '@/lib/forecast'
 import { daysInCurrentStage, agingBucket, AGING_COLOR, fmtAgingShort } from '@/lib/velocity'
+import { goalForPeriod, goalLabel } from '@/lib/goal'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
-const MONTHLY_GOAL = 200000
 
 function tipoLabel(t: string | null) {
   if (!t) return ''
@@ -529,9 +528,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       pipelineCierre: sumMonto(dateScoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
       pipelineCerrado: sumMonto(cerrados),
       pipelineCerradoCount: cerrados.length,
-      forecast: forecastLeads(dateScoped),
     }
   }, [dateScoped])
+  const periodGoal = goalForPeriod(dateRange)
 
   return (
     <div className={styles.root}>
@@ -618,24 +617,12 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
             <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerrado)}</div>
             <div className={styles.kpiHeroSub}>
-              {stats.pipelineCerradoCount} deals · meta {fmtMoney(MONTHLY_GOAL)}
-              {' '}({Math.round(Math.min(1, stats.pipelineCerrado / MONTHLY_GOAL) * 100)}%)
+              {stats.pipelineCerradoCount} deals · {goalLabel(dateRange)} {fmtMoney(periodGoal)}
+              {' '}({Math.round(Math.min(1, stats.pipelineCerrado / periodGoal) * 100)}%)
             </div>
             <div className={styles.kpiHeroBar}>
               <div className={styles.kpiHeroBarFill}
-                style={{ width: `${Math.min(100, (stats.pipelineCerrado / MONTHLY_GOAL) * 100)}%` }} />
-            </div>
-          </div>
-          <div className={clsx(styles.kpiHeroCard, styles.kpiHeroForecast)} title="Σ (monto × probabilidad de cierre por stage)">
-            <div className={styles.kpiHeroLabel}>Forecast del periodo</div>
-            <div className={styles.kpiHeroValue}>{fmtMoney(stats.forecast)}</div>
-            <div className={styles.kpiHeroSub}>
-              Proyección ponderada · meta {fmtMoney(MONTHLY_GOAL)}
-              {' '}({Math.round(Math.min(1, stats.forecast / MONTHLY_GOAL) * 100)}%)
-            </div>
-            <div className={styles.kpiHeroBar}>
-              <div className={styles.kpiHeroBarFill}
-                style={{ width: `${Math.min(100, (stats.forecast / MONTHLY_GOAL) * 100)}%` }} />
+                style={{ width: `${Math.min(100, (stats.pipelineCerrado / periodGoal) * 100)}%` }} />
             </div>
           </div>
         </div>
