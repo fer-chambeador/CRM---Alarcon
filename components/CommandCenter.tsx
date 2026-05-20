@@ -260,7 +260,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -269,11 +269,19 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
         : null}
     </Link>
   )
+  const subLink = (href: string, key: string, label: string) => (
+    <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}
+      style={{ marginLeft: 18, fontSize: 12.5, paddingTop: 6, paddingBottom: 6, opacity: active === key ? 1 : 0.85 }}>
+      <span>↳ {label}</span>
+    </Link>
+  )
+  const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   return (
     <nav className={styles.sidebarNav}>
       {link('/pendientes', 'pendientes', 'Pendientes', '⏰')}
       {link('/leads', 'leads', 'Leads', '📋')}
       {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
+      {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
       {link('/asistente', 'asistente', 'Asistente', '🧠')}
     </nav>
