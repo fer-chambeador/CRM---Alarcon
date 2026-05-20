@@ -313,7 +313,7 @@ export default function RecurrentesClient() {
                       <th>Estatus</th>
                       <th>Tipo</th>
                       <th>Contrato</th>
-                      <th onClick={() => onSort('fecha')}>Inicio{arrow('fecha')}</th>
+                      <th onClick={() => onSort('fecha')}>Fecha de inicio{arrow('fecha')}</th>
                       <th onClick={() => onSort('ultima')}>Último pago{arrow('ultima')}</th>
                       <th onClick={() => onSort('veces')} className={styles.right}>Meses renov.{arrow('veces')}</th>
                       <th onClick={() => onSort('avg')} className={styles.right}>Ticket prom.{arrow('avg')}</th>
@@ -389,9 +389,12 @@ function EditModal({ cliente, onClose, onSaved }: {
   const [form, setForm] = useState({
     nombre: cliente.cliente || '',
     email: cliente.email || '',
-    fecha_inicio: cliente.fecha_inicio || '',
     canal: cliente.canales[0] || '',
     notas: cliente.notas || '',
+    estatus: cliente.estatus as EstatusCliente,
+    tipo_cliente: cliente.tipo_cliente as TipoCliente,
+    tipo_contrato: cliente.tipo_contrato as TipoContrato,
+    meses_renovando: cliente.meses_renovando,
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -482,17 +485,45 @@ function EditModal({ cliente, onClose, onSaved }: {
           </label>
 
           <label className={styles.field}>
-            <span>Fecha de inicio</span>
-            <input type="date" value={form.fecha_inicio} onChange={e => setForm(f => ({ ...f, fecha_inicio: e.target.value }))} />
-            <small className={styles.hint}>Default: primer mes en el sheet ({fmtDate(cliente.fecha_inicio)}).</small>
-          </label>
-
-          <label className={styles.field}>
             <span>Canal principal</span>
             <input value={form.canal} onChange={e => setForm(f => ({ ...f, canal: e.target.value }))}
               placeholder="Stripe, MercadoPago, OXXO, transferencia..." />
             <small className={styles.hint}>Detectado(s) en el sheet: {cliente.canales.join(', ') || '—'}</small>
           </label>
+
+          {/* Overrides manuales — sobreescriben el cálculo automático */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <label className={styles.field}>
+              <span>Estatus</span>
+              <select value={form.estatus} onChange={e => setForm(f => ({ ...f, estatus: e.target.value as EstatusCliente }))}>
+                <option value="activo">Activo</option>
+                <option value="renovar">Por renovar</option>
+                <option value="churn">Churn</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Tipo de cliente</span>
+              <select value={form.tipo_cliente} onChange={e => setForm(f => ({ ...f, tipo_cliente: e.target.value as TipoCliente }))}>
+                <option value="pequeño">Pequeño</option>
+                <option value="mediano">Mediano</option>
+                <option value="grande">Grande</option>
+                <option value="corporativo">Corporativo</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Tipo de contrato</span>
+              <select value={form.tipo_contrato} onChange={e => setForm(f => ({ ...f, tipo_contrato: e.target.value as TipoContrato }))}>
+                <option value="mensual">Mensual</option>
+                <option value="semestral">Semestral</option>
+                <option value="anual">Anual</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Meses renovando</span>
+              <input type="number" min={0} step={1} value={form.meses_renovando}
+                onChange={e => setForm(f => ({ ...f, meses_renovando: Number(e.target.value) || 0 }))} />
+            </label>
+          </div>
 
           <label className={styles.field}>
             <span>Notas</span>
@@ -503,20 +534,15 @@ function EditModal({ cliente, onClose, onSaved }: {
           <div className={styles.readonlySection}>
             <h4>Métricas del cliente</h4>
             <div className={styles.readonlyGrid}>
-              <div><span>Estatus</span>
-                <strong style={{ color: ESTATUS_COLOR[cliente.estatus] }}>{ESTATUS_LABEL[cliente.estatus]}</strong>
-              </div>
-              <div><span>Tipo</span><strong>{TIPO_CLIENTE_LABEL[cliente.tipo_cliente]}</strong></div>
-              <div><span>Contrato</span><strong>{CONTRATO_LABEL[cliente.tipo_contrato]}</strong></div>
+              <div><span>Fecha de inicio</span><strong>{fmtDate(cliente.fecha_inicio)}</strong></div>
+              <div><span>Último pago</span><strong>{fmtDate(cliente.ultima_aparicion)}</strong></div>
+              <div><span>Total pagado</span><strong>{fmtMoney(cliente.total_pagado)}</strong></div>
+              <div><span>Pagos registrados</span><strong>{cliente.veces}</strong></div>
               {cliente.mes_renovacion && (
                 <div><span>Próxima renovación</span>
                   <strong>{MES_NAMES[cliente.mes_renovacion - 1]}</strong>
                 </div>
               )}
-              <div><span>Total pagado</span><strong>{fmtMoney(cliente.total_pagado)}</strong></div>
-              <div><span>Pagos / Meses renovando</span><strong>{cliente.veces} / {cliente.meses_renovando}</strong></div>
-              <div><span>Ticket promedio</span><strong>{fmtMoney(avgTicket(cliente))}</strong></div>
-              <div><span>Último pago</span><strong>{fmtDate(cliente.ultima_aparicion)}</strong></div>
             </div>
           </div>
 

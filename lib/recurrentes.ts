@@ -314,6 +314,10 @@ type Override = {
   canal: string | null
   notas: string | null
   hidden: boolean | null
+  estatus: EstatusCliente | null
+  tipo_cliente: TipoCliente | null
+  tipo_contrato: TipoContrato | null
+  meses_renovando: number | null
 }
 
 async function fetchOverrides(): Promise<Map<string, Override>> {
@@ -321,7 +325,7 @@ async function fetchOverrides(): Promise<Map<string, Override>> {
     const supabase = createServiceClient()
     const { data, error } = await supabase
       .from('clientes_recurrentes_meta')
-      .select('key,nombre,email,fecha_inicio,canal,notas,hidden')
+      .select('key,nombre,email,fecha_inicio,canal,notas,hidden,estatus,tipo_cliente,tipo_contrato,meses_renovando')
     if (error || !data) return new Map()
     return new Map((data as Override[]).map(d => [d.key, d]))
   } catch {
@@ -480,6 +484,15 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     if (ov.canal) c.canales = [ov.canal]
     c.notas = ov.notas
     c.hidden = ov.hidden === true
+    // Overrides manuales de campos derivados
+    if (ov.estatus) c.estatus = ov.estatus
+    if (ov.tipo_cliente) c.tipo_cliente = ov.tipo_cliente
+    if (ov.tipo_contrato) {
+      c.tipo_contrato = ov.tipo_contrato
+      // Re-calcular mes_renovacion según el override de contrato
+      c.mes_renovacion = mesRenovacionDe(c.pagos, ov.tipo_contrato)
+    }
+    if (typeof ov.meses_renovando === 'number') c.meses_renovando = ov.meses_renovando
   }
 
   clientes.sort((a, b) => b.total_pagado - a.total_pagado)
