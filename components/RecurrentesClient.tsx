@@ -5,6 +5,16 @@ import { Sidebar } from './CommandCenter'
 import { fmtMoney } from '@/lib/status'
 import styles from './RecurrentesClient.module.css'
 
+type Pago = {
+  fecha: string | null
+  monto: number
+  canal: string | null
+  mes: string
+}
+type EstatusCliente = 'activo' | 'renovar' | 'churn'
+type TipoCliente = 'pequeño' | 'mediano' | 'grande' | 'corporativo'
+type TipoContrato = 'mensual' | 'semestral' | 'anual'
+
 type Cliente = {
   key: string
   cliente: string
@@ -15,10 +25,40 @@ type Cliente = {
   veces: number
   canales: string[]
   meses: string[]
+  meses_renovando: number
+  pagos: Pago[]
+  estatus: EstatusCliente
+  tipo_cliente: TipoCliente
+  ticket_promedio: number
+  tipo_contrato: TipoContrato
+  mes_renovacion: number | null
   notas: string | null
   has_override: boolean
   hidden: boolean
 }
+
+const ESTATUS_COLOR: Record<EstatusCliente, string> = {
+  activo:  '#22d68a',
+  renovar: '#f5c842',
+  churn:   '#f05a5a',
+}
+const ESTATUS_LABEL: Record<EstatusCliente, string> = {
+  activo:  'Activo',
+  renovar: 'Por renovar',
+  churn:   'Churn',
+}
+const TIPO_CLIENTE_LABEL: Record<TipoCliente, string> = {
+  pequeño:     'Pequeño',
+  mediano:     'Mediano',
+  grande:      'Grande',
+  corporativo: 'Corporativo',
+}
+const CONTRATO_LABEL: Record<TipoContrato, string> = {
+  mensual:    'Mensual',
+  semestral:  'Semestral',
+  anual:      'Anual',
+}
+const MES_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
 type Payload = {
   clientes: Cliente[]
@@ -46,7 +86,7 @@ const TICKET_LABELS: Record<TicketBucket, string> = {
   high: 'Tickets grandes (≥ $10k)',
 }
 function avgTicket(c: Cliente): number {
-  return c.veces > 0 ? c.total_pagado / c.veces : 0
+  return c.ticket_promedio || (c.veces > 0 ? c.total_pagado / c.veces : 0)
 }
 function bucketOf(c: Cliente): TicketBucket {
   const a = avgTicket(c)
@@ -86,6 +126,9 @@ export default function RecurrentesClient() {
   const [fechaHasta, setFechaHasta] = useState<string>('')
   const [bucket, setBucket] = useState<TicketBucket>('todos')
   const [vigencia, setVigencia] = useState<Vigencia>('todos')
+  const [filterEstatus, setFilterEstatus] = useState<'todos' | EstatusCliente>('todos')
+  const [filterTipoCliente, setFilterTipoCliente] = useState<'todos' | TipoCliente>('todos')
+  const [filterContrato, setFilterContrato] = useState<'todos' | TipoContrato>('todos')
   const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima'; dir: 'asc' | 'desc' }>(
     { key: 'total', dir: 'desc' }
   )
@@ -124,6 +167,12 @@ export default function RecurrentesClient() {
       if (bucket !== 'todos' && bucketOf(c) !== bucket) return false
       // Vigencia (basado en última aparición)
       if (!isInRange(c.ultima_aparicion, vigencia)) return false
+      // Estatus
+      if (filterEstatus !== 'todos' && c.estatus !== filterEstatus) return false
+      // Tipo cliente
+      if (filterTipoCliente !== 'todos' && c.tipo_cliente !== filterTipoCliente) return false
+      // Contrato
+      if (filterContrato !== 'todos' && c.tipo_contrato !== filterContrato) return false
       // Search
       if (q) {
         const hay = (c.cliente + ' ' + (c.email || '') + ' ' + c.canales.join(' ') + ' ' + (c.notas || '')).toLowerCase()
@@ -131,7 +180,7 @@ export default function RecurrentesClient() {
       }
       return true
     })
-  }, [data, fechaDesde, fechaHasta, bucket, vigencia, search])
+  }, [data, fechaDesde, fechaHasta, bucket, vigencia, filterEstatus, filterTipoCliente, filterContrato, search])
 
   // ── Sorted ──
   const clientes = useMemo(() => {
@@ -215,14 +264,36 @@ export default function RecurrentesClient() {
               <option key={b} value={b}>{TICKET_LABELS[b]}</option>
             ))}
           </select>
+          <label className={styles.filterLabel}>Estatus:</label>
+          <select className={styles.filterSelect} value={filterEstatus} onChange={e => setFilterEstatus(e.target.value as 'todos' | EstatusCliente)}>
+            <option value="todos">Cualquier estatus</option>
+            <option value="activo">Activo</option>
+            <option value="renovar">Por renovar</option>
+            <option value="churn">Churn</option>
+          </select>
+          <label className={styles.filterLabel}>Tipo:</label>
+          <select className={styles.filterSelect} value={filterTipoCliente} onChange={e => setFilterTipoCliente(e.target.value as 'todos' | TipoCliente)}>
+            <option value="todos">Cualquier tipo</option>
+            <option value="pequeño">Pequeño</option>
+            <option value="mediano">Mediano</option>
+            <option value="grande">Grande</option>
+            <option value="corporativo">Corporativo</option>
+          </select>
+          <label className={styles.filterLabel}>Contrato:</label>
+          <select className={styles.filterSelect} value={filterContrato} onChange={e => setFilterContrato(e.target.value as 'todos' | TipoContrato)}>
+            <option value="todos">Cualquier contrato</option>
+            <option value="mensual">Mensual</option>
+            <option value="semestral">Semestral</option>
+            <option value="anual">Anual</option>
+          </select>
           <label className={styles.filterLabel}>Vigencia:</label>
           <select className={styles.filterSelect} value={vigencia} onChange={e => setVigencia(e.target.value as Vigencia)}>
             {(Object.keys(VIGENCIA_LABELS) as Vigencia[]).map(v => (
               <option key={v} value={v}>{VIGENCIA_LABELS[v]}</option>
             ))}
           </select>
-          {(fechaDesde || fechaHasta || bucket !== 'todos' || vigencia !== 'todos' || search) && (
-            <button className={styles.clearFilter} onClick={() => { setFechaDesde(''); setFechaHasta(''); setBucket('todos'); setVigencia('todos'); setSearch('') }}>
+          {(fechaDesde || fechaHasta || bucket !== 'todos' || vigencia !== 'todos' || filterEstatus !== 'todos' || filterTipoCliente !== 'todos' || filterContrato !== 'todos' || search) && (
+            <button className={styles.clearFilter} onClick={() => { setFechaDesde(''); setFechaHasta(''); setBucket('todos'); setVigencia('todos'); setFilterEstatus('todos'); setFilterTipoCliente('todos'); setFilterContrato('todos'); setSearch('') }}>
               Limpiar filtros
             </button>
           )}
@@ -239,10 +310,12 @@ export default function RecurrentesClient() {
                   <thead>
                     <tr>
                       <th onClick={() => onSort('cliente')}>Cliente{arrow('cliente')}</th>
-                      <th>Email</th>
+                      <th>Estatus</th>
+                      <th>Tipo</th>
+                      <th>Contrato</th>
                       <th onClick={() => onSort('fecha')}>Inicio{arrow('fecha')}</th>
-                      <th onClick={() => onSort('ultima')}>Última aparición{arrow('ultima')}</th>
-                      <th onClick={() => onSort('veces')} className={styles.right}>Pagos{arrow('veces')}</th>
+                      <th onClick={() => onSort('ultima')}>Último pago{arrow('ultima')}</th>
+                      <th onClick={() => onSort('veces')} className={styles.right}>Meses renov.{arrow('veces')}</th>
                       <th onClick={() => onSort('avg')} className={styles.right}>Ticket prom.{arrow('avg')}</th>
                       <th onClick={() => onSort('total')} className={styles.right}>Total{arrow('total')}</th>
                       <th>Canal(es)</th>
@@ -251,7 +324,7 @@ export default function RecurrentesClient() {
                   </thead>
                   <tbody>
                     {clientes.length === 0 && (
-                      <tr><td colSpan={9} className={styles.empty}>Sin matches con los filtros actuales.</td></tr>
+                      <tr><td colSpan={11} className={styles.empty}>Sin matches con los filtros actuales.</td></tr>
                     )}
                     {clientes.map(c => (
                       <tr key={c.key} className={styles.row} onClick={() => setEditing(c)}>
@@ -260,15 +333,26 @@ export default function RecurrentesClient() {
                             {c.cliente}
                             {c.has_override && <span className={styles.overrideTag} title="Editado manualmente">✏️</span>}
                           </div>
-                          {c.meses.length > 1 && (
-                            <div className={styles.mesesBadge} title={c.meses.join(' · ')}>en {c.meses.length} meses</div>
-                          )}
+                          {c.email && <div className={styles.mono} style={{ marginTop: 2 }}>{c.email}</div>}
                           {c.notas && <div className={styles.notas} title={c.notas}>📝 {c.notas.slice(0, 60)}{c.notas.length > 60 ? '…' : ''}</div>}
                         </td>
-                        <td className={styles.mono}>{c.email || '—'}</td>
+                        <td>
+                          <span className={styles.statusChip} style={{ '--ec': ESTATUS_COLOR[c.estatus] } as React.CSSProperties}>
+                            {ESTATUS_LABEL[c.estatus]}
+                          </span>
+                        </td>
+                        <td><span className={styles.tipoChip}>{TIPO_CLIENTE_LABEL[c.tipo_cliente]}</span></td>
+                        <td>
+                          <span className={styles.contratoChip}>{CONTRATO_LABEL[c.tipo_contrato]}</span>
+                          {c.mes_renovacion && (
+                            <div className={styles.renovacionHint} title="Mes estimado de próxima renovación">
+                              → {MES_NAMES[c.mes_renovacion - 1]}
+                            </div>
+                          )}
+                        </td>
                         <td>{fmtDate(c.fecha_inicio)}</td>
                         <td>{fmtDate(c.ultima_aparicion)}</td>
-                        <td className={styles.right}>{c.veces}</td>
+                        <td className={styles.right}>{c.meses_renovando}</td>
                         <td className={styles.right + ' ' + styles.mono}>{fmtMoney(avgTicket(c))}</td>
                         <td className={styles.right + ' ' + styles.money}>{fmtMoney(c.total_pagado)}</td>
                         <td>
@@ -417,14 +501,53 @@ function EditModal({ cliente, onClose, onSaved }: {
           </label>
 
           <div className={styles.readonlySection}>
-            <h4>Solo lectura (del sheet)</h4>
+            <h4>Métricas del cliente</h4>
             <div className={styles.readonlyGrid}>
+              <div><span>Estatus</span>
+                <strong style={{ color: ESTATUS_COLOR[cliente.estatus] }}>{ESTATUS_LABEL[cliente.estatus]}</strong>
+              </div>
+              <div><span>Tipo</span><strong>{TIPO_CLIENTE_LABEL[cliente.tipo_cliente]}</strong></div>
+              <div><span>Contrato</span><strong>{CONTRATO_LABEL[cliente.tipo_contrato]}</strong></div>
+              {cliente.mes_renovacion && (
+                <div><span>Próxima renovación</span>
+                  <strong>{MES_NAMES[cliente.mes_renovacion - 1]}</strong>
+                </div>
+              )}
               <div><span>Total pagado</span><strong>{fmtMoney(cliente.total_pagado)}</strong></div>
-              <div><span>Cantidad de pagos</span><strong>{cliente.veces}</strong></div>
+              <div><span>Pagos / Meses renovando</span><strong>{cliente.veces} / {cliente.meses_renovando}</strong></div>
               <div><span>Ticket promedio</span><strong>{fmtMoney(avgTicket(cliente))}</strong></div>
-              <div><span>Última aparición</span><strong>{fmtDate(cliente.ultima_aparicion)}</strong></div>
+              <div><span>Último pago</span><strong>{fmtDate(cliente.ultima_aparicion)}</strong></div>
             </div>
           </div>
+
+          {cliente.pagos && cliente.pagos.length > 0 && (
+            <div className={styles.readonlySection}>
+              <h4>Historial de pagos</h4>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 10.5, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 600, letterSpacing: '0.08em' }}>Fecha</th>
+                    <th style={{ textAlign: 'right', padding: '6px 8px', fontSize: 10.5, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 600, letterSpacing: '0.08em' }}>Monto</th>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 10.5, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 600, letterSpacing: '0.08em' }}>Medio</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cliente.pagos.map((p, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--text)' }}>{fmtDate(p.fecha)}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--font-display)', fontWeight: 600, color: 'var(--green)', fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(p.monto)}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text2)' }}>{p.canal || '—'}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td style={{ padding: '8px', color: 'var(--text3)', fontSize: 11 }}>Total ({cliente.pagos.length} pagos)</td>
+                    <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--text)' }}>{fmtMoney(cliente.total_pagado)}</td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <footer className={styles.modalFooter}>

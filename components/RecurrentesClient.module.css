@@ -345,6 +345,47 @@
 .dateInput:hover { border-color: var(--accent) !important; }
 .dateInput:focus { border-color: rgba(124,84,232,0.5) !important; outline: none; }
 
+/* ── Status / Tipo / Contrato chips (tabla) ────── */
+.statusChip {
+  display: inline-block;
+  background: color-mix(in srgb, var(--ec, var(--accent)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ec, var(--accent)) 35%, transparent);
+  color: var(--ec, var(--accent));
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tipoChip {
+  display: inline-block;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.contratoChip {
+  display: inline-block;
+  background: rgba(124,106,247,0.12);
+  border: 1px solid rgba(124,106,247,0.25);
+  color: var(--accent2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.renovacionHint {
+  font-size: 10.5px;
+  color: var(--text3);
+  margin-top: 3px;
+  font-family: var(--mono);
+}
+
 /* ── Edit modal ──────────────────────────────────── */
 .modalOverlay {
   position: fixed;

@@ -21,6 +21,8 @@ const norm = (s: string) =>
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/
 
+const DAY_MS = 86400_000
+
 export function monthsToFetch(now = new Date()): { name: string; tab: string }[] {
   const out: { name: string; tab: string }[] = []
   let y = START_YEAR
@@ -83,6 +85,14 @@ function parseMonto(raw: string): number {
   const digits = raw.replace(/[^0-9.,-]/g, '').replace(/,/g, '')
   const n = parseFloat(digits)
   return isNaN(n) ? 0 : n
+}
+
+/** Title Case del canal: "transferencia" / "Transferencia" / "TRANSFERENCIA" → "Transferencia". */
+function normalizeCanal(raw: string): string {
+  const t = raw.trim()
+  if (!t) return ''
+  const lower = t.toLowerCase()
+  return lower.charAt(0).toUpperCase() + lower.slice(1)
 }
 
 /**
@@ -176,6 +186,89 @@ function splitNameEmail(raw: string): { name: string; email: string | null } {
   return { name: name || email, email }
 }
 
+/** Un pago individual extraído del sheet. */
+export type Pago = {
+  fecha: string | null   // YYYY-MM-DD
+  monto: number
+  canal: string | null
+  mes: string            // "Diciembre 2025" — para trazabilidad
+}
+
+export type EstatusCliente = 'activo' | 'renovar' | 'churn'
+export type TipoCliente = 'pequeño' | 'mediano' | 'grande' | 'corporativo'
+export type TipoContrato = 'mensual' | 'semestral' | 'anual'
+
+/** Thresholds de tipoCliente (basado en ticket promedio). Ajustable. */
+const TIER_THRESHOLDS = {
+  pequeño:     5_000,    // <= 5k
+  mediano:    20_000,    // <= 20k
+  grande:     50_000,    // <= 50k
+  // corporativo: > 50k
+} as const
+
+function tipoClienteFromAvg(avgTicket: number): TipoCliente {
+  if (avgTicket <= TIER_THRESHOLDS.pequeño)  return 'pequeño'
+  if (avgTicket <= TIER_THRESHOLDS.mediano)  return 'mediano'
+  if (avgTicket <= TIER_THRESHOLDS.grande)   return 'grande'
+  return 'corporativo'
+}
+
+/**
+ * Estatus por última aparición:
+ *  - activo:  paga en los últimos 35 días (ventana de un mes con buffer)
+ *  - renovar: 35–60 días — ya vence pronto, foco
+ *  - churn:   > 60 días sin pagar
+ */
+function estatusFromUltima(ultima: string | null, now = Date.now()): EstatusCliente {
+  if (!ultima) return 'churn'
+  const t = new Date(ultima + 'T00:00:00').getTime()
+  const days = (now - t) / DAY_MS
+  if (days <= 35) return 'activo'
+  if (days <= 60) return 'renovar'
+  return 'churn'
+}
+
+/**
+ * Tipo de contrato a partir de la mediana de gaps entre pagos.
+ *  - 1 pago solo  → mensual (default optimista)
+ *  - gap mediano ≤ 60 d  → mensual
+ *  - 120–210 d   → semestral
+ *  - 300–400 d   → anual
+ *  - else        → mensual (default)
+ */
+function tipoContratoFromPagos(pagos: Pago[]): TipoContrato {
+  if (pagos.length < 2) return 'mensual'
+  const fechas = pagos.map(p => p.fecha).filter((x): x is string => !!x)
+  if (fechas.length < 2) return 'mensual'
+  const sorted = [...fechas].sort()
+  const gaps: number[] = []
+  for (let i = 1; i < sorted.length; i++) {
+    const t1 = new Date(sorted[i - 1] + 'T00:00:00').getTime()
+    const t2 = new Date(sorted[i] + 'T00:00:00').getTime()
+    gaps.push((t2 - t1) / DAY_MS)
+  }
+  gaps.sort((a, b) => a - b)
+  const median = gaps.length % 2
+    ? gaps[Math.floor(gaps.length / 2)]
+    : (gaps[gaps.length / 2 - 1] + gaps[gaps.length / 2]) / 2
+  if (median <= 60)  return 'mensual'
+  if (median <= 210) return 'semestral'
+  if (median <= 400) return 'anual'
+  return 'mensual'
+}
+
+/** Mes (1-12) de la próxima renovación para contratos largos. null para mensual. */
+function mesRenovacionDe(pagos: Pago[], contrato: TipoContrato): number | null {
+  if (contrato === 'mensual') return null
+  const fechas = pagos.map(p => p.fecha).filter((x): x is string => !!x).sort()
+  if (!fechas.length) return null
+  const last = new Date(fechas[fechas.length - 1] + 'T00:00:00')
+  const offset = contrato === 'semestral' ? 6 : 12
+  const next = new Date(last)
+  next.setMonth(next.getMonth() + offset)
+  return next.getMonth() + 1  // 1-12
+}
+
 export type ClienteRecurrente = {
   key: string
   cliente: string
@@ -185,7 +278,14 @@ export type ClienteRecurrente = {
   total_pagado: number
   veces: number
   canales: string[]
-  meses: string[]
+  meses: string[]              // meses únicos (=== meses_renovando count)
+  meses_renovando: number      // alias = meses.length
+  pagos: Pago[]                // historial completo
+  estatus: EstatusCliente
+  tipo_cliente: TipoCliente
+  ticket_promedio: number
+  tipo_contrato: TipoContrato
+  mes_renovacion: number | null  // 1-12 para semestral/anual
   notas: string | null
   has_override: boolean
   hidden: boolean
@@ -229,6 +329,15 @@ async function fetchOverrides(): Promise<Map<string, Override>> {
   }
 }
 
+/**
+ * Estricto: "Fer" como primera palabra de QUIÉN. NO matchea "Fernanda"
+ * ni "Fernando". Sí matchea "Fer", "Fer Alarcon", "FER", "fer alarcon".
+ */
+function isFer(quien: string): boolean {
+  const firstWord = norm(quien).split(/\s+/)[0]
+  return firstWord === 'fer'
+}
+
 export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
   clientes: ClienteRecurrente[]
   meses_leidos: string[]
@@ -250,7 +359,16 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     fetchOverrides(),
   ])
 
-  const map = new Map<string, ClienteRecurrente>()
+  // map intermedio: por cliente, acumulamos pagos crudos.
+  type Acc = {
+    key: string
+    cliente: string
+    email: string | null
+    canales: Set<string>
+    meses: Set<string>
+    pagos: Pago[]
+  }
+  const map = new Map<string, Acc>()
   const mesesLeidos: string[] = []
 
   for (const { name, tabDate, csv } of csvResults) {
@@ -264,17 +382,21 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     const idxEmail = findCol(headers, ['email', 'correo', 'mail'])
     const idxMonto = findCol(headers, ['monto', 'importe', 'total', 'cantidad', 'amount', 'precio', 'pago'])
     const idxCanal = findCol(headers, ['canal', 'metodo', 'forma', 'via'])
-    const idxFecha = findCol(headers, ['fecha', 'date', 'dia', 'día'])
+
+    // Fecha: 1) header explícito; 2) fallback a col A si su primera celda parsea como fecha.
+    let idxFecha = findCol(headers, ['fecha', 'date', 'dia', 'día'])
+    const tabYear = tabDate ? parseInt(tabDate.slice(0, 4), 10) : undefined
+    if (idxFecha < 0 && rows.length > 1) {
+      const sample = (rows[1][0] || '').trim()
+      if (parseFecha(sample, tabYear)) idxFecha = 0
+    }
 
     if (idxQuien < 0) continue
     mesesLeidos.push(name)
 
-    // Año del tab — para resolver fechas que vienen sin año en la celda.
-    const tabYear = tabDate ? parseInt(tabDate.slice(0, 4), 10) : undefined
-
     for (const row of rows.slice(1)) {
       const quien = (row[idxQuien] || '').trim()
-      if (!norm(quien).includes('fer')) continue
+      if (!isFer(quien)) continue
 
       const clienteRaw = idxCliente >= 0 ? (row[idxCliente] || '').trim() : ''
       const emailFromCol = idxEmail >= 0
@@ -283,52 +405,72 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
       const { name: cleanName, email: emailFromName } = splitNameEmail(clienteRaw)
       const email = emailFromCol || emailFromName
       const monto = idxMonto >= 0 ? parseMonto(row[idxMonto] || '') : 0
-      const canal = idxCanal >= 0 ? (row[idxCanal] || '').trim() : ''
+      const canalRaw = idxCanal >= 0 ? (row[idxCanal] || '').trim() : ''
+      const canal = canalRaw ? normalizeCanal(canalRaw) : ''
       const fechaRaw = idxFecha >= 0 ? (row[idxFecha] || '').trim() : ''
-      // Día EXACTO del pago: de la columna fecha, con fallback al día 1 del tab.
-      const rowDate = parseFecha(fechaRaw, tabYear) || tabDate
+      const fecha = parseFecha(fechaRaw, tabYear) || tabDate
 
       if (!cleanName && !email) continue
 
-      // Key estable — email preferido, sino nombre normalizado
-      const key = (email ? email.toLowerCase() : norm(cleanName))
-      const existing = map.get(key)
-      if (existing) {
-        existing.total_pagado += monto
-        existing.veces += 1
-        if (rowDate && (!existing.fecha_inicio || rowDate < existing.fecha_inicio)) {
-          existing.fecha_inicio = rowDate
-        }
-        if (rowDate && (!existing.ultima_aparicion || rowDate > existing.ultima_aparicion)) {
-          existing.ultima_aparicion = rowDate
-        }
-        if (canal && !existing.canales.includes(canal)) existing.canales.push(canal)
-        if (!existing.meses.includes(name)) existing.meses.push(name)
-        if (!existing.email && email) existing.email = email
-        if ((!existing.cliente || existing.cliente === existing.email) && cleanName && cleanName !== email) {
-          existing.cliente = cleanName
-        }
-      } else {
-        map.set(key, {
-          key,
-          cliente: cleanName || email || '—',
-          email,
-          fecha_inicio: rowDate,
-          ultima_aparicion: rowDate,
-          total_pagado: monto,
-          veces: 1,
-          canales: canal ? [canal] : [],
-          meses: [name],
-          notas: null,
-          has_override: false,
-          hidden: false,
-        })
+      const key = email ? email.toLowerCase() : norm(cleanName)
+      const acc = map.get(key) || {
+        key,
+        cliente: cleanName || email || '—',
+        email,
+        canales: new Set<string>(),
+        meses: new Set<string>(),
+        pagos: [],
       }
+      acc.pagos.push({ fecha, monto, canal: canal || null, mes: name })
+      if (canal) acc.canales.add(canal)
+      acc.meses.add(name)
+      if (!acc.email && email) acc.email = email
+      if ((!acc.cliente || acc.cliente === acc.email) && cleanName && cleanName !== email) {
+        acc.cliente = cleanName
+      }
+      map.set(key, acc)
     }
   }
 
+  // Derivar campos por cliente
+  const now = Date.now()
+  const clientes: ClienteRecurrente[] = Array.from(map.values()).map(acc => {
+    const pagos = acc.pagos
+    const total_pagado = pagos.reduce((s, p) => s + p.monto, 0)
+    const veces = pagos.length
+    const ticket_promedio = veces > 0 ? total_pagado / veces : 0
+    const fechas = pagos.map(p => p.fecha).filter((x): x is string => !!x).sort()
+    const fecha_inicio = fechas.length ? fechas[0] : null
+    const ultima_aparicion = fechas.length ? fechas[fechas.length - 1] : null
+    const estatus = estatusFromUltima(ultima_aparicion, now)
+    const tipo_cliente = tipoClienteFromAvg(ticket_promedio)
+    const tipo_contrato = tipoContratoFromPagos(pagos)
+    const mes_renovacion = mesRenovacionDe(pagos, tipo_contrato)
+    return {
+      key: acc.key,
+      cliente: acc.cliente,
+      email: acc.email,
+      fecha_inicio,
+      ultima_aparicion,
+      total_pagado,
+      veces,
+      canales: Array.from(acc.canales),
+      meses: Array.from(acc.meses),
+      meses_renovando: acc.meses.size,
+      pagos: [...pagos].sort((a, b) => (a.fecha || '').localeCompare(b.fecha || '')),
+      estatus,
+      tipo_cliente,
+      ticket_promedio,
+      tipo_contrato,
+      mes_renovacion,
+      notas: null,
+      has_override: false,
+      hidden: false,
+    }
+  })
+
   // Aplicar overrides editables
-  for (const c of Array.from(map.values())) {
+  for (const c of clientes) {
     const ov = overrides.get(c.key)
     if (!ov) continue
     c.has_override = true
@@ -340,7 +482,7 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     c.hidden = ov.hidden === true
   }
 
-  const clientes = Array.from(map.values()).sort((a, b) => b.total_pagado - a.total_pagado)
+  clientes.sort((a, b) => b.total_pagado - a.total_pagado)
   const total_pagado_global = clientes
     .filter(c => !c.hidden)
     .reduce((s, c) => s + c.total_pagado, 0)
