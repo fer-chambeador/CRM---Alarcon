@@ -551,6 +551,85 @@ function TacticsSection({ tactics }: { tactics: Tactic[] }) {
   )
 }
 
+// ─── Notas por status (análisis cualitativo) ─────────────────────────────
+function NotasSection({ leads }: { leads: Lead[] }) {
+  const [expanded, setExpanded] = useState<Lead['status'] | null>('descartado')
+
+  // Agrupar leads CON nota por status. Solo stages con al menos una nota.
+  const grouped = useMemo(() => {
+    const map = new Map<Lead['status'], Lead[]>()
+    for (const l of leads) {
+      if (!l.notas || !l.notas.trim()) continue
+      const arr = map.get(l.status) || []
+      arr.push(l)
+      map.set(l.status, arr)
+    }
+    return STATUS_PROJECTION_ORDER
+      .filter(s => map.has(s))
+      .map(s => ({ status: s, label: STATUS_LABELS[s], leads: map.get(s)! }))
+  }, [leads])
+
+  if (grouped.length === 0) return null
+
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Notas por status</h3>
+          <span className={styles.sectionSubtitle}>
+            Análisis cualitativo. Útil sobre todo para Descartado — entendé por qué cae un lead, no solo cuántos.
+          </span>
+        </div>
+      </header>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {grouped.map(g => {
+          const isOpen = expanded === g.status
+          return (
+            <div key={g.status}
+              style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+              <button onClick={() => setExpanded(isOpen ? null : g.status)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  width: '100%', background: 'transparent', border: 'none', color: 'var(--text)',
+                  padding: '12px 16px', cursor: 'pointer', fontFamily: 'var(--font)',
+                }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: statusColor(g.status) }} />
+                  <strong style={{ fontSize: 13.5 }}>{g.label}</strong>
+                  <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>· {g.leads.length} con notas</span>
+                </span>
+                <span style={{ color: 'var(--text3)', fontSize: 11 }}>{isOpen ? '▾' : '▸'}</span>
+              </button>
+              {isOpen && (
+                <div style={{ borderTop: '1px solid var(--border)' }}>
+                  {g.leads.map(l => (
+                    <div key={l.id}
+                      style={{
+                        padding: '10px 16px',
+                        borderBottom: '1px solid var(--border)',
+                        display: 'flex', flexDirection: 'column', gap: 4,
+                      }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                        <strong style={{ fontSize: 13, color: 'var(--text)' }}>
+                          {l.nombre || l.empresa || l.email}
+                        </strong>
+                        <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {l.email}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5, fontStyle: 'italic' }}>
+                        "{l.notas}"
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 type MovementData = {
   passCounts: StagePassCount[]
@@ -577,13 +656,18 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
 
   const stats = useMemo(() => {
     const total = scoped.length
+    const nonDescartado = scoped.filter(l => l.status !== 'descartado')
     const cerrados = scoped.filter(l => PIPELINE_CLOSED.includes(l.status)).length
+    const descartados = scoped.filter(l => l.status === 'descartado').length
     return {
       total,
-      pipeline: sumMonto(scoped),
+      descartados,
+      // Pipeline total = leads NO descartados (monto activo realista)
+      pipeline: sumMonto(nonDescartado),
       pipelineCierre: sumMonto(scoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
       pipelineCerrado: sumMonto(scoped.filter(l => PIPELINE_CLOSED.includes(l.status))),
-      conversionRate: total > 0 ? cerrados / total : 0,
+      // Conv. rate sobre los que no descartaste (más honesto)
+      conversionRate: nonDescartado.length > 0 ? cerrados / nonDescartado.length : 0,
       cerrados,
       forecast: forecastLeads(scoped),
       cycle: cycleStats(scoped),
@@ -642,15 +726,21 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           </select>
         </div>
         <div className={styles.kpiList}>
-          <div className={styles.kpi}><span>Leads</span><strong>{stats.total}</strong></div>
-          <div className={styles.kpi}><span>Convertidos</span><strong>{stats.cerrados}</strong></div>
+          <div className={styles.kpi}><span>Total leads</span><strong>{stats.total}</strong></div>
+          <div className={styles.kpi}
+            title="Conv. rate = convertidos / leads no descartados. Excluye descartados para que el % no se infle al limpiar leads muertos.">
+            <span>Convertidos</span><strong>{stats.cerrados}</strong>
+          </div>
           <div className={styles.kpi}><span>Conv. rate</span><strong>{fmtPct(stats.conversionRate)}</strong></div>
           <div className={styles.kpi}
             title="Mediana de días entre la creación del lead y el cambio a 'convertido' o 'cliente recurrente'">
             <span>Ciclo Nuevo→Cerrado</span>
             <strong>{stats.cycle.count > 0 ? `${stats.cycle.medianDays.toFixed(0)} d` : '—'}</strong>
           </div>
-          <div className={styles.kpiMoney}><span>Pipeline total</span><strong>{fmtMoney(stats.pipeline)}</strong></div>
+          <div className={styles.kpiMoney}
+            title="Suma de monto de leads NO descartados. Los descartados no cuentan como pipeline.">
+            <span>Pipeline total</span><strong>{fmtMoney(stats.pipeline)}</strong>
+          </div>
           <div className={styles.kpiMoney}><span>En cierre</span><strong style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</strong></div>
           <div className={styles.kpiMoney}><span>Cerrado</span><strong style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</strong></div>
           <div className={styles.kpiMoney}
@@ -670,6 +760,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           <TacticsSection tactics={tactics} />
           <FunnelChart leads={scoped} />
           <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
+          <NotasSection leads={scoped} />
           <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
           <BreakdownTable title="Por presupuesto" subtitle="Tier de inversión declarado en onboarding" rows={byPresupuesto} />

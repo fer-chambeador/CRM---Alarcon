@@ -21,12 +21,31 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     updates.monto = Number.isFinite(n) && n >= 0 ? n : 1160
   }
 
-  // Auto-bump contact counter when moving to "contactado" or explicit flag
-  if (body.status === 'contactado' || body.incrementar_contacto) {
+  const sentVeces = typeof body.veces_contactado === 'number'
+
+  // SET directo de veces_contactado (desde el ContactoSelector). Sube o baja.
+  // Si SUBE → registra ultimo_contacto = now (cuenta como un nuevo intento, resetea aging).
+  // Si BAJA → corrección, no toca ultimo_contacto.
+  if (sentVeces && !body.incrementar_contacto) {
     const { data: lead } = await supabase.from('leads').select('veces_contactado').eq('id', id).single()
-    if (lead) {
-      updates.veces_contactado = (lead.veces_contactado || 0) + 1
+    const prev = (lead?.veces_contactado as number) || 0
+    updates.veces_contactado = body.veces_contactado
+    if (body.veces_contactado > prev) {
       updates.ultimo_contacto = new Date().toISOString()
+    }
+  }
+
+  // Auto-bump SOLO si el cliente NO mandó veces_contactado explícito.
+  // Si lo mandó, respetamos su valor (no le sumamos +1 por encima).
+  if (!sentVeces && (body.status === 'contactado' || body.incrementar_contacto)) {
+    const { data: lead } = await supabase.from('leads').select('veces_contactado, status').eq('id', id).single()
+    if (lead) {
+      // Si es bump explícito O si el lead recién entra a 'contactado' (transición).
+      const isTransition = body.status === 'contactado' && lead.status !== 'contactado'
+      if (body.incrementar_contacto || isTransition) {
+        updates.veces_contactado = (lead.veces_contactado || 0) + 1
+        updates.ultimo_contacto = new Date().toISOString()
+      }
     }
   }
 
