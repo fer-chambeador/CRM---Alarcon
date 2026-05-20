@@ -5,13 +5,18 @@ export const dynamic = 'force-dynamic'
 
 const ALLOWED_STR = ['nombre', 'email', 'fecha_inicio', 'canal', 'notas'] as const
 const ALLOWED_BOOL = ['hidden'] as const
+const ALLOWED_ENUM = {
+  estatus: ['activo', 'renovar', 'churn'],
+  tipo_cliente: ['pequeño', 'mediano', 'grande', 'corporativo'],
+  tipo_contrato: ['mensual', 'semestral', 'anual'],
+} as const
 
 export async function PATCH(req: NextRequest, { params }: { params: { key: string } }) {
   const supabase = createServiceClient()
   const body = await req.json().catch(() => ({}))
   const key = decodeURIComponent(params.key)
 
-  const updates: Record<string, string | boolean | null> = {}
+  const updates: Record<string, string | boolean | number | null> = {}
   for (const k of ALLOWED_STR) {
     if (k in body) {
       const v = body[k]
@@ -20,6 +25,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { key: strin
   }
   for (const k of ALLOWED_BOOL) {
     if (k in body) updates[k] = !!body[k]
+  }
+  for (const k of Object.keys(ALLOWED_ENUM) as Array<keyof typeof ALLOWED_ENUM>) {
+    if (k in body) {
+      const v = body[k]
+      if (v === null || v === '') updates[k] = null
+      else if (typeof v === 'string' && (ALLOWED_ENUM[k] as readonly string[]).includes(v)) updates[k] = v
+    }
+  }
+  if ('meses_renovando' in body) {
+    const n = body.meses_renovando
+    if (n === null || n === '') updates.meses_renovando = null
+    else {
+      const num = Number(n)
+      if (Number.isFinite(num) && num >= 0) updates.meses_renovando = Math.round(num)
+    }
   }
 
   if (!Object.keys(updates).length) {
