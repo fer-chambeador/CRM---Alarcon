@@ -240,13 +240,25 @@ export default function RecurrentesClient() {
                 const res = await fetch('/api/recurrentes/enrich-emails', { method: 'POST' })
                 const j = await res.json()
                 if (j.error) throw new Error(j.error)
-                setEnrichMsg(`✓ Enriquecidos ${j.applied} de ${j.total_sin_email} clientes sin email (${(j.duration_ms/1000).toFixed(1)}s)`)
+                const parts: string[] = []
+                parts.push(`Sin email: ${j.total_sin_email} clientes · ${j.leads_count} leads en DB`)
+                parts.push(`Matched: ${j.matched} · Aplicados: ${j.applied}`)
+                if (j.samples_matched && j.samples_matched.length) {
+                  parts.push(`Ejemplos matched: ${j.samples_matched.slice(0, 3).map((m: { cliente: string; by: string }) => `${m.cliente} (${m.by})`).join(', ')}`)
+                }
+                if (j.samples_unmatched && j.samples_unmatched.length) {
+                  parts.push(`Sin match (muestra): ${j.samples_unmatched.slice(0, 5).join(', ')}`)
+                }
+                if (j.upsert_errors && j.upsert_errors.length) {
+                  parts.push(`Errores upsert: ${j.upsert_errors.join('; ')}`)
+                }
+                setEnrichMsg(parts.join(' · ') + ` (${(j.duration_ms/1000).toFixed(1)}s)`)
                 load()
               } catch (e) {
                 setEnrichMsg(`⚠️ ${e instanceof Error ? e.message : 'falló'}`)
               } finally {
                 setEnriching(false)
-                setTimeout(() => setEnrichMsg(null), 8000)
+                setTimeout(() => setEnrichMsg(null), 30000)
               }
             }}
             disabled={enriching || loading}
