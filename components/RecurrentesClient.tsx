@@ -129,6 +129,8 @@ export default function RecurrentesClient() {
   const [filterEstatus, setFilterEstatus] = useState<'todos' | EstatusCliente>('todos')
   const [filterTipoCliente, setFilterTipoCliente] = useState<'todos' | TipoCliente>('todos')
   const [filterContrato, setFilterContrato] = useState<'todos' | TipoContrato>('todos')
+  const [enriching, setEnriching] = useState(false)
+  const [enrichMsg, setEnrichMsg] = useState<string | null>(null)
   const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima'; dir: 'asc' | 'desc' }>(
     { key: 'total', dir: 'desc' }
   )
@@ -201,8 +203,11 @@ export default function RecurrentesClient() {
   const analytics = useMemo(() => {
     const total = filtered.reduce((s, c) => s + c.total_pagado, 0)
     const pagos = filtered.reduce((s, c) => s + c.veces, 0)
-    const avgPorCliente = filtered.length > 0 ? total / filtered.length : 0
-    return { total, pagos, avgPorCliente }
+    // Clientes adquiridos este mes (calendar month en curso)
+    const now = new Date()
+    const ymPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const nuevosEsteMes = filtered.filter(c => c.fecha_inicio && c.fecha_inicio.startsWith(ymPrefix)).length
+    return { total, pagos, nuevosEsteMes }
   }, [filtered])
 
   const onSort = (key: typeof sort.key) => {
@@ -228,7 +233,30 @@ export default function RecurrentesClient() {
           <button className={styles.refreshBtn} onClick={load} disabled={loading}>
             {loading ? '…' : '↻ Refrescar'}
           </button>
+          <button className={styles.refreshBtn}
+            onClick={async () => {
+              setEnriching(true); setEnrichMsg(null)
+              try {
+                const res = await fetch('/api/recurrentes/enrich-emails', { method: 'POST' })
+                const j = await res.json()
+                if (j.error) throw new Error(j.error)
+                setEnrichMsg(`✓ Enriquecidos ${j.applied} de ${j.total_sin_email} clientes sin email (${(j.duration_ms/1000).toFixed(1)}s)`)
+                load()
+              } catch (e) {
+                setEnrichMsg(`⚠️ ${e instanceof Error ? e.message : 'falló'}`)
+              } finally {
+                setEnriching(false)
+                setTimeout(() => setEnrichMsg(null), 8000)
+              }
+            }}
+            disabled={enriching || loading}
+            title="Busca emails faltantes cruzando con la tabla `leads` del CRM">
+            {enriching ? '…' : '✉ Enriquecer emails'}
+          </button>
         </header>
+        {enrichMsg && (
+          <div style={{ padding: '8px 32px', fontSize: 12, color: 'var(--text2)' }}>{enrichMsg}</div>
+        )}
 
         {/* KPI Hero (estilo /leads) */}
         {data && (
@@ -244,9 +272,9 @@ export default function RecurrentesClient() {
               <div className={styles.kpiHeroSub}>en el filtro actual</div>
             </div>
             <div className={styles.kpiHeroCard + ' ' + styles.kpiHeroIndigo}>
-              <div className={styles.kpiHeroLabel}>Promedio por cliente</div>
-              <div className={styles.kpiHeroValue}>{fmtMoney(analytics.avgPorCliente)}</div>
-              <div className={styles.kpiHeroSub}>histórico por cuenta</div>
+              <div className={styles.kpiHeroLabel}>Adquiridos este mes</div>
+              <div className={styles.kpiHeroValue}>{analytics.nuevosEsteMes}</div>
+              <div className={styles.kpiHeroSub}>primer pago en {new Date().toLocaleDateString('es-MX', { month: 'long' })}</div>
             </div>
           </div>
         )}
