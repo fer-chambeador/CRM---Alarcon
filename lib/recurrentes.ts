@@ -479,12 +479,33 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     const idxMonto = findCol(headers, ['monto', 'importe', 'total', 'cantidad', 'amount', 'precio', 'pago'])
     const idxCanal = findCol(headers, ['canal', 'metodo', 'forma', 'via'])
 
-    // Fecha: 1) header explícito; 2) fallback a col A si su primera celda parsea como fecha.
+    // Fecha: 1) header explícito; 2) si no, detectar por contenido la
+    //    columna que tenga mayor proporción de celdas parseables como fecha.
     let idxFecha = findCol(headers, ['fecha', 'date', 'dia', 'día'])
     const tabYear = tabDate ? parseInt(tabDate.slice(0, 4), 10) : undefined
     if (idxFecha < 0 && rows.length > 1) {
-      const sample = (rows[1][0] || '').trim()
-      if (parseFecha(sample, tabYear)) idxFecha = 0
+      const sampleLimit = Math.min(rows.length, 25)
+      const maxCol = Math.min(headers.length, 6)
+      let bestCol = -1
+      let bestRatio = 0
+      for (let col = 0; col < maxCol; col++) {
+        let hits = 0
+        let total = 0
+        for (let r = 1; r < sampleLimit; r++) {
+          const cell = (rows[r][col] || '').trim()
+          if (!cell) continue
+          total += 1
+          if (parseFecha(cell, tabYear)) hits += 1
+        }
+        if (total < 3) continue
+        const ratio = hits / total
+        // ≥50% de celdas parseables como fecha → buena candidata
+        if (ratio > bestRatio && ratio >= 0.5) {
+          bestRatio = ratio
+          bestCol = col
+        }
+      }
+      if (bestCol >= 0) idxFecha = bestCol
     }
 
     if (idxQuien < 0) continue
