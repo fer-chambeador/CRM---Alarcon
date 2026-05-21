@@ -214,17 +214,28 @@ function tipoClienteFromAvg(avgTicket: number): TipoCliente {
 }
 
 /**
- * Estatus por última aparición:
- *  - activo:  paga en los últimos 35 días (ventana de un mes con buffer)
- *  - renovar: 35–60 días — ya vence pronto, foco
- *  - churn:   > 60 días sin pagar
+ * Estatus por última aparición — ajustado al tipo de contrato.
+ * Un cliente anual que pagó hace 5 meses NO es churn, es normal.
+ *
+ *  mensual:    activo ≤60 d / renovar ≤90 d  / churn >90 d
+ *  semestral:  activo ≤210 d / renovar ≤240 d / churn >240 d
+ *  anual:      activo ≤400 d / renovar ≤430 d / churn >430 d
  */
-function estatusFromUltima(ultima: string | null, now = Date.now()): EstatusCliente {
+function estatusFromUltima(
+  ultima: string | null,
+  contrato: TipoContrato,
+  now = Date.now(),
+): EstatusCliente {
   if (!ultima) return 'churn'
   const t = new Date(ultima + 'T00:00:00').getTime()
   const days = (now - t) / DAY_MS
-  if (days <= 35) return 'activo'
-  if (days <= 60) return 'renovar'
+  const T = {
+    mensual:   { activo: 60,  renovar: 90 },
+    semestral: { activo: 210, renovar: 240 },
+    anual:     { activo: 400, renovar: 430 },
+  }[contrato]
+  if (days <= T.activo)  return 'activo'
+  if (days <= T.renovar) return 'renovar'
   return 'churn'
 }
 
@@ -342,6 +353,69 @@ function isFer(quien: string): boolean {
   return firstWord === 'fer'
 }
 
+/**
+ * Sondeo a hojas de renovaciones del sheet. Prueba nombres comunes y
+ * devuelve filas que tengan formato { cliente, estatus, comentario }.
+ *
+ * Buscamos en headers columnas: cliente/empresa/nombre, estatus/status/estado,
+ * notas/comentario/comentarios/observaciones, renovo/renueva/renovación.
+ */
+type RenovacionInfo = {
+  cliente_key: string         // normalized name to match con cliente.key
+  estatus?: EstatusCliente
+  notas?: string
+}
+
+async function fetchRenovaciones(sheetId: string, signal?: AbortSignal): Promise<RenovacionInfo[]> {
+  const now = new Date()
+  // Nombres candidatos — probamos varios formatos comunes.
+  const candidates = new Set<string>([
+    'Renovaciones',
+    'Renovaciones x mes',
+    'Renovaciones por mes',
+    `Renovaciones ${now.getFullYear()}`,
+    `Renovaciones ${now.getFullYear() - 1}`,
+  ])
+  // También probamos "Renovaciones <Mes> <Año>" para los últimos meses
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now); d.setMonth(d.getMonth() - i)
+    candidates.add(`Renovaciones ${MESES[d.getMonth()]} ${d.getFullYear()}`)
+  }
+
+  const results: RenovacionInfo[] = []
+  for (const tab of Array.from(candidates)) {
+    const csv = await fetchTabCsv(sheetId, tab, signal)
+    if (!csv) continue
+    const rows = parseCsv(csv)
+    if (rows.length < 2) continue
+    const headers = rows[0]
+    const idxCliente = findCol(headers, ['cliente', 'empresa', 'nombre', 'cuenta', 'company'])
+    const idxEstatus = findCol(headers, ['estatus', 'status', 'estado', 'renovo', 'renueva', 'renovacion', 'renovación'])
+    const idxNotas   = findCol(headers, ['notas', 'comentario', 'comentarios', 'observacion', 'observaciones', 'detalle'])
+    if (idxCliente < 0) continue
+
+    for (const row of rows.slice(1)) {
+      const clienteRaw = (row[idxCliente] || '').trim()
+      if (!clienteRaw) continue
+      const { name: cleanName, email } = splitNameEmail(clienteRaw)
+      const cliente_key = email ? email.toLowerCase() : norm(cleanName)
+      if (!cliente_key) continue
+
+      const estatusRaw = idxEstatus >= 0 ? norm(row[idxEstatus] || '') : ''
+      let estatus: EstatusCliente | undefined
+      if (estatusRaw) {
+        if (/(activo|renov[oó]|si|sí|✓)/.test(estatusRaw))       estatus = 'activo'
+        else if (/(por renovar|pendiente|renovar)/.test(estatusRaw)) estatus = 'renovar'
+        else if (/(churn|baj[ao]|cancel|no|✗|x)/.test(estatusRaw))    estatus = 'churn'
+      }
+      const notas = idxNotas >= 0 ? (row[idxNotas] || '').trim() || undefined : undefined
+
+      results.push({ cliente_key, estatus, notas })
+    }
+  }
+  return results
+}
+
 export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
   clientes: ClienteRecurrente[]
   meses_leidos: string[]
@@ -354,14 +428,32 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
   const months = monthsToFetch()
   const intentados = months.map(m => m.name)
 
-  const [csvResults, overrides] = await Promise.all([
+  const [csvResults, overrides, renovaciones] = await Promise.all([
     Promise.all(months.map(async m => ({
       name: m.name,
       tabDate: tabToDate(m.tab),
       csv: await fetchTabCsv(sheetId, m.tab, opts.signal),
     }))),
     fetchOverrides(),
+    fetchRenovaciones(sheetId, opts.signal),
   ])
+
+  // Agrupar renovaciones por cliente_key. Si hay múltiples filas para el
+  // mismo cliente (un mes los pongo activo, otro mes churn), priorizamos
+  // la más reciente que tenga estatus, y concatenamos las notas.
+  const renovByKey = new Map<string, RenovacionInfo>()
+  for (const r of renovaciones) {
+    const existing = renovByKey.get(r.cliente_key)
+    if (existing) {
+      // último estatus gana, notas se concatenan
+      if (r.estatus) existing.estatus = r.estatus
+      if (r.notas) existing.notas = existing.notas
+        ? `${existing.notas}\n${r.notas}`
+        : r.notas
+    } else {
+      renovByKey.set(r.cliente_key, { ...r })
+    }
+  }
 
   // map intermedio: por cliente, acumulamos pagos crudos.
   type Acc = {
@@ -446,9 +538,9 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     const fechas = pagos.map(p => p.fecha).filter((x): x is string => !!x).sort()
     const fecha_inicio = fechas.length ? fechas[0] : null
     const ultima_aparicion = fechas.length ? fechas[fechas.length - 1] : null
-    const estatus = estatusFromUltima(ultima_aparicion, now)
     const tipo_cliente = tipoClienteFromAvg(ticket_promedio)
     const tipo_contrato = tipoContratoFromPagos(pagos)
+    const estatus = estatusFromUltima(ultima_aparicion, tipo_contrato, now)
     const mes_renovacion = mesRenovacionDe(pagos, tipo_contrato)
     return {
       key: acc.key,
@@ -473,7 +565,16 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     }
   })
 
-  // Aplicar overrides editables
+  // Aplicar info de las hojas "Renovaciones" (antes de los overrides
+  // manuales — el override de Supabase manda sobre lo del sheet).
+  for (const c of clientes) {
+    const r = renovByKey.get(c.key)
+    if (!r) continue
+    if (r.estatus) c.estatus = r.estatus
+    if (r.notas) c.notas = c.notas ? `${c.notas}\n${r.notas}` : r.notas
+  }
+
+  // Aplicar overrides editables (Supabase)
   for (const c of clientes) {
     const ov = overrides.get(c.key)
     if (!ov) continue
@@ -485,13 +586,15 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     c.notas = ov.notas
     c.hidden = ov.hidden === true
     // Overrides manuales de campos derivados
-    if (ov.estatus) c.estatus = ov.estatus
     if (ov.tipo_cliente) c.tipo_cliente = ov.tipo_cliente
     if (ov.tipo_contrato) {
       c.tipo_contrato = ov.tipo_contrato
-      // Re-calcular mes_renovacion según el override de contrato
+      // Re-calcular mes_renovacion y estatus según el override de contrato
       c.mes_renovacion = mesRenovacionDe(c.pagos, ov.tipo_contrato)
+      c.estatus = estatusFromUltima(c.ultima_aparicion, ov.tipo_contrato)
     }
+    // Override directo de estatus (manda sobre el calculado)
+    if (ov.estatus) c.estatus = ov.estatus
     if (typeof ov.meses_renovando === 'number') c.meses_renovando = ov.meses_renovando
   }
 
