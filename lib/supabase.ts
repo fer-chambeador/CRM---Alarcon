@@ -40,6 +40,7 @@ export type Lead = {
   created_at: string
   updated_at: string
   status_changed_at: string
+  google_calendar_event_id: string | null
 }
 
 export type LeadActividad = {
