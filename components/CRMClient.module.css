@@ -980,7 +980,7 @@
 /* ── KPI Hero row (above table on /leads) ────── */
 .kpiHero {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
   padding: 0 32px 14px;
 }
@@ -1030,8 +1030,8 @@
   margin-top: 6px;
 }
 
-@media (max-width: 1280px) {
-  .kpiHero { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 1100px) {
+  .kpiHero { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ── Aging chip (lead row, junto al status) ────── */

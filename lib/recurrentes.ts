@@ -17,7 +17,10 @@ const MESES = [
 ]
 
 const norm = (s: string) =>
-  s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/^﻿/, '')  // BOM (gviz csv lo mete al inicio)
+    .replace(/ /g, ' ') // non-breaking space → space normal
+    .trim()
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/
 
@@ -108,8 +111,19 @@ function parseFecha(raw: string, fallbackYear?: number): string | null {
   const s = raw.trim()
   if (!s) return null
 
+  // gviz CSV format para celdas con formato fecha: "Date(2026,0,29)"
+  // Meses 0-indexed (Enero=0). Es lo que devuelve Google Sheets cuando
+  // la celda tiene tipo fecha (no string).
+  let m = s.match(/^Date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)$/)
+  if (m) {
+    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10) + 1, d = parseInt(m[3], 10)
+    if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    }
+  }
+
   // ISO YYYY-MM-DD or YYYY/MM/DD
-  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
+  m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
   if (m) {
     const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10)
     if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
