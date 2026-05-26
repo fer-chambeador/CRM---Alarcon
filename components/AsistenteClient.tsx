@@ -4,15 +4,33 @@ import { useState, useRef, useEffect } from 'react'
 import { Sidebar } from './CommandCenter'
 import styles from './AsistenteClient.module.css'
 
-type Turn = { question: string; answer: string | null; error?: string; loading?: boolean; usage?: { input_tokens: number; output_tokens: number } | null }
+type Action = {
+  tool: string
+  input: unknown
+  result: {
+    ok: boolean
+    summary: string
+    affected?: Array<{ id: string; email: string; nombre?: string | null }>
+    data?: unknown
+    error?: string
+  }
+}
+type Turn = {
+  question: string
+  answer: string | null
+  error?: string
+  loading?: boolean
+  usage?: { input_tokens: number; output_tokens: number } | null
+  actions?: Action[]
+}
 
 const SUGGESTIONS = [
   '¿Cuántos leads cayeron este mes y de qué canales?',
-  'De los convertidos, ¿de qué estados son y quién era el decision maker?',
   '¿Qué canal tiene la mejor tasa de conversión?',
-  '¿Qué leads tienen más de 48h sin moverse de "contactado"?',
+  'Marca como descartado a los leads en "contactado" con más de 30 días sin moverse',
+  'Agrega nota al lead juan@empresa.com: "llamó pidiendo descuento"',
   '¿Cuál es el pipeline cerrado de Instagram este mes?',
-  '¿Qué estados tienen más leads sin contactar?',
+  'Cambia el status de jose@mail.com a propuesta enviada',
 ]
 
 // Tiny markdown renderer — handles **bold**, `code`, *italic*, lists, line breaks. No external dep.
@@ -82,7 +100,7 @@ export default function AsistenteClient() {
       })
       const data = await res.json()
       setTurns(prev => prev.map((t, i) => i === idx
-        ? { ...t, loading: false, answer: data.answer || null, error: data.error, usage: data.usage }
+        ? { ...t, loading: false, answer: data.answer || null, error: data.error, usage: data.usage, actions: data.actions }
         : t))
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error inesperado'
@@ -138,6 +156,36 @@ export default function AsistenteClient() {
                 {t.error && <div className={styles.error}>⚠️ {t.error}</div>}
                 {t.answer && (
                   <div className={styles.markdown} dangerouslySetInnerHTML={{ __html: renderMarkdown(t.answer) }} />
+                )}
+                {t.actions && t.actions.length > 0 && (
+                  <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {t.actions.map((a, j) => (
+                      <div key={j} style={{
+                        background: 'var(--glass)',
+                        border: '1px solid var(--border)',
+                        borderLeft: `3px solid ${a.result.ok ? '#22d68a' : '#f05a5a'}`,
+                        borderRadius: 10, padding: '10px 14px',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          <span style={{ fontSize: 14 }}>{a.result.ok ? '✓' : '⚠️'}</span>
+                          <strong style={{ fontSize: 12.5, color: 'var(--text)' }}>{a.tool}</strong>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text2)' }}>{a.result.summary}</div>
+                        {a.result.affected && a.result.affected.length > 0 && (
+                          <details style={{ marginTop: 6 }}>
+                            <summary style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer' }}>
+                              Ver {a.result.affected.length} lead{a.result.affected.length === 1 ? '' : 's'} afectado{a.result.affected.length === 1 ? '' : 's'}
+                            </summary>
+                            <ul style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, paddingLeft: 20 }}>
+                              {a.result.affected.map((af, k) => (
+                                <li key={k}>{af.nombre || af.email}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {t.usage && (
                   <div className={styles.usage}>
