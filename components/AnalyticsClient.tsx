@@ -741,6 +741,208 @@ function NotasSection({ leads }: { leads: Lead[] }) {
   )
 }
 
+// ─── Donut chart de fuentes de leads ────────────────────────────────────
+const DONUT_PALETTE = ['#22d68a', '#4ea8f5', '#a594ff', '#f05a5a', '#f5c842', '#7c6af7', '#00c8a0', '#f5914e', '#3a4ea8']
+
+function SourcesDonut({ leads }: { leads: Lead[] }) {
+  const buckets = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const l of leads) {
+      const k = l.canal_adquisicion || 'Sin canal'
+      m.set(k, (m.get(k) || 0) + 1)
+    }
+    const all = Array.from(m.entries())
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count)
+    const TOP = 6
+    if (all.length <= TOP) return all
+    const top = all.slice(0, TOP)
+    const otros = all.slice(TOP).reduce((s, x) => s + x.count, 0)
+    return [...top, { key: 'Otros', count: otros }]
+  }, [leads])
+
+  const total = buckets.reduce((s, b) => s + b.count, 0)
+  const R = 70, STROKE = 22, CX = 90, CY = 90
+  const CIRC = 2 * Math.PI * R
+
+  let acc = 0
+  const arcs = buckets.map((b, i) => {
+    const pct = total > 0 ? b.count / total : 0
+    const dash = pct * CIRC
+    const offset = -acc * CIRC
+    acc += pct
+    return { ...b, color: DONUT_PALETTE[i % DONUT_PALETTE.length], dash, offset, pct }
+  })
+
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Fuentes de leads</h3>
+          <span className={styles.sectionSubtitle}>Distribución por canal de adquisición</span>
+        </div>
+      </header>
+      {total === 0
+        ? <div className={styles.empty}>Sin leads en este rango.</div>
+        : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', width: 180, height: 180, flexShrink: 0 }}>
+              <svg width="180" height="180" viewBox="0 0 180 180" style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx={CX} cy={CY} r={R} fill="none" stroke="var(--border)" strokeWidth={STROKE} />
+                {arcs.map((a, i) => (
+                  <circle key={i} cx={CX} cy={CY} r={R} fill="none"
+                    stroke={a.color} strokeWidth={STROKE}
+                    strokeDasharray={`${a.dash} ${CIRC}`}
+                    strokeDashoffset={a.offset} />
+                ))}
+              </svg>
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', flexDirection: 'column',
+              }}>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{total}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>Leads</div>
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {arcs.map((a, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '6px 0', borderBottom: i < arcs.length - 1 ? '1px solid var(--border)' : 'none',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: a.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12.5, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.key}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                    {(a.pct * 100).toFixed(0)}% <span style={{ color: 'var(--text3)', fontSize: 11 }}>({a.count})</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+    </section>
+  )
+}
+
+// ─── Ventas cerradas + conversión por semana del periodo ────────────────
+function WeeklyConversionChart({ leads, range }: { leads: Lead[]; range: DateRange }) {
+  const data = useMemo(() => {
+    const { from, to } = dateRangeBounds(range)
+    if (!from) {
+      // 'Todo el tiempo' — agrupar por mes en lugar de semana
+      const m = new Map<string, { closed: Lead[]; total: Lead[] }>()
+      for (const l of leads) {
+        const d = new Date(l.created_at)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        const entry = m.get(key) || { closed: [], total: [] }
+        entry.total.push(l)
+        if (PIPELINE_CLOSED.includes(l.status)) entry.closed.push(l)
+        m.set(key, entry)
+      }
+      return Array.from(m.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(-8)  // últimos 8 meses
+        .map(([key, v]) => ({
+          label: new Date(key + '-01').toLocaleDateString('es-MX', { month: 'short' }),
+          closed: v.closed.length,
+          total: v.total.length,
+          revenue: v.closed.reduce((s, l) => s + (l.monto ?? DEFAULT_MONTO), 0),
+          convRate: v.total.length > 0 ? v.closed.length / v.total.length : 0,
+        }))
+    }
+    // Por SEMANA del periodo (lunes a domingo)
+    const end = to || new Date()
+    const weeks: Array<{ label: string; start: Date; end: Date }> = []
+    const cur = new Date(from)
+    // Alinear al lunes
+    const day = cur.getDay()
+    const diff = day === 0 ? -6 : 1 - day
+    cur.setDate(cur.getDate() + diff)
+    while (cur <= end) {
+      const wStart = new Date(cur)
+      const wEnd = new Date(cur); wEnd.setDate(wEnd.getDate() + 6); wEnd.setHours(23, 59, 59)
+      weeks.push({
+        label: `${wStart.getDate()} ${wStart.toLocaleDateString('es-MX', { month: 'short' })}`,
+        start: wStart, end: wEnd,
+      })
+      cur.setDate(cur.getDate() + 7)
+    }
+    return weeks.map(w => {
+      const weekLeads = leads.filter(l => {
+        const t = new Date(l.created_at).getTime()
+        return t >= w.start.getTime() && t <= w.end.getTime()
+      })
+      const closed = weekLeads.filter(l => PIPELINE_CLOSED.includes(l.status))
+      return {
+        label: w.label,
+        closed: closed.length,
+        total: weekLeads.length,
+        revenue: closed.reduce((s, l) => s + (l.monto ?? DEFAULT_MONTO), 0),
+        convRate: weekLeads.length > 0 ? closed.length / weekLeads.length : 0,
+      }
+    })
+  }, [leads, range])
+
+  const maxRevenue = Math.max(...data.map(d => d.revenue), 1)
+
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Ventas cerradas y conversión</h3>
+          <span className={styles.sectionSubtitle}>
+            {range === 'todo' ? 'Últimos 8 meses' : 'Por semana del periodo'}
+          </span>
+        </div>
+      </header>
+      {data.length === 0
+        ? <div className={styles.empty}>Sin datos en este rango.</div>
+        : (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 180, padding: '0 4px', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
+              {data.map((d, i) => {
+                const h = maxRevenue > 0 ? (d.revenue / maxRevenue) * 100 : 0
+                return (
+                  <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', minWidth: 0 }}
+                    title={`${d.label}: ${d.closed} cerrados · ${fmtMoney(d.revenue)} · ${(d.convRate * 100).toFixed(0)}% conv`}>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4, fontVariantNumeric: 'tabular-nums' }}>
+                      {d.closed > 0 ? d.closed : ''}
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
+                      <div style={{
+                        width: '100%', maxWidth: 32, margin: '0 auto',
+                        height: d.revenue === 0 ? 4 : `${Math.max(h, 6)}%`,
+                        background: 'linear-gradient(180deg, #22d68a 0%, #00c8a0 100%)',
+                        borderRadius: '4px 4px 0 0',
+                        opacity: d.revenue === 0 ? 0.25 : 1,
+                      }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, padding: '0 4px' }}>
+              {data.map((d, i) => (
+                <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: 10, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {d.label}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, padding: '4px 4px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
+              {data.map((d, i) => (
+                <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: 10.5, fontFamily: 'var(--mono)', color: d.convRate > 0 ? '#22d68a' : 'var(--text3)', fontVariantNumeric: 'tabular-nums' }}>
+                  {d.convRate > 0 ? `${(d.convRate * 100).toFixed(0)}%` : '—'}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+    </section>
+  )
+}
+
 // ─── Separador entre grupos temáticos (estilo CRO dashboard) ────────────
 function GroupHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -834,16 +1036,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     return () => { cancelled = true }
   }, [dateRange])
 
-  const tactics = useMemo(() => generateTactics({
-    goal: periodGoal,
-    forecast: stats.forecast,
-    cerradoReal: stats.pipelineCerrado,
-    buckets: forecastBuckets,
-    stageAging,
-    byCanal,
-    byPresupuesto,
-    rangeLabel: DATE_LABELS[dateRange],
-  }), [periodGoal, stats.forecast, stats.pipelineCerrado, forecastBuckets, stageAging, byCanal, byPresupuesto, dateRange])
+  // tactics removidas — user pidió sin sugerencias en este rediseño
 
   return (
     <div className={styles.root}>
@@ -872,30 +1065,30 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         </header>
 
         <div className={styles.body}>
-          {/* HERO */}
+          {/* HERO: 4 KPI cards (sin Gap a meta para coincidir con tu lista) */}
           <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} convRate={stats.conversionRate} totalLeads={stats.total} />
 
-          {/* FUNNEL */}
-          <GroupHeader title="Funnel" subtitle="Cómo se mueven los leads por las etapas" />
-          <FunnelChart leads={scoped} cycle={stats.cycle} />
+          {/* Row 1: Funnel | Ventas por semana | Fuentes de leads (donut) */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+            <FunnelChart leads={scoped} cycle={stats.cycle} />
+            <WeeklyConversionChart leads={scoped} range={dateRange} />
+            <SourcesDonut leads={scoped} />
+          </div>
 
-          {/* PATRONES DE CIERRE */}
-          <GroupHeader title="Patrones de cierre" subtitle="Quiénes están convirtiendo más — para duplicar lo que funciona" />
+          {/* Patrones de cierre (3 sub-cards lado a lado) */}
           <ConvertersSection byCanal={byCanal} byPresupuesto={byPresupuesto} byVacante={byVacante} />
 
-          {/* TIPOS DE CLIENTE */}
-          <GroupHeader title="Tipos de cliente" subtitle="Segmentación por presupuesto y geografía" />
-          <BreakdownTable title="Por presupuesto declarado" subtitle="Tier de inversión que entra al pipeline" rows={byPresupuesto} />
-          <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
-
-          {/* TIEMPOS DE CONVERSIÓN */}
-          <GroupHeader title="Tiempos de conversión" subtitle="Dónde se atoran los leads y cuánto tardan en cerrar" />
+          {/* Tiempos de conversión (funnel health unificado) */}
           <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
-          <DailyTimeline leads={scoped} range={dateRange} />
 
-          {/* SUGERENCIAS al final — acciones que salen de todo lo anterior */}
-          <GroupHeader title="Sugerencias" subtitle="Acciones calculadas desde el pipeline actual" />
-          <TacticsSection tactics={tactics} />
+          {/* Row 2: Por ciudad | Por budget */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+            <BreakdownTable title="Leads por ciudad" subtitle="Distribución geográfica + conversión por estado" rows={byEstado} />
+            <BreakdownTable title="Budget + conversión" subtitle="Tier de presupuesto y qué tan bien convierte" rows={byPresupuesto} />
+          </div>
+
+          {/* Leads por día (full width) */}
+          <DailyTimeline leads={scoped} range={dateRange} />
         </div>
       </main>
     </div>
