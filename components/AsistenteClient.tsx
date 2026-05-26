@@ -74,11 +74,18 @@ function renderMarkdown(s: string): string {
   return out
 }
 
+type ConfirmKey = string  // `${turnIdx}-${actionIdx}`
+type ConfirmState = { loading?: boolean; result?: Action['result']; error?: string }
+type AttachedFile = { name: string; content: string; size: number }
+
 export default function AsistenteClient() {
   const [question, setQuestion] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
   const [busy, setBusy] = useState(false)
+  const [confirmed, setConfirmed] = useState<Record<ConfirmKey, ConfirmState>>({})
+  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -87,16 +94,24 @@ export default function AsistenteClient() {
   }, [turns])
 
   const ask = async (q: string) => {
-    if (!q.trim() || busy) return
+    if ((!q.trim() && !attachedFile) || busy) return
     setBusy(true)
     setQuestion('')
+    const file = attachedFile
+    setAttachedFile(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
     const idx = turns.length
-    setTurns(prev => [...prev, { question: q, answer: null, loading: true }])
+    // Construir el mensaje: si hay file, prefix el contenido
+    let fullQuestion = q
+    if (file) {
+      fullQuestion = `[ARCHIVO ADJUNTO: ${file.name}, ${file.size} bytes]\n\`\`\`\n${file.content}\n\`\`\`\n\n${q || '(usá el archivo adjunto como contexto para responder)'}`
+    }
+    setTurns(prev => [...prev, { question: q + (file ? ` 📎 ${file.name}` : ''), answer: null, loading: true }])
     try {
       const res = await fetch('/api/ai/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: fullQuestion }),
       })
       const data = await res.json()
       setTurns(prev => prev.map((t, i) => i === idx
@@ -108,6 +123,39 @@ export default function AsistenteClient() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Confirmar acción riesgosa (bulk_update dry-run) → llamar a /api/ai/execute-tool con confirm=true. */
+  const confirmAction = async (key: ConfirmKey, action: Action) => {
+    setConfirmed(c => ({ ...c, [key]: { loading: true } }))
+    try {
+      // Para bulk_update_status, agregamos confirm: true al input
+      const newInput = action.tool === 'bulk_update_status'
+        ? { ...(action.input as Record<string, unknown>), confirm: true }
+        : action.input
+      const res = await fetch('/api/ai/execute-tool', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: action.tool, input: newInput }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setConfirmed(c => ({ ...c, [key]: { result: data.result } }))
+    } catch (e) {
+      setConfirmed(c => ({ ...c, [key]: { error: e instanceof Error ? e.message : 'falló' } }))
+    }
+  }
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    // Limit 1MB para no inflar contexto
+    if (f.size > 1024 * 1024) {
+      alert('Archivo muy grande. Límite: 1 MB')
+      return
+    }
+    const content = await f.text()
+    setAttachedFile({ name: f.name, content, size: f.size })
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -159,32 +207,121 @@ export default function AsistenteClient() {
                 )}
                 {t.actions && t.actions.length > 0 && (
                   <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {t.actions.map((a, j) => (
-                      <div key={j} style={{
-                        background: 'var(--glass)',
-                        border: '1px solid var(--border)',
-                        borderLeft: `3px solid ${a.result.ok ? '#22d68a' : '#f05a5a'}`,
-                        borderRadius: 10, padding: '10px 14px',
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 14 }}>{a.result.ok ? '✓' : '⚠️'}</span>
-                          <strong style={{ fontSize: 12.5, color: 'var(--text)' }}>{a.tool}</strong>
+                    {t.actions.map((a, j) => {
+                      const confirmKey = `${i}-${j}`
+                      const confirmState = confirmed[confirmKey]
+                      // File download action
+                      const fileData = (a.result.data && typeof a.result.data === 'object'
+                        && (a.result.data as { file?: boolean }).file)
+                        ? a.result.data as { file: true; filename: string; mime_type: string; content: string; size_bytes: number }
+                        : null
+                      // Detect dry-run de bulk_update que necesita confirmación
+                      const dryRunData = a.result.data as { total_matched?: number } | undefined
+                      const isDryRun = a.tool === 'bulk_update_status'
+                        && a.result.ok
+                        && (a.input as { confirm?: boolean })?.confirm !== true
+                        && (dryRunData?.total_matched ?? 0) > 0
+                        && !confirmState?.result
+                      return (
+                        <div key={j} style={{
+                          background: 'var(--glass)',
+                          border: '1px solid var(--border)',
+                          borderLeft: `3px solid ${a.result.ok ? '#22d68a' : '#f05a5a'}`,
+                          borderRadius: 10, padding: '10px 14px',
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                            <span style={{ fontSize: 14 }}>{a.result.ok ? '✓' : '⚠️'}</span>
+                            <strong style={{ fontSize: 12.5, color: 'var(--text)' }}>{a.tool}</strong>
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)' }}>{a.result.summary}</div>
+                          {fileData && (
+                            <button
+                              onClick={() => {
+                                const blob = new Blob([fileData.content], { type: fileData.mime_type })
+                                const url = URL.createObjectURL(blob)
+                                const link = document.createElement('a')
+                                link.href = url
+                                link.download = fileData.filename
+                                document.body.appendChild(link)
+                                link.click()
+                                document.body.removeChild(link)
+                                setTimeout(() => URL.revokeObjectURL(url), 500)
+                              }}
+                              style={{
+                                marginTop: 10,
+                                background: 'linear-gradient(90deg, #22d68a, #00c8a0)',
+                                color: '#0a0a12', border: 'none',
+                                padding: '8px 16px', borderRadius: 8,
+                                fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                fontFamily: 'var(--font)',
+                                display: 'inline-flex', alignItems: 'center', gap: 6,
+                              }}>
+                              ⇣ Descargar {fileData.filename}
+                              <span style={{ fontSize: 10.5, opacity: 0.7 }}>
+                                ({(fileData.size_bytes / 1024).toFixed(1)} KB)
+                              </span>
+                            </button>
+                          )}
+                          {a.result.affected && a.result.affected.length > 0 && (
+                            <details style={{ marginTop: 6 }} open={isDryRun}>
+                              <summary style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer' }}>
+                                Ver {a.result.affected.length} lead{a.result.affected.length === 1 ? '' : 's'} afectado{a.result.affected.length === 1 ? '' : 's'}
+                              </summary>
+                              <ul style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, paddingLeft: 20 }}>
+                                {a.result.affected.map((af, k) => (
+                                  <li key={k}>{af.nombre || af.email}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                          {isDryRun && (
+                            <div style={{
+                              marginTop: 12, padding: '12px 14px',
+                              background: 'rgba(245,200,66,0.08)',
+                              border: '1px solid rgba(245,200,66,0.3)',
+                              borderRadius: 8,
+                            }}>
+                              <div style={{ fontSize: 12.5, color: 'var(--text)', marginBottom: 8 }}>
+                                ⚠️ Esto es un <strong>preview</strong>. Vas a aplicar el cambio a <strong>{dryRunData?.total_matched}</strong> lead{dryRunData?.total_matched === 1 ? '' : 's'}.
+                              </div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => confirmAction(confirmKey, a)} disabled={confirmState?.loading}
+                                  style={{
+                                    background: '#f5c842', color: '#1a1a2e', border: 'none',
+                                    padding: '7px 14px', borderRadius: 6, fontSize: 12.5,
+                                    fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font)',
+                                  }}>
+                                  {confirmState?.loading ? 'Aplicando…' : `✓ Confirmar y aplicar`}
+                                </button>
+                                <button onClick={() => setConfirmed(c => ({ ...c, [confirmKey]: { result: { ok: true, summary: 'Cancelado por el usuario' } } }))}
+                                  style={{
+                                    background: 'transparent', color: 'var(--text3)',
+                                    border: '1px solid var(--border)',
+                                    padding: '7px 14px', borderRadius: 6, fontSize: 12.5,
+                                    cursor: 'pointer', fontFamily: 'var(--font)',
+                                  }}>
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {confirmState?.result && (
+                            <div style={{
+                              marginTop: 10, padding: '10px 14px',
+                              background: confirmState.result.ok ? 'rgba(34,214,138,0.08)' : 'rgba(240,90,90,0.08)',
+                              border: `1px solid ${confirmState.result.ok ? 'rgba(34,214,138,0.3)' : 'rgba(240,90,90,0.3)'}`,
+                              borderRadius: 8, fontSize: 12,
+                              color: confirmState.result.ok ? '#22d68a' : '#f05a5a',
+                            }}>
+                              {confirmState.result.ok ? '✓' : '⚠️'} {confirmState.result.summary}
+                            </div>
+                          )}
+                          {confirmState?.error && (
+                            <div style={{ marginTop: 8, fontSize: 12, color: '#f05a5a' }}>⚠️ {confirmState.error}</div>
+                          )}
                         </div>
-                        <div style={{ fontSize: 12, color: 'var(--text2)' }}>{a.result.summary}</div>
-                        {a.result.affected && a.result.affected.length > 0 && (
-                          <details style={{ marginTop: 6 }}>
-                            <summary style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer' }}>
-                              Ver {a.result.affected.length} lead{a.result.affected.length === 1 ? '' : 's'} afectado{a.result.affected.length === 1 ? '' : 's'}
-                            </summary>
-                            <ul style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, paddingLeft: 20 }}>
-                              {a.result.affected.map((af, k) => (
-                                <li key={k}>{af.nombre || af.email}</li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
                 {t.usage && (
@@ -201,17 +338,46 @@ export default function AsistenteClient() {
           <textarea
             ref={inputRef}
             className={styles.input}
-            placeholder="Preguntá sobre tus leads..."
+            placeholder={attachedFile ? `Hablale del archivo "${attachedFile.name}"...` : 'Preguntá sobre tus leads...'}
             value={question}
             onChange={e => setQuestion(e.target.value)}
             onKeyDown={onKey}
             rows={2}
             disabled={busy}
           />
-          <button className={styles.sendBtn} onClick={() => ask(question)} disabled={busy || !question.trim()}>
+          <input ref={fileInputRef} type="file" accept=".csv,.txt,.json,.tsv" onChange={onFile}
+            style={{ display: 'none' }} />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            title="Subir archivo (CSV, TXT, JSON) para que el asistente lo procese"
+            style={{
+              background: 'var(--glass)', border: '1px solid var(--border2)',
+              color: 'var(--text2)', padding: '0 14px', borderRadius: 'var(--radius-pill)',
+              fontSize: 18, cursor: 'pointer', fontFamily: 'var(--font)',
+              minHeight: 44,
+            }}>
+            📎
+          </button>
+          <button className={styles.sendBtn} onClick={() => ask(question)} disabled={busy || (!question.trim() && !attachedFile)}>
             {busy ? '…' : 'Enviar'}
           </button>
         </div>
+        {attachedFile && (
+          <div style={{
+            margin: '8px 32px 0', padding: '8px 12px',
+            background: 'var(--glass)', border: '1px solid var(--border)',
+            borderRadius: 8, fontSize: 12, color: 'var(--text2)',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span>📎</span>
+            <span><strong style={{ color: 'var(--text)' }}>{attachedFile.name}</strong> · {(attachedFile.size / 1024).toFixed(1)} KB adjunto</span>
+            <button onClick={() => { setAttachedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+              style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}>
+              ✕
+            </button>
+          </div>
+        )}
       </main>
     </div>
   )
