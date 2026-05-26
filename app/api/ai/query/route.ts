@@ -115,10 +115,12 @@ CUÁNDO USAR TOOLS:
 - Acciones masivas: SIEMPRE primero con confirm=false (dry-run) para mostrar al user qué se va a cambiar,
   y solo aplicá confirm=true después de que el user confirme.
 - "llamá por AI a X" → queue_vambe_calls (placeholder, avisá que no está implementado todavía).
-- "dame CSV", "exporta a archivo", "descárgame X", "pasame en archivo" → SIEMPRE usá generate_file.
-  NO listes el CSV inline en la respuesta — el archivo es para descargar. Solo confirmá brevemente
-  qué generaste y los counts. Para CSVs, headers en la primera línea, separar con coma, escapar
-  con comillas valores que contengan coma o salto de línea.
+- "dame CSV", "exporta a archivo", "descárgame X", "pasame en archivo" → SIEMPRE usá generate_file
+  EN EL MISMO TURNO. No digas "voy a generar..." sin llamar la tool — eso no produce nada.
+  Tenés que invocar la tool generate_file con el contenido completo del CSV YA. Después de invocarla,
+  el frontend muestra automáticamente el botón de descarga. NO listes el CSV inline en la respuesta.
+  Para CSVs: headers en primera línea, separar con coma, escapar con comillas valores que tengan coma
+  o salto de línea. Una sola llamada a generate_file por archivo.
 
 CUÁNDO NO USAR TOOLS:
 - Preguntas de análisis ("cuántos", "qué canal", "promedio") → respondé directo desde el JSON/summary, sin tools.
@@ -184,7 +186,7 @@ ${question}`
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2048,
+        max_tokens: 8000,  // Suficiente para generar CSVs grandes en una sola llamada
         system: SYSTEM(ctx),
         messages,
         tools: TOOL_DEFINITIONS,
