@@ -260,7 +260,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'settings' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -284,6 +284,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
       {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
       {link('/asistente', 'asistente', 'Asistente', '🧠')}
+      {link('/settings', 'settings', 'Settings', '⚙️')}
     </nav>
   )
 }

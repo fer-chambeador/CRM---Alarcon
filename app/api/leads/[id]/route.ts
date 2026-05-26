@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { normalizeCanal } from '@/lib/canales'
+import { syncLeadToCalendar } from '@/lib/googleCalendar'
 
 const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at'] as const
 
@@ -122,6 +123,31 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
     if (actividades.length > 0) {
       await supabase.from('lead_actividad').insert(actividades)
+    }
+  }
+
+  // Sync con Google Calendar si llamada_at cambió. Best-effort, no
+  // bloquea la respuesta si falla.
+  if (leadBefore && 'llamada_at' in updates) {
+    const before = leadBefore as Record<string, unknown>
+    const oldLlamada = (before.llamada_at as string | null) ?? null
+    const newLlamada = (updates.llamada_at as string | null) ?? null
+    const oldEventId = (before.google_calendar_event_id as string | null) ?? null
+    if (oldLlamada !== newLlamada) {
+      const sync = await syncLeadToCalendar(supabase, data, newLlamada, oldEventId)
+      if (sync.ok && sync.event_id !== oldEventId) {
+        await supabase.from('leads')
+          .update({ google_calendar_event_id: sync.event_id })
+          .eq('id', id)
+      }
+      if (!sync.ok) {
+        await supabase.from('lead_actividad').insert({
+          lead_id: id,
+          tipo: 'calendar_sync_error',
+          descripcion: `Falló sync con Google Calendar: ${sync.error}`,
+          metadata: { error: sync.error },
+        })
+      }
     }
   }
 
