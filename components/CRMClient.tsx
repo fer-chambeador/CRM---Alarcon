@@ -810,6 +810,20 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 }
 
 // ─── Export Modal ────────────────────────────────────────────────────────────
+// Buckets de "días sin contactar" usados solo en el modal de export.
+// Independientes del aging chip de la tabla (que usa otra escala).
+const EXPORT_AGING_BUCKETS: Array<{ value: string; label: string; test: (d: number) => boolean }> = [
+  { value: 'd1-3',     label: '1-3 días',   test: d => d >= 1 && d <= 3 },
+  { value: 'd4-6',     label: '4-6 días',   test: d => d >= 4 && d <= 6 },
+  { value: 'd7-10',    label: '7-10 días',  test: d => d >= 7 && d <= 10 },
+  { value: 'd11-15',   label: '11-15 días', test: d => d >= 11 && d <= 15 },
+  { value: 'd_over15', label: '>15 días',   test: d => d > 15 },
+]
+function exportAgingBucket(days: number): string | null {
+  for (const b of EXPORT_AGING_BUCKETS) if (b.test(days)) return b.value
+  return null
+}
+
 function ExportModal({ leads, onClose, onDownload }: {
   leads: Lead[]
   onClose: () => void
@@ -824,6 +838,7 @@ function ExportModal({ leads, onClose, onDownload }: {
     const ubicacionMap = new Map<string, number>()
     const presupuestoMap = new Map<string, number>()
     const intentosMap = new Map<string, number>()
+    const agingMap = new Map<string, number>()
 
     for (const l of leads) {
       const canal = l.canal_adquisicion || SIN_DATO
@@ -839,16 +854,24 @@ function ExportModal({ leads, onClose, onDownload }: {
 
       const intentos = String(l.veces_contactado || 0)
       intentosMap.set(intentos, (intentosMap.get(intentos) || 0) + 1)
+
+      const ab = exportAgingBucket(daysInCurrentStage(l))
+      if (ab) agingMap.set(ab, (agingMap.get(ab) || 0) + 1)
     }
     const toList = (m: Map<string, number>): Bucket[] =>
       Array.from(m.entries())
         .map(([value, count]) => ({ value, label: value, count }))
         .sort((a, b) => b.count - a.count)
+    // Aging en el orden definido en EXPORT_AGING_BUCKETS (1-3, 4-6, 7-10, 11-15, >15)
+    const agingList: Bucket[] = EXPORT_AGING_BUCKETS
+      .filter(b => agingMap.has(b.value))
+      .map(b => ({ value: b.value, label: b.label, count: agingMap.get(b.value) || 0 }))
     return {
       canales: toList(canalMap),
       ubicaciones: toList(ubicacionMap),
       presupuestos: toList(presupuestoMap),
       intentos: toList(intentosMap),
+      aging: agingList,
     }
   }, [leads])
 
@@ -858,6 +881,7 @@ function ExportModal({ leads, onClose, onDownload }: {
   const [selUbicaciones, setSelUbicaciones] = useState<Set<string>>(() => allValues(buckets.ubicaciones))
   const [selPresupuestos, setSelPresupuestos] = useState<Set<string>>(() => allValues(buckets.presupuestos))
   const [selIntentos, setSelIntentos] = useState<Set<string>>(() => allValues(buckets.intentos))
+  const [selAging, setSelAging] = useState<Set<string>>(() => allValues(buckets.aging))
 
   // Subset filtrado en vivo
   const subset = useMemo(() => {
@@ -870,9 +894,15 @@ function ExportModal({ leads, onClose, onDownload }: {
       if (!selPresupuestos.has(pres)) return false
       const intentos = String(l.veces_contactado || 0)
       if (!selIntentos.has(intentos)) return false
+      const aging = exportAgingBucket(daysInCurrentStage(l))
+      // Si no cae en ningún bucket (ej. <1 día), respetamos: solo
+      // se incluye si TODOS los chips de aging están marcados.
+      if (aging === null) {
+        if (selAging.size !== buckets.aging.length) return false
+      } else if (!selAging.has(aging)) return false
       return true
     })
-  }, [leads, selCanales, selUbicaciones, selPresupuestos, selIntentos])
+  }, [leads, selCanales, selUbicaciones, selPresupuestos, selIntentos, selAging, buckets.aging.length])
 
   const toggleSet = (set: Set<string>, key: string): Set<string> => {
     const next = new Set(set)
@@ -909,6 +939,10 @@ function ExportModal({ leads, onClose, onDownload }: {
             selected={selIntentos} onToggle={(v) => setSelIntentos(s => toggleSet(s, v))}
             onAll={() => setSelIntentos(allValues(buckets.intentos))}
             onNone={() => setSelIntentos(new Set())} />
+          <ExportGroup title="Días sin contactar" buckets={buckets.aging}
+            selected={selAging} onToggle={(v) => setSelAging(s => toggleSet(s, v))}
+            onAll={() => setSelAging(allValues(buckets.aging))}
+            onNone={() => setSelAging(new Set())} />
         </div>
         <div className={styles.modalFooter}>
           <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>
