@@ -131,9 +131,10 @@ export default function RecurrentesClient() {
   const [filterContrato, setFilterContrato] = useState<'todos' | TipoContrato>('todos')
   const [enriching, setEnriching] = useState(false)
   const [enrichMsg, setEnrichMsg] = useState<string | null>(null)
-  const [sort, setSort] = useState<{ key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima'; dir: 'asc' | 'desc' }>(
-    { key: 'total', dir: 'desc' }
-  )
+  const [sort, setSort] = useState<{
+    key: 'total' | 'veces' | 'fecha' | 'cliente' | 'avg' | 'ultima' | 'estatus' | 'tipo' | 'contrato' | 'canal';
+    dir: 'asc' | 'desc';
+  }>({ key: 'total', dir: 'desc' })
   const [editing, setEditing] = useState<Cliente | null>(null)
 
   const load = useCallback(async () => {
@@ -187,6 +188,10 @@ export default function RecurrentesClient() {
   // ── Sorted ──
   const clientes = useMemo(() => {
     const dir = sort.dir === 'asc' ? 1 : -1
+    // Orden semántico de estatus (activo > renovar > churn)
+    const estatusRank: Record<EstatusCliente, number> = { activo: 0, renovar: 1, churn: 2 }
+    const tipoRank: Record<TipoCliente, number> = { corporativo: 0, grande: 1, mediano: 2, pequeño: 3 }
+    const contratoRank: Record<TipoContrato, number> = { anual: 0, semestral: 1, mensual: 2 }
     return [...filtered].sort((a, b) => {
       switch (sort.key) {
         case 'total': return dir * (a.total_pagado - b.total_pagado)
@@ -195,6 +200,10 @@ export default function RecurrentesClient() {
         case 'fecha': return dir * (String(a.fecha_inicio || '').localeCompare(String(b.fecha_inicio || '')))
         case 'ultima': return dir * (String(a.ultima_aparicion || '').localeCompare(String(b.ultima_aparicion || '')))
         case 'cliente': return dir * a.cliente.localeCompare(b.cliente)
+        case 'estatus': return dir * (estatusRank[a.estatus] - estatusRank[b.estatus])
+        case 'tipo': return dir * (tipoRank[a.tipo_cliente] - tipoRank[b.tipo_cliente])
+        case 'contrato': return dir * (contratoRank[a.tipo_contrato] - contratoRank[b.tipo_contrato])
+        case 'canal': return dir * (a.canales[0] || '').localeCompare(b.canales[0] || '')
       }
     })
   }, [filtered, sort])
@@ -350,15 +359,15 @@ export default function RecurrentesClient() {
                   <thead>
                     <tr>
                       <th onClick={() => onSort('cliente')}>Cliente{arrow('cliente')}</th>
-                      <th>Estatus</th>
-                      <th>Tipo</th>
-                      <th>Contrato</th>
+                      <th onClick={() => onSort('estatus')}>Estatus{arrow('estatus')}</th>
+                      <th onClick={() => onSort('tipo')}>Tipo{arrow('tipo')}</th>
+                      <th onClick={() => onSort('contrato')}>Contrato{arrow('contrato')}</th>
                       <th onClick={() => onSort('fecha')}>Fecha de inicio{arrow('fecha')}</th>
                       <th onClick={() => onSort('ultima')}>Último pago{arrow('ultima')}</th>
                       <th onClick={() => onSort('veces')} className={styles.right}>Meses renov.{arrow('veces')}</th>
                       <th onClick={() => onSort('avg')} className={styles.right}>Ticket prom.{arrow('avg')}</th>
                       <th onClick={() => onSort('total')} className={styles.right}>Total{arrow('total')}</th>
-                      <th>Canal(es)</th>
+                      <th onClick={() => onSort('canal')}>Método de pago{arrow('canal')}</th>
                       <th></th>
                     </tr>
                   </thead>

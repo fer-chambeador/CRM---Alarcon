@@ -215,11 +215,13 @@ function tipoClienteFromAvg(avgTicket: number): TipoCliente {
 
 /**
  * Estatus por última aparición — ajustado al tipo de contrato.
- * Un cliente anual que pagó hace 5 meses NO es churn, es normal.
  *
- *  mensual:    activo ≤60 d / renovar ≤90 d  / churn >90 d
+ *  mensual:    activo ≤30 d / churn >30 d  (binario, regla del user)
  *  semestral:  activo ≤210 d / renovar ≤240 d / churn >240 d
  *  anual:      activo ≤400 d / renovar ≤430 d / churn >430 d
+ *
+ * Para mensual no hay estado intermedio "renovar" — el usuario quiere
+ * que el corte sea 30 días estrictos.
  */
 function estatusFromUltima(
   ultima: string | null,
@@ -229,8 +231,10 @@ function estatusFromUltima(
   if (!ultima) return 'churn'
   const t = new Date(ultima + 'T00:00:00').getTime()
   const days = (now - t) / DAY_MS
+  if (contrato === 'mensual') {
+    return days <= 30 ? 'activo' : 'churn'
+  }
   const T = {
-    mensual:   { activo: 60,  renovar: 90 },
     semestral: { activo: 210, renovar: 240 },
     anual:     { activo: 400, renovar: 430 },
   }[contrato]
@@ -481,13 +485,16 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
 
     // Fecha: 1) header explícito; 2) si no, detectar por contenido la
     //    columna que tenga mayor proporción de celdas parseables como fecha.
+    //    Más agresivo ahora: prueba TODAS las columnas, threshold 30%,
+    //    necesita mínimo 2 hits.
     let idxFecha = findCol(headers, ['fecha', 'date', 'dia', 'día'])
     const tabYear = tabDate ? parseInt(tabDate.slice(0, 4), 10) : undefined
     if (idxFecha < 0 && rows.length > 1) {
-      const sampleLimit = Math.min(rows.length, 25)
-      const maxCol = Math.min(headers.length, 6)
+      const sampleLimit = Math.min(rows.length, 50)
+      const maxCol = headers.length
       let bestCol = -1
       let bestRatio = 0
+      let bestHits = 0
       for (let col = 0; col < maxCol; col++) {
         let hits = 0
         let total = 0
@@ -497,11 +504,12 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
           total += 1
           if (parseFecha(cell, tabYear)) hits += 1
         }
-        if (total < 3) continue
-        const ratio = hits / total
-        // ≥50% de celdas parseables como fecha → buena candidata
-        if (ratio > bestRatio && ratio >= 0.5) {
+        if (hits < 2) continue
+        const ratio = total > 0 ? hits / total : 0
+        // ≥30% de celdas parseables (más agresivo que antes)
+        if (ratio >= 0.3 && (ratio > bestRatio || (ratio === bestRatio && hits > bestHits))) {
           bestRatio = ratio
+          bestHits = hits
           bestCol = col
         }
       }
@@ -605,7 +613,7 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     // NO aplicamos override de fecha_inicio — la fecha siempre es la
     // del primer pago real registrado en el sheet. Overrides viejos
     // se ignoran (quedan en la DB pero ya no se usan).
-    if (ov.canal) c.canales = [ov.canal]
+    if (ov.canal) c.canales = [normalizeCanal(ov.canal)]
     c.notas = ov.notas
     c.hidden = ov.hidden === true
     // Overrides manuales de campos derivados
