@@ -142,7 +142,7 @@ function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: st
 }
 
 // ─── Funnel ──────────────────────────────────────────────────────────────────
-function FunnelChart({ leads }: { leads: Lead[] }) {
+function FunnelChart({ leads, cycle }: { leads: Lead[]; cycle?: ReturnType<typeof cycleStats> }) {
   const counts = STATUS_PROJECTION_ORDER.map(s => ({
     s, label: STATUS_LABELS[s], count: leads.filter(l => l.status === s).length,
     monto: sumMonto(leads.filter(l => l.status === s)),
@@ -151,8 +151,15 @@ function FunnelChart({ leads }: { leads: Lead[] }) {
   return (
     <section className={styles.section}>
       <header className={styles.sectionHeader}>
-        <h3>Funnel por status</h3>
-        <span className={styles.sectionSubtitle}>Estado actual de los leads en el rango</span>
+        <div>
+          <h3>Funnel por status</h3>
+          <span className={styles.sectionSubtitle}>
+            Estado actual de los leads en el rango
+            {cycle && cycle.count > 0 && (
+              <> · Ciclo Nuevo→Cerrado: <strong>{cycle.medianDays.toFixed(0)} días</strong> (mediana, {cycle.count} cerrados)</>
+            )}
+          </span>
+        </div>
       </header>
       <div className={styles.funnel}>
         {counts.map(c => (
@@ -230,12 +237,14 @@ function DailyTimeline({ leads, range }: { leads: Lead[]; range: DateRange }) {
 }
 
 // ─── Forecast section ──────────────────────────────────────────────────────
-function ForecastSection({ buckets, forecast, cerradoReal, goal, goalLabel }: {
+function ForecastSection({ buckets, forecast, cerradoReal, goal, goalLabel, convRate, totalLeads }: {
   buckets: ReturnType<typeof forecastByStage>
   forecast: number
   cerradoReal: number
   goal: number
   goalLabel: string
+  convRate: number
+  totalLeads: number
 }) {
   const max = buckets.length ? Math.max(...buckets.map(b => b.contribution)) : 0
   const goalPct = goal > 0 ? Math.min(100, (cerradoReal / goal) * 100) : 0
@@ -270,6 +279,14 @@ function ForecastSection({ buckets, forecast, cerradoReal, goal, goalLabel }: {
             {cerradoReal >= goal ? `+${fmtMoney(cerradoReal - goal)}` : `−${fmtMoney(goal - cerradoReal)}`}
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>{cerradoReal >= goal ? 'meta superada' : 'faltan para meta'}</div>
+        </div>
+        <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px' }}
+          title="Convertidos / leads no descartados. Mide la CALIDAD del funnel, no el volumen.">
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>Conv. rate</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, color: '#f5c842', marginTop: 6 }}>
+            {fmtPct(convRate)}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>de {totalLeads} leads</div>
         </div>
       </div>
       {buckets.length === 0
@@ -551,6 +568,100 @@ function TacticsSection({ tactics }: { tactics: Tactic[] }) {
   )
 }
 
+// ─── Quién convierte (canal, presupuesto, vacante) ──────────────────────
+function ConvertersSection({ byCanal, byPresupuesto, byVacante }: {
+  byCanal: BreakdownRow[]
+  byPresupuesto: BreakdownRow[]
+  byVacante: BreakdownRow[]
+}) {
+  const cards: Array<{ title: string; subtitle: string; rows: BreakdownRow[] }> = [
+    { title: 'Por canal', subtitle: 'De dónde vienen los que cierran', rows: byCanal },
+    { title: 'Por presupuesto', subtitle: 'Qué tier de inversión convierte', rows: byPresupuesto },
+    { title: 'Por vacante', subtitle: 'Qué puestos cierran más rápido', rows: byVacante },
+  ]
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>¿Quién convierte?</h3>
+          <span className={styles.sectionSubtitle}>
+            Top 3 por conversion rate y por revenue cerrado. Conv rate filtra a segmentos con ≥3 leads para evitar ruido.
+          </span>
+        </div>
+      </header>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+        {cards.map(c => <ConverterCard key={c.title} title={c.title} subtitle={c.subtitle} rows={c.rows} />)}
+      </div>
+    </section>
+  )
+}
+
+function ConverterCard({ title, subtitle, rows }: { title: string; subtitle: string; rows: BreakdownRow[] }) {
+  const byConvRate = [...rows]
+    .filter(r => r.leads >= 3 && r.key !== '— sin dato —')
+    .map(r => ({ ...r, rate: r.leads > 0 ? r.cerrados / r.leads : 0 }))
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, 3)
+  const byRevenue = [...rows]
+    .filter(r => r.pipelineCerrado > 0 && r.key !== '— sin dato —')
+    .sort((a, b) => b.pipelineCerrado - a.pipelineCerrado)
+    .slice(0, 3)
+  const maxRate = byConvRate[0]?.rate || 0
+  const maxRev = byRevenue[0]?.pipelineCerrado || 0
+
+  return (
+    <div style={{
+      background: 'var(--glass)', border: '1px solid var(--border)',
+      borderRadius: 12, padding: '14px 16px',
+    }}>
+      <div style={{ marginBottom: 10 }}>
+        <strong style={{ fontSize: 13.5, color: 'var(--text)' }}>{title}</strong>
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{subtitle}</div>
+      </div>
+
+      {/* Por conv rate */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 6 }}>
+          Top conv. rate
+        </div>
+        {byConvRate.length === 0
+          ? <div style={{ fontSize: 11.5, color: 'var(--text3)', fontStyle: 'italic' }}>Sin datos suficientes (n≥3)</div>
+          : byConvRate.map(r => (
+              <div key={r.key} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12, marginBottom: 2 }}>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{r.key}</span>
+                  <span style={{ color: '#22d68a', fontFamily: 'var(--font-display)', fontWeight: 700 }}>
+                    {(r.rate * 100).toFixed(0)}% <span style={{ color: 'var(--text3)', fontSize: 10, fontWeight: 400 }}>({r.cerrados}/{r.leads})</span>
+                  </span>
+                </div>
+                <Bar value={r.rate} max={maxRate} color="#22d68a" />
+              </div>
+            ))}
+      </div>
+
+      {/* Por revenue */}
+      <div>
+        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 6 }}>
+          Top revenue cerrado
+        </div>
+        {byRevenue.length === 0
+          ? <div style={{ fontSize: 11.5, color: 'var(--text3)', fontStyle: 'italic' }}>Aún no hay cierres en este rango</div>
+          : byRevenue.map(r => (
+              <div key={r.key} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12, marginBottom: 2 }}>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{r.key}</span>
+                  <span style={{ color: '#7c6af7', fontFamily: 'var(--font-display)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtMoney(r.pipelineCerrado)}
+                  </span>
+                </div>
+                <Bar value={r.pipelineCerrado} max={maxRev} color="#7c6af7" />
+              </div>
+            ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Notas por status (análisis cualitativo) ─────────────────────────────
 function NotasSection({ leads }: { leads: Lead[] }) {
   const [expanded, setExpanded] = useState<Lead['status'] | null>('descartado')
@@ -726,27 +837,10 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           </select>
         </div>
         <div className={styles.kpiList}>
+          {/* Sidebar minimal — info clave está en el hero del body, no duplicada. */}
           <div className={styles.kpi}><span>Total leads</span><strong>{stats.total}</strong></div>
-          <div className={styles.kpi}
-            title="Conv. rate = convertidos / leads no descartados. Excluye descartados para que el % no se infle al limpiar leads muertos.">
-            <span>Convertidos</span><strong>{stats.cerrados}</strong>
-          </div>
+          <div className={styles.kpi}><span>Convertidos</span><strong>{stats.cerrados}</strong></div>
           <div className={styles.kpi}><span>Conv. rate</span><strong>{fmtPct(stats.conversionRate)}</strong></div>
-          <div className={styles.kpi}
-            title="Mediana de días entre la creación del lead y el cambio a 'convertido' o 'cliente recurrente'">
-            <span>Ciclo Nuevo→Cerrado</span>
-            <strong>{stats.cycle.count > 0 ? `${stats.cycle.medianDays.toFixed(0)} d` : '—'}</strong>
-          </div>
-          <div className={styles.kpiMoney}
-            title="Suma de monto de leads NO descartados. Los descartados no cuentan como pipeline.">
-            <span>Pipeline total</span><strong>{fmtMoney(stats.pipeline)}</strong>
-          </div>
-          <div className={styles.kpiMoney}><span>En cierre</span><strong style={{ color: '#a594ff' }}>{fmtMoney(stats.pipelineCierre)}</strong></div>
-          <div className={styles.kpiMoney}><span>Cerrado</span><strong style={{ color: '#22d68a' }}>{fmtMoney(stats.pipelineCerrado)}</strong></div>
-          <div className={styles.kpiMoney}
-            title="Σ (monto × probabilidad de cierre por stage). Proyección ponderada del periodo.">
-            <span>Forecast</span><strong style={{ color: '#7c6af7' }}>{fmtMoney(stats.forecast)}</strong>
-          </div>
         </div>
       </aside>
 
@@ -756,17 +850,13 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         </header>
 
         <div className={styles.body}>
-          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} />
-          <TacticsSection tactics={tactics} />
-          <FunnelChart leads={scoped} />
+          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} convRate={stats.conversionRate} totalLeads={stats.total} />
+          <FunnelChart leads={scoped} cycle={stats.cycle} />
+          <ConvertersSection byCanal={byCanal} byPresupuesto={byPresupuesto} byVacante={byVacante} />
           <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
-          <NotasSection leads={scoped} />
-          <BreakdownTable title="Por canal" subtitle="Qué canales generan más pipeline" rows={byCanal} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
-          <BreakdownTable title="Por presupuesto" subtitle="Tier de inversión declarado en onboarding" rows={byPresupuesto} />
-          <BreakdownTable title="Por vacante (puesto buscado)" subtitle="Qué roles está reclutando el cliente — clave para entender qué anuncios convierten mejor" rows={byVacante} />
-          <BreakdownTable title="Por decision maker (puesto)" subtitle="Qué roles convierten mejor" rows={byPuesto} />
           <DailyTimeline leads={scoped} range={dateRange} />
+          <TacticsSection tactics={tactics} />
         </div>
       </main>
     </div>
