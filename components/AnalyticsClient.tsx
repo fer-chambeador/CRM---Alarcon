@@ -18,6 +18,12 @@ import { agingByStage, cycleStats, agingBucket, AGING_COLOR } from '@/lib/veloci
 import { goalForPeriod, goalLabel } from '@/lib/goal'
 import type { StagePassCount, TransitionStats, ForwardAdvance } from '@/lib/statusHistory'
 
+// Estilos compartidos para tablas inline
+const thLeft: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text3)' }
+const thRight: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text3)' }
+const tdLeft: React.CSSProperties = { textAlign: 'left', padding: '10px 10px', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }
+const tdRight: React.CSSProperties = { textAlign: 'right', padding: '10px 10px', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }
+
 type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
 const DATE_LABELS: Record<DateRange, string> = {
   todo: 'Todo el tiempo',
@@ -965,6 +971,431 @@ function GroupHeader({ title, subtitle }: { title: string; subtitle?: string }) 
   )
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// REDISEÑO BI DASHBOARD — componentes nuevos
+// ═════════════════════════════════════════════════════════════════════════
+
+// ─── KPI Card limpia (sin gradiente, label uppercase, número grande) ─────
+function KPICard({ label, value, sub, accentColor }: {
+  label: string
+  value: string
+  sub?: string
+  accentColor?: string
+}) {
+  return (
+    <div style={{
+      background: 'var(--glass)',
+      border: '1px solid var(--border)',
+      borderRadius: 14,
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 4,
+      minWidth: 0,
+    }}>
+      <div style={{
+        fontSize: 10.5, color: 'var(--text3)',
+        textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: 'var(--font-display)',
+        fontSize: 'clamp(20px, 2vw, 30px)',
+        fontWeight: 800,
+        color: accentColor || 'var(--text)',
+        letterSpacing: '-0.025em',
+        fontVariantNumeric: 'tabular-nums',
+        lineHeight: 1.1,
+        marginTop: 4,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip',
+      }}>{value}</div>
+      {sub && (
+        <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tabs Table — tabla con tabs (canal/vacante/presupuesto/ciudad) ─────
+type TabKey = 'canal' | 'vacante' | 'presupuesto' | 'ciudad'
+const TAB_LABELS: Record<TabKey, string> = {
+  canal: 'Por canal',
+  vacante: 'Por vacante',
+  presupuesto: 'Por presupuesto',
+  ciudad: 'Por ciudad',
+}
+
+function TabsTable({ byCanal, byVacante, byPresupuesto, byEstado, avgConvRate }: {
+  byCanal: BreakdownRow[]
+  byVacante: BreakdownRow[]
+  byPresupuesto: BreakdownRow[]
+  byEstado: BreakdownRow[]
+  avgConvRate: number
+}) {
+  const [tab, setTab] = useState<TabKey>('canal')
+  const rowsByTab: Record<TabKey, BreakdownRow[]> = {
+    canal: byCanal, vacante: byVacante, presupuesto: byPresupuesto, ciudad: byEstado,
+  }
+  const rows = rowsByTab[tab]
+    .filter(r => r.key !== '— sin dato —')
+    .map(r => ({ ...r, convRate: r.leads > 0 ? r.cerrados / r.leads : 0 }))
+    .sort((a, b) => b.convRate - a.convRate)
+
+  // Color del % según comparación con promedio
+  const colorForConv = (rate: number) => {
+    if (rate > avgConvRate * 1.1) return '#22d68a'  // mejor que el promedio
+    if (rate < avgConvRate * 0.6) return '#f05a5a'  // bajo
+    return '#f5c842'  // promedio
+  }
+
+  return (
+    <section className={styles.section}>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 14, paddingBottom: 0 }}>
+        {(Object.keys(TAB_LABELS) as TabKey[]).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{
+              background: 'transparent', border: 'none',
+              borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
+              color: tab === t ? 'var(--text)' : 'var(--text3)',
+              padding: '10px 14px', cursor: 'pointer',
+              fontFamily: 'var(--font)', fontSize: 13, fontWeight: 500,
+              marginBottom: -1,
+            }}>
+            {TAB_LABELS[t]}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+        <div>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>
+            Rendimiento {TAB_LABELS[tab].toLowerCase()}
+          </h3>
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+            Ordenado por conv. rate · Promedio {fmtPct(avgConvRate)}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text3)' }}>
+          <span><span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: '#22d68a', marginRight: 4 }} />Mejor</span>
+          <span><span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: '#f5c842', marginRight: 4 }} />Promedio</span>
+          <span><span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: '#f05a5a', marginRight: 4 }} />Bajo</span>
+        </div>
+      </div>
+
+      {rows.length === 0
+        ? <div className={styles.empty}>Sin datos en este rango.</div>
+        : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <th style={{ ...thLeft, width: 36 }}>#</th>
+                <th style={thLeft}>{TAB_LABELS[tab].replace('Por ', '').charAt(0).toUpperCase() + TAB_LABELS[tab].replace('Por ', '').slice(1)}</th>
+                <th style={thRight}>Leads</th>
+                <th style={thRight}>Conv. %</th>
+                <th style={thRight}>Cerrados</th>
+                <th style={thRight}>Revenue</th>
+                <th style={thRight}>Rev/lead</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const color = colorForConv(r.convRate)
+                const revPerLead = r.leads > 0 ? r.pipelineCerrado / r.leads : 0
+                return (
+                  <tr key={r.key} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={tdLeft}>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 22, height: 22, borderRadius: 6,
+                        background: color + '22', color: color,
+                        fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 11,
+                      }}>{i + 1}</span>
+                    </td>
+                    <td style={{ ...tdLeft, fontWeight: 500 }}>{r.key}</td>
+                    <td style={tdRight}>{r.leads}</td>
+                    <td style={{ ...tdRight }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span style={{ color, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 14 }}>
+                          {(r.convRate * 100).toFixed(0)}%
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
+                          {r.cerrados}/{r.leads}
+                        </span>
+                      </div>
+                    </td>
+                    <td style={tdRight}>{r.cerrados}</td>
+                    <td style={tdRight}>{fmtMoney(r.pipelineCerrado)}</td>
+                    <td style={tdRight}>{fmtMoney(revPerLead)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+    </section>
+  )
+}
+
+// ─── Insights clave (sidebar derecho con cards accionables one-liner) ────
+type Insight = { emoji: string; title: React.ReactNode; sub?: string; level: 'good' | 'warn' | 'neutral' }
+function buildInsights({ byCanal, byPresupuesto, avgConvRate, totalLeads }: {
+  byCanal: BreakdownRow[]
+  byPresupuesto: BreakdownRow[]
+  avgConvRate: number
+  totalLeads: number
+}): Insight[] {
+  const out: Insight[] = []
+  const canalesElegibles = byCanal.filter(c => c.leads >= 5 && c.key !== '— sin dato —' && c.cerrados > 0)
+  const bestCanal = [...canalesElegibles].sort((a, b) => (b.cerrados/b.leads) - (a.cerrados/a.leads))[0]
+  if (bestCanal && avgConvRate > 0) {
+    const rate = bestCanal.cerrados / bestCanal.leads
+    const factor = rate / avgConvRate
+    if (factor >= 1.3) {
+      out.push({
+        emoji: '📈',
+        title: <><strong>{bestCanal.key}</strong> convierte <strong>{factor.toFixed(1)}x</strong> mejor que el promedio</>,
+        sub: `${(rate * 100).toFixed(0)}% vs ${(avgConvRate * 100).toFixed(0)}% de conversión promedio`,
+        level: 'good',
+      })
+    }
+  }
+  // Revenue por lead — mejor canal
+  const avgRevPerLead = canalesElegibles.length > 0
+    ? canalesElegibles.reduce((s, c) => s + c.pipelineCerrado, 0) / canalesElegibles.reduce((s, c) => s + c.leads, 0)
+    : 0
+  const bestRev = [...canalesElegibles].sort((a, b) => (b.pipelineCerrado/b.leads) - (a.pipelineCerrado/a.leads))[0]
+  if (bestRev && avgRevPerLead > 0) {
+    const rpl = bestRev.pipelineCerrado / bestRev.leads
+    const factor = rpl / avgRevPerLead
+    if (factor >= 1.5) {
+      out.push({
+        emoji: '💰',
+        title: <><strong>{bestRev.key}</strong> genera <strong>{factor.toFixed(1)}x</strong> más revenue por lead</>,
+        sub: `${fmtMoney(rpl)} vs ${fmtMoney(avgRevPerLead)} promedio por lead`,
+        level: 'good',
+      })
+    }
+  }
+  // Muestra insuficiente
+  const lowSample = byCanal.filter(c => c.leads >= 1 && c.leads < 5 && c.cerrados > 0 && c.cerrados / c.leads >= 0.5)
+  if (lowSample[0]) {
+    const c = lowSample[0]
+    out.push({
+      emoji: '⚠️',
+      title: <><strong>{c.key}</strong> tiene {(c.cerrados/c.leads*100).toFixed(0)}% de conversión</>,
+      sub: `Pero solo ${c.leads} lead${c.leads === 1 ? '' : 's'}. Muestra insuficiente`,
+      level: 'warn',
+    })
+  }
+  // Canal con conv baja
+  const lowConv = canalesElegibles.filter(c => avgConvRate > 0 && (c.cerrados/c.leads) < avgConvRate * 0.5)
+  if (lowConv.length > 0) {
+    const names = lowConv.slice(0, 2).map(c => c.key).join(' y ')
+    out.push({
+      emoji: '📉',
+      title: <><strong>{names}</strong> tienen baja conversión</>,
+      sub: 'Considera optimizar o pausar inversión',
+      level: 'warn',
+    })
+  }
+  // Mejor tier de presupuesto
+  const bestPres = [...byPresupuesto.filter(p => p.leads >= 3 && p.key !== '— sin dato —' && p.cerrados > 0)]
+    .sort((a, b) => (b.cerrados/b.leads) - (a.cerrados/a.leads))[0]
+  if (bestPres) {
+    const rate = bestPres.cerrados / bestPres.leads
+    out.push({
+      emoji: '🎯',
+      title: <>Presupuesto <strong>{bestPres.key}</strong> convierte al {(rate * 100).toFixed(0)}%</>,
+      sub: 'Calificá leads por presupuesto temprano',
+      level: 'neutral',
+    })
+  }
+  return out.slice(0, 4)
+}
+
+function InsightsSidebar({ insights }: { insights: Insight[] }) {
+  const colors = { good: '#22d68a', warn: '#f5c842', neutral: '#7c6af7' }
+  return (
+    <div style={{
+      background: 'var(--glass)', border: '1px solid var(--border)',
+      borderRadius: 14, padding: '18px 16px',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{ fontSize: 14 }}>✨</span>
+        <strong style={{ fontSize: 13.5, color: 'var(--text)' }}>Insights clave</strong>
+      </div>
+      {insights.length === 0
+        ? <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>Sin insights suficientes en este rango.</div>
+        : insights.map((ins, i) => (
+            <div key={i} style={{
+              background: 'var(--glass)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${colors[ins.level]}`,
+              borderRadius: 10,
+              padding: '10px 12px',
+            }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>{ins.emoji}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.4 }}>{ins.title}</div>
+                  {ins.sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>{ins.sub}</div>}
+                </div>
+              </div>
+            </div>
+          ))}
+    </div>
+  )
+}
+
+// ─── Bottom row cards ────────────────────────────────────────────────────
+function EficienciaPorCanal({ byCanal }: { byCanal: BreakdownRow[] }) {
+  const rows = byCanal
+    .filter(c => c.key !== '— sin dato —' && c.leads >= 3)
+    .map(c => ({ ...c, revPerLead: c.leads > 0 ? c.pipelineCerrado / c.leads : 0 }))
+    .sort((a, b) => b.revPerLead - a.revPerLead)
+    .slice(0, 6)
+  const max = rows[0]?.revPerLead || 1
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Eficiencia por canal</h3>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 14 }}>Revenue generado por cada lead</div>
+      {rows.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>Sin datos suficientes (n≥3)</div>
+        : rows.map(r => (
+            <div key={r.key} style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12, marginBottom: 3 }}>
+                <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{r.key}</span>
+                <span style={{ color: '#22d68a', fontFamily: 'var(--font-display)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtMoney(r.revPerLead)}
+                </span>
+              </div>
+              <div style={{ height: 5, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${(r.revPerLead / max) * 100}%`, background: 'linear-gradient(90deg, #22d68a, #00c8a0)', borderRadius: 3 }} />
+              </div>
+            </div>
+          ))}
+    </div>
+  )
+}
+
+function DistribucionConversiones({ leads }: { leads: Lead[] }) {
+  const cerrados = leads.filter(l => PIPELINE_CLOSED.includes(l.status))
+  const enProceso = leads.filter(l => !PIPELINE_CLOSED.includes(l.status) && l.status !== 'descartado')
+  const abandonados = leads.filter(l => l.status === 'descartado')
+  const total = leads.length
+  const segments = [
+    { label: 'Cerrados', value: cerrados.length, color: '#22d68a' },
+    { label: 'En proceso', value: enProceso.length, color: '#4ea8f5' },
+    { label: 'Abandonados', value: abandonados.length, color: '#a594ff' },
+  ]
+  const R = 56, STROKE = 18, CX = 75, CY = 75, CIRC = 2 * Math.PI * R
+  let acc = 0
+  const arcs = segments.map(s => {
+    const pct = total > 0 ? s.value / total : 0
+    const dash = pct * CIRC
+    const offset = -acc * CIRC
+    acc += pct
+    return { ...s, pct, dash, offset }
+  })
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Distribución de conversiones</h3>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 14 }}>Del total de leads</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+        <div style={{ position: 'relative', width: 150, height: 150, flexShrink: 0 }}>
+          <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx={CX} cy={CY} r={R} fill="none" stroke="var(--border)" strokeWidth={STROKE} />
+            {arcs.map((a, i) => (
+              <circle key={i} cx={CX} cy={CY} r={R} fill="none"
+                stroke={a.color} strokeWidth={STROKE}
+                strokeDasharray={`${a.dash} ${CIRC}`}
+                strokeDashoffset={a.offset} />
+            ))}
+          </svg>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{total}</div>
+            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>Leads</div>
+          </div>
+        </div>
+        <div style={{ flex: 1 }}>
+          {arcs.map(a => (
+            <div key={a.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: a.color }} />
+                <span style={{ fontSize: 12, color: 'var(--text)' }}>{a.label}</span>
+              </div>
+              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontVariantNumeric: 'tabular-nums' }}>
+                {a.value} <span style={{ color: 'var(--text3)' }}>({(a.pct * 100).toFixed(1)}%)</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function VolumenConfianza({ byCanal }: { byCanal: BreakdownRow[] }) {
+  const tiers = byCanal
+    .filter(c => c.key !== '— sin dato —')
+    .reduce((acc, c) => {
+      if (c.leads >= 30) acc.high.push(c)
+      else if (c.leads >= 10) acc.mid.push(c)
+      else acc.low.push(c)
+      return acc
+    }, { high: [] as BreakdownRow[], mid: [] as BreakdownRow[], low: [] as BreakdownRow[] })
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Conversión por volumen <span style={{ color: 'var(--text3)', fontSize: 11.5, fontWeight: 400 }}>(confiabilidad)</span></h3>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 14 }}>A mayor volumen, mayor confianza</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <ConfianzaRow label="Alta confianza" sub="30+ leads" count={tiers.high.length} color="#22d68a" />
+        <ConfianzaRow label="Media confianza" sub="10 - 29 leads" count={tiers.mid.length} color="#f5c842" />
+        <ConfianzaRow label="Baja confianza" sub="< 10 leads" count={tiers.low.length} color="#f05a5a" />
+      </div>
+    </div>
+  )
+}
+function ConfianzaRow({ label, sub, count, color }: { label: string; sub: string; count: number; color: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 10 }}>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: color }} />
+          <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{label}</span>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, marginLeft: 16 }}>{sub}</div>
+      </div>
+      <span style={{ fontSize: 11, color: count > 0 ? color : 'var(--text3)', fontWeight: 600 }}>
+        {count} segmento{count === 1 ? '' : 's'}
+      </span>
+    </div>
+  )
+}
+
+function VelocidadCierreCard({ cycle }: { cycle: ReturnType<typeof cycleStats> }) {
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Velocidad de cierre <span style={{ color: 'var(--text3)', fontSize: 11.5, fontWeight: 400 }}>(mediana)</span></h3>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 14 }}>Días desde creación a cierre</div>
+      {cycle.count === 0
+        ? <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>Aún no hay cierres en este rango.</div>
+        : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 36, fontWeight: 800, color: '#a594ff', lineHeight: 1 }}>
+                {cycle.medianDays.toFixed(1)}
+              </span>
+              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 500 }}>días</span>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
+              Promedio {cycle.avgDays.toFixed(1)} d · {cycle.count} cerrados en el rango
+            </div>
+          </>
+        )}
+    </div>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 type MovementData = {
   passCounts: StagePassCount[]
@@ -1065,29 +1496,31 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         </header>
 
         <div className={styles.body}>
-          {/* HERO: 4 KPI cards (sin Gap a meta para coincidir con tu lista) */}
-          <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} convRate={stats.conversionRate} totalLeads={stats.total} />
-
-          {/* Row 1: Funnel | Ventas por semana | Fuentes de leads (donut) */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
-            <FunnelChart leads={scoped} cycle={stats.cycle} />
-            <WeeklyConversionChart leads={scoped} range={dateRange} />
-            <SourcesDonut leads={scoped} />
+          {/* HERO: 4 KPI cards limpias */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard label="Ventas cerradas" value={fmtMoney(stats.pipelineCerrado)} sub={`${stats.cerrados} deals · ${DATE_LABELS[dateRange].toLowerCase()}`} accentColor="#22d68a" />
+            <KPICard label="Forecast ponderado" value={fmtMoney(stats.forecast)} sub={`Meta ${fmtMoney(periodGoal)}`} accentColor="#a594ff" />
+            <KPICard label="Tasa de conversión" value={fmtPct(stats.conversionRate)} sub={`${stats.cerrados} de ${stats.total - stats.descartados} (sin descartados)`} accentColor="#4ea8f5" />
+            <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
 
-          {/* Patrones de cierre (3 sub-cards lado a lado) */}
-          <ConvertersSection byCanal={byCanal} byPresupuesto={byPresupuesto} byVacante={byVacante} />
-
-          {/* Tiempos de conversión (funnel health unificado) */}
-          <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
-
-          {/* Row 2: Por ciudad | Por budget */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
-            <BreakdownTable title="Leads por ciudad" subtitle="Distribución geográfica + conversión por estado" rows={byEstado} />
-            <BreakdownTable title="Budget + conversión" subtitle="Tier de presupuesto y qué tan bien convierte" rows={byPresupuesto} />
+          {/* Main: tabla con tabs + sidebar insights */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
+            <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />
+            <InsightsSidebar insights={buildInsights({ byCanal, byPresupuesto, avgConvRate: stats.conversionRate, totalLeads: stats.total })} />
           </div>
 
-          {/* Leads por día (full width) */}
+          {/* Bottom row — 4 cards compactas */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+            <EficienciaPorCanal byCanal={byCanal} />
+            <DistribucionConversiones leads={scoped} />
+            <VolumenConfianza byCanal={byCanal} />
+            <VelocidadCierreCard cycle={stats.cycle} />
+          </div>
+
+          {/* Funnel de ventas + Ventas por semana + Leads por día */}
+          <FunnelChart leads={scoped} cycle={stats.cycle} />
+          <WeeklyConversionChart leads={scoped} range={dateRange} />
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
       </main>
