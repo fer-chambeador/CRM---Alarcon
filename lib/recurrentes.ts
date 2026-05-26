@@ -546,8 +546,26 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
       const monto = idxMonto >= 0 ? parseMonto(row[idxMonto] || '') : 0
       const canalRaw = idxCanal >= 0 ? (row[idxCanal] || '').trim() : ''
       const canal = canalRaw ? normalizeCanal(canalRaw) : ''
-      const fechaRaw = idxFecha >= 0 ? (row[idxFecha] || '').trim() : ''
-      const fecha = parseFecha(fechaRaw, tabYear) || tabDate
+
+      // Fecha: primero intenta la columna detectada. Si falla, escanea
+      // TODAS las columnas de esa fila buscando alguna celda que parsee
+      // como fecha. Solo cae a tabDate si NINGUNA celda de la fila lo logra.
+      let fecha: string | null = null
+      if (idxFecha >= 0) {
+        const fechaRaw = (row[idxFecha] || '').trim()
+        fecha = parseFecha(fechaRaw, tabYear)
+      }
+      if (!fecha) {
+        // Scan de toda la fila
+        for (let c = 0; c < row.length; c++) {
+          if (c === idxCliente || c === idxQuien || c === idxMonto || c === idxCanal || c === idxEmail) continue
+          const cell = (row[c] || '').trim()
+          if (!cell) continue
+          const parsed = parseFecha(cell, tabYear)
+          if (parsed) { fecha = parsed; break }
+        }
+      }
+      if (!fecha) fecha = tabDate
 
       if (!cleanName && !email) continue
 
