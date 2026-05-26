@@ -78,6 +78,27 @@ IMPORTANTE: por default es dry-run (no aplica cambios, solo lista los afectados)
       required: ['lead_emails'],
     },
   },
+  {
+    name: 'generate_file',
+    description: `Genera un archivo descargable para el user. Úsalo cuando el user pida "dame CSV", "exporta a archivo", "descárgame la lista", etc. NO uses esta tool para mostrar info en pantalla — para eso solo respondé en markdown. Esta tool es específicamente para entregar un archivo que el user puede guardar.
+
+Formatos soportados:
+- CSV: separar columnas con coma, headers en la primera línea
+- TXT: texto plano
+- JSON: JSON válido
+
+Después de llamar esta tool, el frontend muestra un botón "⇣ Descargar nombre.csv" al user.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string', description: 'Nombre del archivo con extensión, ej. "leads-convertidos.csv"' },
+        mime_type: { type: 'string', enum: ['text/csv', 'text/plain', 'application/json'], description: 'MIME type del archivo' },
+        content: { type: 'string', description: 'Contenido completo del archivo como string. Para CSV incluí headers en la primera línea.' },
+        description: { type: 'string', description: 'Descripción breve de qué tiene el archivo, ej. "61 leads convertidos con nombre, email, teléfono y monto"' },
+      },
+      required: ['filename', 'mime_type', 'content'],
+    },
+  },
 ] as const
 
 // ─── Result types ──────────────────────────────────────────────────────
@@ -232,6 +253,28 @@ async function execQueueVambeCalls(input: { lead_emails: string[]; prompt?: stri
   }
 }
 
+async function execGenerateFile(input: {
+  filename: string
+  mime_type: string
+  content: string
+  description?: string
+}, _supabase: Supabase): Promise<ToolResult> {
+  // Sanitize filename — sin paths, solo nombre + extensión
+  const safeFilename = input.filename.replace(/[/\\?%*:|"<>]/g, '_').slice(0, 100)
+  const bytes = new TextEncoder().encode(input.content).length
+  return {
+    ok: true,
+    summary: input.description || `Archivo ${safeFilename} listo para descargar (${(bytes / 1024).toFixed(1)} KB)`,
+    data: {
+      file: true,
+      filename: safeFilename,
+      mime_type: input.mime_type,
+      content: input.content,
+      size_bytes: bytes,
+    },
+  }
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────
 export async function executeTool(name: string, input: unknown, supabase: Supabase): Promise<ToolResult> {
   try {
@@ -240,6 +283,7 @@ export async function executeTool(name: string, input: unknown, supabase: Supaba
       case 'bulk_update_status':  return await execBulkUpdateStatus(input as Parameters<typeof execBulkUpdateStatus>[0], supabase)
       case 'add_note_to_lead':    return await execAddNote(input as Parameters<typeof execAddNote>[0], supabase)
       case 'queue_vambe_calls':   return await execQueueVambeCalls(input as Parameters<typeof execQueueVambeCalls>[0], supabase)
+      case 'generate_file':       return await execGenerateFile(input as Parameters<typeof execGenerateFile>[0], supabase)
       default:                    return { ok: false, summary: `Tool desconocida: ${name}`, error: 'unknown_tool' }
     }
   } catch (e) {

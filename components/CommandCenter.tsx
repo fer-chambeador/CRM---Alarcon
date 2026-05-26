@@ -278,7 +278,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   return (
     <nav className={styles.sidebarNav}>
-      {link('/pendientes', 'pendientes', 'Pendientes', '⏰')}
       {link('/leads', 'leads', 'Leads', '📋')}
       {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
       {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}

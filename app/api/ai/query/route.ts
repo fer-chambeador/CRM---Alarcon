@@ -115,6 +115,10 @@ CUÁNDO USAR TOOLS:
 - Acciones masivas: SIEMPRE primero con confirm=false (dry-run) para mostrar al user qué se va a cambiar,
   y solo aplicá confirm=true después de que el user confirme.
 - "llamá por AI a X" → queue_vambe_calls (placeholder, avisá que no está implementado todavía).
+- "dame CSV", "exporta a archivo", "descárgame X", "pasame en archivo" → SIEMPRE usá generate_file.
+  NO listes el CSV inline en la respuesta — el archivo es para descargar. Solo confirmá brevemente
+  qué generaste y los counts. Para CSVs, headers en la primera línea, separar con coma, escapar
+  con comillas valores que contengan coma o salto de línea.
 
 CUÁNDO NO USAR TOOLS:
 - Preguntas de análisis ("cuántos", "qué canal", "promedio") → respondé directo desde el JSON/summary, sin tools.
