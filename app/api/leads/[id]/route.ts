@@ -4,6 +4,51 @@ import { normalizeCanal } from '@/lib/canales'
 
 const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at'] as const
 
+/** Labels human-readable para los registros de actividad. */
+const FIELD_LABELS: Record<string, string> = {
+  nombre: 'Nombre',
+  empresa: 'Empresa',
+  telefono: 'Teléfono',
+  puesto: 'Puesto',
+  canal_adquisicion: 'Canal',
+  status: 'Status',
+  notas: 'Notas',
+  plan: 'Plan',
+  veces_contactado: 'Intentos de contacto',
+  monto: 'Monto',
+  estado: 'Ubicación',
+  presupuesto: 'Presupuesto',
+  vacante: 'Vacante',
+  llamada_at: 'Llamada agendada',
+  ultimo_contacto: 'Último contacto',
+}
+
+/** Formatea un valor para mostrarlo en el log. */
+function fmtVal(field: string, v: unknown): string {
+  if (v === null || v === undefined || v === '') return '(vacío)'
+  if (field === 'monto') return `$${Number(v).toLocaleString('es-MX')}`
+  if (field === 'llamada_at' || field === 'ultimo_contacto') {
+    try { return new Date(v as string).toLocaleString('es-MX') } catch { return String(v) }
+  }
+  const s = String(v)
+  return s.length > 80 ? s.slice(0, 77) + '…' : s
+}
+
+/** Descripción human-readable para un cambio. */
+function describeChange(field: string, before: unknown, after: unknown): string {
+  const label = FIELD_LABELS[field] || field
+  if (field === 'status') return `Status cambiado a: ${after}`
+  if (field === 'notas') {
+    if (!before && after) return 'Nota agregada'
+    if (before && !after) return 'Nota eliminada'
+    return 'Nota actualizada'
+  }
+  if (field === 'veces_contactado') {
+    return `Intentos de contacto: ${before ?? 0} → ${after ?? 0}`
+  }
+  return `${label}: ${fmtVal(field, before)} → ${fmtVal(field, after)}`
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createServiceClient()
   const body = await req.json()
@@ -50,24 +95,34 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
+  // Leer el lead ANTES del update para poder comparar y registrar
+  // qué cambió campo por campo.
+  const { data: leadBefore } = await supabase.from('leads').select('*').eq('id', id).single()
+
   const { data, error } = await supabase.from('leads').update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  if (body.status) {
-    await supabase.from('lead_actividad').insert({
-      lead_id: id,
-      tipo: 'status_change',
-      descripcion: `Status cambiado a: ${body.status}`,
-      metadata: updates,
-    })
-  }
-  if ('monto' in body && typeof body.monto === 'number') {
-    await supabase.from('lead_actividad').insert({
-      lead_id: id,
-      tipo: 'monto_update',
-      descripcion: `Monto actualizado a $${body.monto.toLocaleString('es-MX')} MXN`,
-      metadata: { monto: body.monto },
-    })
+  // Registrar UN evento por cada campo que realmente cambió.
+  if (leadBefore) {
+    const before = leadBefore as Record<string, unknown>
+    const actividades: Array<{ lead_id: string; tipo: string; descripcion: string; metadata: Record<string, unknown> }> = []
+    for (const [field, after] of Object.entries(updates)) {
+      const prev = before[field]
+      // Skip si no cambió (loose compare para null vs undefined)
+      if ((prev ?? null) === (after ?? null)) continue
+      const tipo = field === 'status' ? 'status_change'
+        : field === 'monto' ? 'monto_update'
+        : 'field_change'
+      actividades.push({
+        lead_id: id,
+        tipo,
+        descripcion: describeChange(field, prev, after),
+        metadata: { field, before: prev, after },
+      })
+    }
+    if (actividades.length > 0) {
+      await supabase.from('lead_actividad').insert(actividades)
+    }
   }
 
   return NextResponse.json(data)
