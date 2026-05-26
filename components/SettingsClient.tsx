@@ -16,6 +16,7 @@ type ImportResult = {
   events_scanned?: number
   leads_matched?: number
   leads_updated?: number
+  leads_created?: number
   error?: string
 }
 
@@ -161,9 +162,9 @@ export default function SettingsClient() {
                                   border: '1px solid rgba(34,214,138,0.25)',
                                   borderRadius: 8, padding: '10px 14px', fontSize: 12.5, color: 'var(--text)',
                                 }}>
-                                  ✓ {importResult.events_scanned} eventos escaneados ·{' '}
-                                  <strong>{importResult.leads_matched}</strong> leads matchearon ·{' '}
-                                  <strong style={{ color: '#22d68a' }}>{importResult.leads_updated}</strong> actualizados con su llamada
+                                  ✓ {importResult.events_scanned} eventos ·{' '}
+                                  <strong style={{ color: '#22d68a' }}>{importResult.leads_updated || 0}</strong> leads existentes actualizados ·{' '}
+                                  <strong style={{ color: '#4ea8f5' }}>{importResult.leads_created || 0}</strong> leads nuevos creados
                                 </div>
                               )
                               : (

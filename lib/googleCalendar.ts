@@ -288,27 +288,90 @@ export async function listUpcomingEvents(supabase: Supabase, daysAhead = 30): Pr
 }
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/g
+const PHONE_RE = /(?:\+?52\s*)?(?:\d[\s-]?){10,15}\d/
 
-function extractEmailsFromEvent(ev: GCalEvent, ownerEmail: string | null): string[] {
-  const emails = new Set<string>()
-  for (const a of ev.attendees || []) {
-    if (a.email && a.email.toLowerCase() !== (ownerEmail || '').toLowerCase()) {
-      emails.add(a.email.toLowerCase())
+/**
+ * Parsea la info del cliente desde el evento.
+ *
+ * El appointment scheduler de Google Calendar mete una sección "Booked by:"
+ * en la descripción con el nombre + email + teléfono del que agendó:
+ *
+ *   Booked by
+ *   Guadalupe Pérez González
+ *   luisantoniocp27@gmail.com
+ *   5576725706
+ *
+ * También el nombre puede venir en el title como "Llamada - Vendedor (Nombre)".
+ */
+type ClientInfo = {
+  email: string | null
+  nombre: string | null
+  telefono: string | null
+}
+function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): ClientInfo {
+  const owner = (ownerEmail || '').toLowerCase()
+  const desc = ev.description || ''
+  const title = ev.summary || ''
+
+  // 1. Buscar "Booked by" section en la description
+  const bookedByMatch = desc.match(/Booked by\s*\n([^\n]+)\s*\n?([^\n]*)\s*\n?([^\n]*)/i)
+  let nombre: string | null = null
+  let email: string | null = null
+  let telefono: string | null = null
+
+  if (bookedByMatch) {
+    // Las próximas 3 líneas después de "Booked by" usualmente son: nombre, email, teléfono
+    const lines = [bookedByMatch[1], bookedByMatch[2], bookedByMatch[3]].filter(Boolean).map(s => s.trim())
+    for (const line of lines) {
+      if (!email && EMAIL_RE.test(line)) email = (line.match(EMAIL_RE) || [])[0] || null
+      else if (!telefono && PHONE_RE.test(line)) telefono = (line.match(PHONE_RE) || [])[0] || null
+      else if (!nombre && line && !EMAIL_RE.test(line) && !PHONE_RE.test(line)) nombre = line
     }
   }
-  // Fallback: emails en description/summary (case onboarding mete el email del cliente en el texto)
-  const text = `${ev.summary || ''}\n${ev.description || ''}`
-  const matches = text.match(EMAIL_RE) || []
-  for (const m of matches) {
-    if (m.toLowerCase() !== (ownerEmail || '').toLowerCase()) emails.add(m.toLowerCase())
+
+  // 2. Nombre desde el título: "Llamada - Vendedor (NOMBRE)"
+  if (!nombre) {
+    const m = title.match(/\(([^)]+)\)\s*$/)
+    if (m) nombre = m[1].trim()
   }
-  return Array.from(emails)
+
+  // 3. Email del attendee (que no sea el dueño del calendar)
+  if (!email) {
+    for (const a of ev.attendees || []) {
+      if (a.email && a.email.toLowerCase() !== owner) {
+        email = a.email
+        break
+      }
+    }
+  }
+
+  // 4. Fallback: cualquier email en title/description
+  if (!email) {
+    const text = `${title}\n${desc}`
+    const matches = text.match(EMAIL_RE) || []
+    for (const m of matches) {
+      if (m.toLowerCase() !== owner) { email = m; break }
+    }
+  }
+
+  // 5. Teléfono fallback desde description completa
+  if (!telefono) {
+    const m = desc.match(PHONE_RE)
+    if (m) telefono = m[0].replace(/[\s-]/g, '')
+  }
+
+  return {
+    email: email ? email.toLowerCase() : null,
+    nombre,
+    telefono: telefono ? telefono.replace(/[\s-]/g, '') : null,
+  }
 }
 
 export type ImportResult = {
   events_scanned: number
   leads_matched: number
   leads_updated: number
+  leads_created: number
   details: Array<{
     event_id: string
     title: string
@@ -316,9 +379,11 @@ export type ImportResult = {
     matched_email: string | null
     lead_id: string | null
     lead_name: string | null
-    action: 'updated' | 'already_set' | 'no_match'
+    action: 'updated' | 'created' | 'already_set' | 'no_email_found'
   }>
 }
+
+type LeadMatch = { id: string; email: string; nombre: string | null; telefono: string | null; status: string; llamada_at: string | null; google_calendar_event_id: string | null }
 
 export async function importEventsToLeads(supabase: Supabase): Promise<ImportResult> {
   const auth = await getValidAccessToken(supabase)
@@ -332,68 +397,122 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
     events_scanned: valid.length,
     leads_matched: 0,
     leads_updated: 0,
+    leads_created: 0,
     details: [],
   }
 
-  // Pre-fetch todos los leads para hacer matching en memoria (más rápido que N queries)
+  // Pre-fetch todos los leads para matching
   const { data: allLeads } = await supabase
-    .from('leads').select('id, email, nombre, llamada_at, google_calendar_event_id')
-  const leadsByEmail = new Map<string, { id: string; email: string; nombre: string | null; llamada_at: string | null; google_calendar_event_id: string | null }>()
-  for (const l of (allLeads || []) as Array<{ id: string; email: string; nombre: string | null; llamada_at: string | null; google_calendar_event_id: string | null }>) {
+    .from('leads').select('id, email, nombre, telefono, status, llamada_at, google_calendar_event_id')
+  const leadsByEmail = new Map<string, LeadMatch>()
+  for (const l of (allLeads || []) as LeadMatch[]) {
     if (l.email) leadsByEmail.set(l.email.toLowerCase(), l)
   }
 
+  const STAGES_TO_ADVANCE = new Set(['nuevo', 'contactado', 'no_show_llamada'])
+
   for (const ev of valid) {
     const when = ev.start?.dateTime || ''
-    const emails = extractEmailsFromEvent(ev, auth.googleEmail)
-    let matchedLead = null
-    let matchedEmail: string | null = null
-    for (const em of emails) {
-      const lead = leadsByEmail.get(em)
-      if (lead) { matchedLead = lead; matchedEmail = em; break }
-    }
+    const client = extractClientFromEvent(ev, auth.googleEmail)
 
-    if (!matchedLead) {
+    // Si no encontramos email del cliente, no podemos hacer nada
+    if (!client.email) {
       result.details.push({
         event_id: ev.id, title: ev.summary || '(sin título)', when,
-        matched_email: null, lead_id: null, lead_name: null, action: 'no_match',
-      })
-      continue
-    }
-    result.leads_matched += 1
-
-    // Si ya tiene este event_id y llamada_at, skip
-    const alreadyLinked = matchedLead.google_calendar_event_id === ev.id
-      && matchedLead.llamada_at === when
-    if (alreadyLinked) {
-      result.details.push({
-        event_id: ev.id, title: ev.summary || '(sin título)', when,
-        matched_email: matchedEmail, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
-        action: 'already_set',
+        matched_email: null, lead_id: null, lead_name: client.nombre,
+        action: 'no_email_found',
       })
       continue
     }
 
-    // Actualizar — NO sincronizar de vuelta a Calendar (el evento ya existe).
-    await supabase.from('leads')
-      .update({
+    const matchedLead = leadsByEmail.get(client.email)
+
+    if (matchedLead) {
+      result.leads_matched += 1
+
+      // Si ya tiene este event_id y llamada_at, skip
+      const alreadyLinked = matchedLead.google_calendar_event_id === ev.id
+        && matchedLead.llamada_at === when
+      if (alreadyLinked) {
+        result.details.push({
+          event_id: ev.id, title: ev.summary || '(sin título)', when,
+          matched_email: client.email, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
+          action: 'already_set',
+        })
+        continue
+      }
+
+      // Update: llamada_at + event_id + advance status si aplica
+      const updates: Record<string, unknown> = {
         llamada_at: when,
         google_calendar_event_id: ev.id,
-        // Si el lead estaba en 'nuevo' o 'contactado', avanzarlo a 'llamada_agendada'
+      }
+      if (STAGES_TO_ADVANCE.has(matchedLead.status)) {
+        updates.status = 'llamada_agendada'
+        updates.status_changed_at = new Date().toISOString()
+      }
+      // Si el lead no tiene nombre/telefono y el evento sí, llenarlos
+      if (!matchedLead.nombre && client.nombre) updates.nombre = client.nombre
+      if (!matchedLead.telefono && client.telefono) updates.telefono = client.telefono
+
+      await supabase.from('leads').update(updates).eq('id', matchedLead.id)
+      await supabase.from('lead_actividad').insert({
+        lead_id: matchedLead.id,
+        tipo: 'field_change',
+        descripcion: `Llamada importada del Calendar: ${new Date(when).toLocaleString('es-MX')}${updates.status ? ` · status → llamada_agendada` : ''}`,
+        metadata: { source: 'calendar_import', event_id: ev.id, when, status_advanced: !!updates.status },
       })
-      .eq('id', matchedLead.id)
-    await supabase.from('lead_actividad').insert({
-      lead_id: matchedLead.id,
-      tipo: 'field_change',
-      descripcion: `Llamada importada del Calendar: ${new Date(when).toLocaleString('es-MX')}`,
-      metadata: { source: 'calendar_import', event_id: ev.id, when },
-    })
-    result.leads_updated += 1
-    result.details.push({
-      event_id: ev.id, title: ev.summary || '(sin título)', when,
-      matched_email: matchedEmail, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
-      action: 'updated',
-    })
+      result.leads_updated += 1
+      result.details.push({
+        event_id: ev.id, title: ev.summary || '(sin título)', when,
+        matched_email: client.email, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
+        action: 'updated',
+      })
+    } else {
+      // No existe el lead — crearlo con los datos del evento
+      const { data: newLead, error } = await supabase.from('leads').insert({
+        email: client.email,
+        nombre: client.nombre,
+        telefono: client.telefono,
+        canal_adquisicion: 'Calendar booking',
+        status: 'llamada_agendada',
+        llamada_at: when,
+        google_calendar_event_id: ev.id,
+        veces_contactado: 0,
+        monto: 1160,
+      }).select('id').single()
+
+      if (error) {
+        // Email puede ser duplicado por otro lead — log y continuar
+        result.details.push({
+          event_id: ev.id, title: ev.summary || '(sin título)', when,
+          matched_email: client.email, lead_id: null, lead_name: client.nombre,
+          action: 'no_email_found',  // técnicamente fue error, pero usamos este flag
+        })
+        continue
+      }
+
+      if (newLead) {
+        await supabase.from('lead_actividad').insert({
+          lead_id: newLead.id,
+          tipo: 'field_change',
+          descripcion: `Lead creado desde Calendar booking — llamada agendada ${new Date(when).toLocaleString('es-MX')}`,
+          metadata: { source: 'calendar_import', event_id: ev.id, when, created: true },
+        })
+        // Agregarlo al map por si otro evento del mismo email viene después
+        leadsByEmail.set(client.email, {
+          id: newLead.id, email: client.email, nombre: client.nombre,
+          telefono: client.telefono, status: 'llamada_agendada',
+          llamada_at: when, google_calendar_event_id: ev.id,
+        })
+        result.leads_created += 1
+        result.details.push({
+          event_id: ev.id, title: ev.summary || '(sin título)', when,
+          matched_email: client.email, lead_id: newLead.id, lead_name: client.nombre,
+          action: 'created',
+        })
+      }
+    }
   }
   return result
 }
