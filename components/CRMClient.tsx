@@ -813,15 +813,16 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 // Buckets de "días sin contactar" usados solo en el modal de export.
 // Independientes del aging chip de la tabla (que usa otra escala).
 const EXPORT_AGING_BUCKETS: Array<{ value: string; label: string; test: (d: number) => boolean }> = [
-  { value: 'd1-3',     label: '1-3 días',   test: d => d >= 1 && d <= 3 },
+  { value: 'd0-3',     label: '0-3 días',   test: d => d >= 0 && d <= 3 },
   { value: 'd4-6',     label: '4-6 días',   test: d => d >= 4 && d <= 6 },
   { value: 'd7-10',    label: '7-10 días',  test: d => d >= 7 && d <= 10 },
   { value: 'd11-15',   label: '11-15 días', test: d => d >= 11 && d <= 15 },
   { value: 'd_over15', label: '>15 días',   test: d => d > 15 },
 ]
-function exportAgingBucket(days: number): string | null {
+// Los 5 buckets cubren todo el rango [0, ∞). Ningún lead queda fuera.
+function exportAgingBucket(days: number): string {
   for (const b of EXPORT_AGING_BUCKETS) if (b.test(days)) return b.value
-  return null
+  return 'd_over15'  // fallback defensivo (no debería pasar)
 }
 
 function ExportModal({ leads, onClose, onDownload }: {
@@ -856,7 +857,7 @@ function ExportModal({ leads, onClose, onDownload }: {
       intentosMap.set(intentos, (intentosMap.get(intentos) || 0) + 1)
 
       const ab = exportAgingBucket(daysInCurrentStage(l))
-      if (ab) agingMap.set(ab, (agingMap.get(ab) || 0) + 1)
+      agingMap.set(ab, (agingMap.get(ab) || 0) + 1)
     }
     const toList = (m: Map<string, number>): Bucket[] =>
       Array.from(m.entries())
@@ -895,14 +896,10 @@ function ExportModal({ leads, onClose, onDownload }: {
       const intentos = String(l.veces_contactado || 0)
       if (!selIntentos.has(intentos)) return false
       const aging = exportAgingBucket(daysInCurrentStage(l))
-      // Si no cae en ningún bucket (ej. <1 día), respetamos: solo
-      // se incluye si TODOS los chips de aging están marcados.
-      if (aging === null) {
-        if (selAging.size !== buckets.aging.length) return false
-      } else if (!selAging.has(aging)) return false
+      if (!selAging.has(aging)) return false
       return true
     })
-  }, [leads, selCanales, selUbicaciones, selPresupuestos, selIntentos, selAging, buckets.aging.length])
+  }, [leads, selCanales, selUbicaciones, selPresupuestos, selIntentos, selAging])
 
   const toggleSet = (set: Set<string>, key: string): Set<string> => {
     const next = new Set(set)
