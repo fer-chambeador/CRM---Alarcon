@@ -1567,11 +1567,23 @@ function TiemposConversionTimeline({ movement, cycle }: {
 
   const rows = JUMPS.map(j => {
     const stat = movement?.transitions.find(t => t.from === j.from && t.to === j.to)
-    return { ...j, days: stat?.medianDays ?? null, count: stat?.count ?? 0 }
+    return {
+      ...j,
+      avgDays: stat?.avgDays ?? null,
+      medianDays: stat?.medianDays ?? null,
+      count: stat?.count ?? 0,
+    }
   })
 
-  // Total estimado: suma de medianas de cada salto que sí tenemos
-  const totalEstimado = rows.reduce((s, r) => s + (r.days || 0), 0)
+  // Total estimado: suma de promedios de cada salto que sí tenemos
+  const totalEstimado = rows.reduce((s, r) => s + (r.avgDays || 0), 0)
+
+  // Formato amigable: si <1 día, mostrar "<1 día (mismo día)"
+  const fmtDays = (d: number) => {
+    if (d < 0.04) return '< 1 hora'
+    if (d < 1) return `${(d * 24).toFixed(1)} h`
+    return `${d.toFixed(1)} días`
+  }
 
   return (
     <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '22px 24px' }}>
@@ -1606,15 +1618,18 @@ function TiemposConversionTimeline({ movement, cycle }: {
               <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{r.toLabel}</span>
             </div>
             {/* Días */}
-            <div style={{ textAlign: 'right', minWidth: 100 }}>
-              {r.days != null && r.count > 0
+            <div style={{ textAlign: 'right', minWidth: 130 }}>
+              {r.avgDays != null && r.count > 0
                 ? <>
                     <div style={{
                       fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 800,
                       color: '#7c6af7', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-                    }}>{r.days.toFixed(1)} días</div>
+                    }}>{fmtDays(r.avgDays)}</div>
                     <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
-                      basado en {r.count} caso{r.count === 1 ? '' : 's'}
+                      promedio · {r.count} caso{r.count === 1 ? '' : 's'}
+                      {r.medianDays != null && r.medianDays !== r.avgDays && (
+                        <> · mediana {fmtDays(r.medianDays)}</>
+                      )}
                     </div>
                   </>
                 : <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>sin datos</div>}
@@ -1642,9 +1657,10 @@ function TiemposConversionTimeline({ movement, cycle }: {
                 <div style={{
                   fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800,
                   color: '#22d68a', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-                }}>{cycle.medianDays.toFixed(1)} días</div>
+                }}>{cycle.avgDays >= 1 ? cycle.avgDays.toFixed(1) + ' días' : fmtDays(cycle.avgDays)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
-                  mediana de {cycle.count} cierres {totalEstimado > 0 && <>· suma de saltos: ~{totalEstimado.toFixed(0)}d</>}
+                  promedio · {cycle.count} cierres
+                  {cycle.medianDays !== cycle.avgDays && <> · mediana {fmtDays(cycle.medianDays)}</>}
                 </div>
               </>
             : <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>Sin cierres en el rango</div>}
