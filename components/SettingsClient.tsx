@@ -11,11 +11,21 @@ type GoogleStatus = {
   has_credentials: boolean
 }
 
+type ImportResult = {
+  ok: boolean
+  events_scanned?: number
+  leads_matched?: number
+  leads_updated?: number
+  error?: string
+}
+
 export default function SettingsClient() {
   const params = useSearchParams()
   const [status, setStatus] = useState<GoogleStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<ImportResult | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -24,6 +34,17 @@ export default function SettingsClient() {
       const data = await res.json()
       setStatus(data)
     } finally { setLoading(false) }
+  }
+
+  const importCalendar = async () => {
+    setImporting(true); setImportResult(null)
+    try {
+      const res = await fetch('/api/integrations/google/import', { method: 'POST' })
+      const data = await res.json()
+      setImportResult(data)
+    } catch (e) {
+      setImportResult({ ok: false, error: e instanceof Error ? e.message : 'falló' })
+    } finally { setImporting(false) }
   }
 
   useEffect(() => { load() }, [])
@@ -94,22 +115,70 @@ export default function SettingsClient() {
                 )
                 : status.connected
                   ? (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <div>
-                        <div style={{ color: '#22d68a', fontSize: 13, fontWeight: 600 }}>✓ Conectado</div>
-                        {status.google_email && (
-                          <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{status.google_email}</div>
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div>
+                          <div style={{ color: '#22d68a', fontSize: 13, fontWeight: 600 }}>✓ Conectado</div>
+                          {status.google_email && (
+                            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{status.google_email}</div>
+                          )}
+                        </div>
+                        <button onClick={disconnect}
+                          style={{
+                            background: 'transparent', border: '1px solid var(--border2)',
+                            color: 'var(--text2)', padding: '8px 16px', borderRadius: 'var(--radius-pill)',
+                            fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font)',
+                          }}>
+                          Desconectar
+                        </button>
+                      </div>
+
+                      {/* Import del Calendar al CRM */}
+                      <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: 13.5, color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}>
+                          Importar llamadas del Calendar
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+                          Trae las próximas llamadas (30 días) de tu Calendar y las vincula con leads del CRM
+                          que coincidan por email. No toca las llamadas ya vinculadas.
+                        </div>
+                        <button onClick={importCalendar} disabled={importing}
+                          style={{
+                            background: 'linear-gradient(90deg, #4ea8f5, #7c6af7)',
+                            color: 'white', border: 'none',
+                            padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                            cursor: importing ? 'wait' : 'pointer', fontFamily: 'var(--font)',
+                          }}>
+                          {importing ? '↻ Importando…' : '⇣ Importar próximas llamadas'}
+                        </button>
+
+                        {importResult && (
+                          <div style={{ marginTop: 12 }}>
+                            {importResult.ok
+                              ? (
+                                <div style={{
+                                  background: 'rgba(34,214,138,0.08)',
+                                  border: '1px solid rgba(34,214,138,0.25)',
+                                  borderRadius: 8, padding: '10px 14px', fontSize: 12.5, color: 'var(--text)',
+                                }}>
+                                  ✓ {importResult.events_scanned} eventos escaneados ·{' '}
+                                  <strong>{importResult.leads_matched}</strong> leads matchearon ·{' '}
+                                  <strong style={{ color: '#22d68a' }}>{importResult.leads_updated}</strong> actualizados con su llamada
+                                </div>
+                              )
+                              : (
+                                <div style={{
+                                  background: 'rgba(240,90,90,0.08)',
+                                  border: '1px solid rgba(240,90,90,0.25)',
+                                  borderRadius: 8, padding: '10px 14px', fontSize: 12.5, color: '#f05a5a',
+                                }}>
+                                  ⚠️ {importResult.error}
+                                </div>
+                              )}
+                          </div>
                         )}
                       </div>
-                      <button onClick={disconnect}
-                        style={{
-                          background: 'transparent', border: '1px solid var(--border2)',
-                          color: 'var(--text2)', padding: '8px 16px', borderRadius: 'var(--radius-pill)',
-                          fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font)',
-                        }}>
-                        Desconectar
-                      </button>
-                    </div>
+                    </>
                   )
                   : (
                     <button onClick={connect}
@@ -124,31 +193,6 @@ export default function SettingsClient() {
                   )}
           </section>
 
-          {/* Setup guide */}
-          <section style={{
-            background: 'var(--glass)', border: '1px solid var(--border)',
-            borderRadius: 14, padding: '20px 24px',
-          }}>
-            <h3 style={{ margin: '0 0 12px', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
-              Setup de Google Calendar (one-time)
-            </h3>
-            <ol style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, paddingLeft: 20 }}>
-              <li>Andá a <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" style={{ color: 'var(--accent2)' }}>Google Cloud Console</a> y creá un proyecto (si no tenés uno).</li>
-              <li>APIs & Services → Library → buscá <strong>Google Calendar API</strong> → Enable.</li>
-              <li>APIs & Services → OAuth consent screen → External → completá los campos básicos + agregá tu email como test user.</li>
-              <li>APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application.</li>
-              <li>En <strong>Authorized redirect URIs</strong> pegá: <code style={{ background: 'var(--bg2)', padding: '2px 6px', borderRadius: 4, fontSize: 11.5 }}>https://crm-alarcon-production.up.railway.app/api/integrations/google/callback</code></li>
-              <li>Copiá el <strong>Client ID</strong> y <strong>Client Secret</strong>.</li>
-              <li>En Railway → Variables, agregá:
-                <ul style={{ marginTop: 6 }}>
-                  <li><code>GOOGLE_OAUTH_CLIENT_ID</code> = el client ID</li>
-                  <li><code>GOOGLE_OAUTH_CLIENT_SECRET</code> = el client secret</li>
-                  <li><code>GOOGLE_OAUTH_REDIRECT_URI</code> = la misma URL del paso 5</li>
-                </ul>
-              </li>
-              <li>Esperá ~30s al redeploy, refrescá esta página y clickeá "Conectar".</li>
-            </ol>
-          </section>
         </div>
       </main>
     </div>

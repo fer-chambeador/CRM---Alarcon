@@ -260,3 +260,140 @@ export async function isConnected(supabase: Supabase): Promise<{ connected: bool
     .from('google_calendar_tokens').select('google_email').eq('user_id', USER_ID).single()
   return { connected: !!data, google_email: data?.google_email || null }
 }
+
+// ─── Import eventos del Calendar al CRM ─────────────────────────────────
+type GCalEvent = {
+  id: string
+  summary?: string
+  description?: string
+  start?: { dateTime?: string; date?: string }
+  end?: { dateTime?: string; date?: string }
+  attendees?: Array<{ email?: string; responseStatus?: string }>
+  organizer?: { email?: string }
+  status?: string
+}
+
+export async function listUpcomingEvents(supabase: Supabase, daysAhead = 30): Promise<GCalEvent[]> {
+  const now = new Date()
+  const future = new Date(now.getTime() + daysAhead * 86400_000)
+  const params = new URLSearchParams({
+    timeMin: now.toISOString(),
+    timeMax: future.toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: '100',
+  })
+  const result = await calendarFetch(supabase, 'GET', `/calendars/{calendarId}/events?${params}`)
+  return (result?.items || []) as GCalEvent[]
+}
+
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/g
+
+function extractEmailsFromEvent(ev: GCalEvent, ownerEmail: string | null): string[] {
+  const emails = new Set<string>()
+  for (const a of ev.attendees || []) {
+    if (a.email && a.email.toLowerCase() !== (ownerEmail || '').toLowerCase()) {
+      emails.add(a.email.toLowerCase())
+    }
+  }
+  // Fallback: emails en description/summary (case onboarding mete el email del cliente en el texto)
+  const text = `${ev.summary || ''}\n${ev.description || ''}`
+  const matches = text.match(EMAIL_RE) || []
+  for (const m of matches) {
+    if (m.toLowerCase() !== (ownerEmail || '').toLowerCase()) emails.add(m.toLowerCase())
+  }
+  return Array.from(emails)
+}
+
+export type ImportResult = {
+  events_scanned: number
+  leads_matched: number
+  leads_updated: number
+  details: Array<{
+    event_id: string
+    title: string
+    when: string
+    matched_email: string | null
+    lead_id: string | null
+    lead_name: string | null
+    action: 'updated' | 'already_set' | 'no_match'
+  }>
+}
+
+export async function importEventsToLeads(supabase: Supabase): Promise<ImportResult> {
+  const auth = await getValidAccessToken(supabase)
+  if (!auth) throw new Error('Google Calendar no conectado')
+
+  const events = await listUpcomingEvents(supabase, 30)
+  // Solo eventos confirmados con dateTime (no all-day)
+  const valid = events.filter(e => e.status !== 'cancelled' && (e.start?.dateTime))
+
+  const result: ImportResult = {
+    events_scanned: valid.length,
+    leads_matched: 0,
+    leads_updated: 0,
+    details: [],
+  }
+
+  // Pre-fetch todos los leads para hacer matching en memoria (más rápido que N queries)
+  const { data: allLeads } = await supabase
+    .from('leads').select('id, email, nombre, llamada_at, google_calendar_event_id')
+  const leadsByEmail = new Map<string, { id: string; email: string; nombre: string | null; llamada_at: string | null; google_calendar_event_id: string | null }>()
+  for (const l of (allLeads || []) as Array<{ id: string; email: string; nombre: string | null; llamada_at: string | null; google_calendar_event_id: string | null }>) {
+    if (l.email) leadsByEmail.set(l.email.toLowerCase(), l)
+  }
+
+  for (const ev of valid) {
+    const when = ev.start?.dateTime || ''
+    const emails = extractEmailsFromEvent(ev, auth.googleEmail)
+    let matchedLead = null
+    let matchedEmail: string | null = null
+    for (const em of emails) {
+      const lead = leadsByEmail.get(em)
+      if (lead) { matchedLead = lead; matchedEmail = em; break }
+    }
+
+    if (!matchedLead) {
+      result.details.push({
+        event_id: ev.id, title: ev.summary || '(sin título)', when,
+        matched_email: null, lead_id: null, lead_name: null, action: 'no_match',
+      })
+      continue
+    }
+    result.leads_matched += 1
+
+    // Si ya tiene este event_id y llamada_at, skip
+    const alreadyLinked = matchedLead.google_calendar_event_id === ev.id
+      && matchedLead.llamada_at === when
+    if (alreadyLinked) {
+      result.details.push({
+        event_id: ev.id, title: ev.summary || '(sin título)', when,
+        matched_email: matchedEmail, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
+        action: 'already_set',
+      })
+      continue
+    }
+
+    // Actualizar — NO sincronizar de vuelta a Calendar (el evento ya existe).
+    await supabase.from('leads')
+      .update({
+        llamada_at: when,
+        google_calendar_event_id: ev.id,
+        // Si el lead estaba en 'nuevo' o 'contactado', avanzarlo a 'llamada_agendada'
+      })
+      .eq('id', matchedLead.id)
+    await supabase.from('lead_actividad').insert({
+      lead_id: matchedLead.id,
+      tipo: 'field_change',
+      descripcion: `Llamada importada del Calendar: ${new Date(when).toLocaleString('es-MX')}`,
+      metadata: { source: 'calendar_import', event_id: ev.id, when },
+    })
+    result.leads_updated += 1
+    result.details.push({
+      event_id: ev.id, title: ev.summary || '(sin título)', when,
+      matched_email: matchedEmail, lead_id: matchedLead.id, lead_name: matchedLead.nombre,
+      action: 'updated',
+    })
+  }
+  return result
+}
