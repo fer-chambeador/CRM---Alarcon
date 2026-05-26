@@ -4,15 +4,17 @@ import { PIPELINE_CLOSED, STATUS_PROJECTION_ORDER, STATUS_LABELS } from './statu
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
- * Días que el lead lleva en su stage actual.
+ * Días que el lead lleva sin que se registre un movimiento.
  *
- * Para leads en 'contactado', usamos MAX(status_changed_at, ultimo_contacto)
- * para que el aging se REINICIE cuando se marca un nuevo intento de contacto.
- * Para los demás stages, usamos status_changed_at.
+ * Usamos MAX(status_changed_at, ultimo_contacto) para CUALQUIER stage
+ * (no solo 'contactado'). Si el user marca un intento de contacto en
+ * cualquier etapa — Propuesta enviada, Espera, etc. — el aging se
+ * reinicia. La idea: el chip refleja "hace cuánto que no hay actividad
+ * registrada para este lead".
  */
 export function daysInCurrentStage(lead: Lead, now: number = Date.now()): number {
   let ts = lead.status_changed_at ? new Date(lead.status_changed_at).getTime() : new Date(lead.created_at).getTime()
-  if (lead.status === 'contactado' && lead.ultimo_contacto) {
+  if (lead.ultimo_contacto) {
     const tsContacto = new Date(lead.ultimo_contacto).getTime()
     if (isFinite(tsContacto) && tsContacto > ts) ts = tsContacto
   }
