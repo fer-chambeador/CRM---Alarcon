@@ -111,12 +111,19 @@ function parseFecha(raw: string, fallbackYear?: number): string | null {
   const s = raw.trim()
   if (!s) return null
 
+  // Sanity: si tabYear está definido, el año parseado debe estar a
+  // ±2 años. Si no, usamos tabYear. Esto corta errores tipo "01/10/01"
+  // que mi parser leía como 2001 cuando realmente es 2026.
+  const inferYear = (y: number): number => {
+    if (!fallbackYear) return y
+    if (y >= 1900 && y <= 2100 && Math.abs(y - fallbackYear) <= 2) return y
+    return fallbackYear
+  }
+
   // gviz CSV format para celdas con formato fecha: "Date(2026,0,29)"
-  // Meses 0-indexed (Enero=0). Es lo que devuelve Google Sheets cuando
-  // la celda tiene tipo fecha (no string).
   let m = s.match(/^Date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)$/)
   if (m) {
-    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10) + 1, d = parseInt(m[3], 10)
+    const y = inferYear(parseInt(m[1], 10)), mo = parseInt(m[2], 10) + 1, d = parseInt(m[3], 10)
     if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
       return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     }
@@ -125,7 +132,7 @@ function parseFecha(raw: string, fallbackYear?: number): string | null {
   // ISO YYYY-MM-DD or YYYY/MM/DD
   m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
   if (m) {
-    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10)
+    const y = inferYear(parseInt(m[1], 10)), mo = parseInt(m[2], 10), d = parseInt(m[3], 10)
     if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
       return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     }
@@ -137,6 +144,7 @@ function parseFecha(raw: string, fallbackYear?: number): string | null {
     const d = parseInt(m[1], 10), mo = parseInt(m[2], 10)
     let y = parseInt(m[3], 10)
     if (y < 100) y += 2000
+    y = inferYear(y)
     if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
       return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     }
@@ -175,11 +183,14 @@ function parseFecha(raw: string, fallbackYear?: number): string | null {
     }
   }
 
-  // Last resort: let Date.parse() try (handles "Nov 12, 2025" etc.)
+  // Last resort: Date.parse(). Solo aceptar si el año cae cerca del tabYear.
   const t = Date.parse(s)
   if (!isNaN(t)) {
     const d = new Date(t)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const y = d.getFullYear()
+    if (!fallbackYear || (y >= 1900 && y <= 2100 && Math.abs(y - fallbackYear) <= 2)) {
+      return `${y}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    }
   }
 
   return null
