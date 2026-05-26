@@ -23,14 +23,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const sentVeces = typeof body.veces_contactado === 'number'
 
-  // SET directo de veces_contactado (desde el ContactoSelector). Sube o baja.
-  // Si SUBE → registra ultimo_contacto = now (cuenta como un nuevo intento, resetea aging).
-  // Si BAJA → corrección, no toca ultimo_contacto.
+  // SET directo de veces_contactado (desde el ContactoSelector). CUALQUIER
+  // cambio (sube o baja) resetea el aging "días sin contactar" — el user
+  // explicitó que cada vez que se ajusta el nivel de contacto debe
+  // contarse como una interacción nueva.
   if (sentVeces && !body.incrementar_contacto) {
     const { data: lead } = await supabase.from('leads').select('veces_contactado').eq('id', id).single()
     const prev = (lead?.veces_contactado as number) || 0
     updates.veces_contactado = body.veces_contactado
-    if (body.veces_contactado > prev) {
+    if (body.veces_contactado !== prev) {
       updates.ultimo_contacto = new Date().toISOString()
     }
   }
