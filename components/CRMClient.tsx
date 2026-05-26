@@ -18,6 +18,7 @@ import type { Presupuesto } from '@/lib/budget'
 import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
 import { daysInCurrentStage, agingBucket, AGING_COLOR, fmtAgingShort } from '@/lib/velocity'
 import { goalForPeriod, goalLabel } from '@/lib/goal'
+import { rowsToCsv, downloadCsv, exportFilename } from '@/lib/export'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
@@ -532,6 +533,38 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   }, [dateScoped])
   const periodGoal = goalForPeriod(dateRange)
 
+  // Descarga los leads que pasan filtros + búsqueda + sort. Útil para
+  // listas tipo "todos los en 1er contacto con >7 días sin contactar".
+  const exportFiltered = useCallback(() => {
+    const headers = [
+      'Nombre', 'Email', 'Empresa', 'Teléfono', 'Ubicación',
+      'Status', 'Intentos de contacto', 'Días sin contactar',
+      'Canal', 'Puesto', 'Vacante', 'Presupuesto',
+      'Monto', 'Fecha de creación', 'Última actualización',
+      'Notas',
+    ]
+    const rows = sorted.map(l => [
+      l.nombre || '',
+      l.email,
+      l.empresa || '',
+      l.telefono || '',
+      l.estado || phoneToState(l.telefono) || '',
+      STATUS_LABELS[l.status],
+      l.veces_contactado || 0,
+      Math.round(daysInCurrentStage(l)),
+      l.canal_adquisicion || '',
+      l.puesto || '',
+      l.vacante || '',
+      l.presupuesto ? PRESUPUESTO_LABELS[l.presupuesto as Presupuesto] : '',
+      l.monto ?? DEFAULT_MONTO,
+      l.created_at ? new Date(l.created_at).toLocaleString('es-MX') : '',
+      l.updated_at ? new Date(l.updated_at).toLocaleString('es-MX') : '',
+      l.notas || '',
+    ])
+    const csv = rowsToCsv(headers, rows)
+    downloadCsv(exportFilename('Leads'), csv)
+  }, [sorted])
+
   return (
     <div className={styles.root}>
       <aside className={styles.sidebar}>
@@ -592,6 +625,16 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               <option key={r} value={r}>{DATE_LABELS[r]}</option>
             ))}
           </select>
+          <button onClick={exportFiltered}
+            title="Descarga los leads visibles (con filtros aplicados) en formato CSV/Excel"
+            style={{
+              background: 'var(--glass)', border: '1px solid var(--border2)',
+              color: 'var(--text2)', padding: '9px 16px', borderRadius: 'var(--radius-pill)',
+              fontSize: 12.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'var(--font)',
+              whiteSpace: 'nowrap',
+            }}>
+            ⇣ Excel ({sorted.length})
+          </button>
           <div className={styles.topBarRight}>
             <div className={styles.liveIndicator}><span className={styles.liveDotGreen} />En vivo desde Slack</div>
           </div>
