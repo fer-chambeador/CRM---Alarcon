@@ -1022,6 +1022,8 @@ const TAB_LABELS: Record<TabKey, string> = {
   ciudad: 'Por ciudad',
 }
 
+type SortKey = 'revenue' | 'ticket' | 'cerrados' | 'leads' | 'conv'
+
 function TabsTable({ byCanal, byVacante, byPresupuesto, byEstado, avgConvRate }: {
   byCanal: BreakdownRow[]
   byVacante: BreakdownRow[]
@@ -1030,20 +1032,50 @@ function TabsTable({ byCanal, byVacante, byPresupuesto, byEstado, avgConvRate }:
   avgConvRate: number
 }) {
   const [tab, setTab] = useState<TabKey>('canal')
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'revenue', dir: 'desc' })
+
   const rowsByTab: Record<TabKey, BreakdownRow[]> = {
     canal: byCanal, vacante: byVacante, presupuesto: byPresupuesto, ciudad: byEstado,
   }
-  const rows = rowsByTab[tab]
-    .filter(r => r.key !== '— sin dato —')
-    .map(r => ({ ...r, convRate: r.leads > 0 ? r.cerrados / r.leads : 0 }))
-    .sort((a, b) => b.convRate - a.convRate)
+
+  const rows = useMemo(() => {
+    const enriched = rowsByTab[tab]
+      .filter(r => r.key !== '— sin dato —')
+      .map(r => ({
+        ...r,
+        convRate: r.leads > 0 ? r.cerrados / r.leads : 0,
+        ticket: r.cerrados > 0 ? r.pipelineCerrado / r.cerrados : 0,
+      }))
+    const dir = sort.dir === 'desc' ? -1 : 1
+    const cmp = (a: typeof enriched[0], b: typeof enriched[0]) => {
+      switch (sort.key) {
+        case 'revenue':  return dir * (a.pipelineCerrado - b.pipelineCerrado)
+        case 'ticket':   return dir * (a.ticket - b.ticket)
+        case 'cerrados': return dir * (a.cerrados - b.cerrados)
+        case 'leads':    return dir * (a.leads - b.leads)
+        case 'conv':     return dir * (a.convRate - b.convRate)
+      }
+    }
+    return [...enriched].sort(cmp)
+  }, [rowsByTab, tab, sort])
 
   // Color del % según comparación con promedio
   const colorForConv = (rate: number) => {
-    if (rate > avgConvRate * 1.1) return '#22d68a'  // mejor que el promedio
-    if (rate < avgConvRate * 0.6) return '#f05a5a'  // bajo
-    return '#f5c842'  // promedio
+    if (rate > avgConvRate * 1.1) return '#22d68a'
+    if (rate < avgConvRate * 0.6) return '#f05a5a'
+    return '#f5c842'
   }
+
+  const onSort = (key: SortKey) => {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: 'desc' })
+  }
+  const arrow = (key: SortKey) => sort.key === key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''
+  const thBtn = (key: SortKey): React.CSSProperties => ({
+    ...thRight, cursor: 'pointer', userSelect: 'none',
+    color: sort.key === key ? 'var(--text)' : 'var(--text3)',
+  })
 
   return (
     <section className={styles.section}>
@@ -1070,7 +1102,7 @@ function TabsTable({ byCanal, byVacante, byPresupuesto, byEstado, avgConvRate }:
             Rendimiento {TAB_LABELS[tab].toLowerCase()}
           </h3>
           <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-            Ordenado por conv. rate · Promedio {fmtPct(avgConvRate)}
+            Click en cualquier header para ordenar · Promedio conv. {fmtPct(avgConvRate)}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text3)' }}>
@@ -1088,42 +1120,47 @@ function TabsTable({ byCanal, byVacante, byPresupuesto, byEstado, avgConvRate }:
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <th style={{ ...thLeft, width: 36 }}>#</th>
                 <th style={thLeft}>{TAB_LABELS[tab].replace('Por ', '').charAt(0).toUpperCase() + TAB_LABELS[tab].replace('Por ', '').slice(1)}</th>
-                <th style={thRight}>Leads</th>
-                <th style={thRight}>Conv. %</th>
-                <th style={thRight}>Cerrados</th>
-                <th style={thRight}>Revenue</th>
-                <th style={thRight}>Rev/lead</th>
+                <th onClick={() => onSort('revenue')}  style={thBtn('revenue')}>Revenue{arrow('revenue')}</th>
+                <th onClick={() => onSort('ticket')}   style={thBtn('ticket')}>Ticket promedio{arrow('ticket')}</th>
+                <th onClick={() => onSort('cerrados')} style={thBtn('cerrados')}>Cerrados{arrow('cerrados')}</th>
+                <th onClick={() => onSort('leads')}    style={thBtn('leads')}>Leads{arrow('leads')}</th>
+                <th onClick={() => onSort('conv')}     style={thBtn('conv')}>Conv. %{arrow('conv')}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => {
                 const color = colorForConv(r.convRate)
-                const revPerLead = r.leads > 0 ? r.pipelineCerrado / r.leads : 0
                 return (
                   <tr key={r.key} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={tdLeft}>
                       <span style={{
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                         width: 22, height: 22, borderRadius: 6,
-                        background: color + '22', color: color,
-                        fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 11,
+                        background: 'rgba(255,255,255,0.06)', color: 'var(--text2)',
+                        fontFamily: 'var(--font)', fontWeight: 700, fontSize: 11,
+                        fontVariantNumeric: 'tabular-nums',
                       }}>{i + 1}</span>
                     </td>
                     <td style={{ ...tdLeft, fontWeight: 500 }}>{r.key}</td>
+                    <td style={{ ...tdRight, fontWeight: 600, color: r.pipelineCerrado > 0 ? '#22d68a' : 'var(--text3)' }}>
+                      {fmtMoney(r.pipelineCerrado)}
+                    </td>
+                    <td style={tdRight}>{r.cerrados > 0 ? fmtMoney(r.ticket) : '—'}</td>
+                    <td style={tdRight}>{r.cerrados}</td>
                     <td style={tdRight}>{r.leads}</td>
-                    <td style={{ ...tdRight }}>
+                    <td style={tdRight}>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                        <span style={{ color, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 14 }}>
+                        <span style={{
+                          color, fontFamily: 'var(--font)', fontWeight: 700, fontSize: 14,
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
                           {(r.convRate * 100).toFixed(0)}%
                         </span>
-                        <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
+                        <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums' }}>
                           {r.cerrados}/{r.leads}
                         </span>
                       </div>
                     </td>
-                    <td style={tdRight}>{r.cerrados}</td>
-                    <td style={tdRight}>{fmtMoney(r.pipelineCerrado)}</td>
-                    <td style={tdRight}>{fmtMoney(revPerLead)}</td>
                   </tr>
                 )
               })}
@@ -1278,57 +1315,61 @@ function EficienciaPorCanal({ byCanal }: { byCanal: BreakdownRow[] }) {
 }
 
 function DistribucionConversiones({ leads }: { leads: Lead[] }) {
-  const cerrados = leads.filter(l => PIPELINE_CLOSED.includes(l.status))
-  const enProceso = leads.filter(l => !PIPELINE_CLOSED.includes(l.status) && l.status !== 'descartado')
-  const abandonados = leads.filter(l => l.status === 'descartado')
+  const cerrados = leads.filter(l => PIPELINE_CLOSED.includes(l.status)).length
+  const enProceso = leads.filter(l => !PIPELINE_CLOSED.includes(l.status) && l.status !== 'descartado').length
+  const abandonados = leads.filter(l => l.status === 'descartado').length
   const total = leads.length
   const segments = [
-    { label: 'Cerrados', value: cerrados.length, color: '#22d68a' },
-    { label: 'En proceso', value: enProceso.length, color: '#4ea8f5' },
-    { label: 'Abandonados', value: abandonados.length, color: '#a594ff' },
+    { label: 'Cerrados', value: cerrados, color: '#22d68a' },
+    { label: 'En proceso', value: enProceso, color: '#4ea8f5' },
+    { label: 'Abandonados', value: abandonados, color: '#a594ff' },
   ]
-  const R = 56, STROKE = 18, CX = 75, CY = 75, CIRC = 2 * Math.PI * R
-  let acc = 0
-  const arcs = segments.map(s => {
-    const pct = total > 0 ? s.value / total : 0
-    const dash = pct * CIRC
-    const offset = -acc * CIRC
-    acc += pct
-    return { ...s, pct, dash, offset }
-  })
   return (
     <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
       <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Distribución de conversiones</h3>
-      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 14 }}>Del total de leads</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-        <div style={{ position: 'relative', width: 150, height: 150, flexShrink: 0 }}>
-          <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: 'rotate(-90deg)' }}>
-            <circle cx={CX} cy={CY} r={R} fill="none" stroke="var(--border)" strokeWidth={STROKE} />
-            {arcs.map((a, i) => (
-              <circle key={i} cx={CX} cy={CY} r={R} fill="none"
-                stroke={a.color} strokeWidth={STROKE}
-                strokeDasharray={`${a.dash} ${CIRC}`}
-                strokeDashoffset={a.offset} />
-            ))}
-          </svg>
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{total}</div>
-            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>Leads</div>
-          </div>
-        </div>
-        <div style={{ flex: 1 }}>
-          {arcs.map(a => (
-            <div key={a.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 18 }}>{total} leads en total</div>
+
+      {/* Barra horizontal apilada */}
+      <div style={{
+        display: 'flex', height: 28, borderRadius: 6, overflow: 'hidden',
+        background: 'var(--border)', marginBottom: 16,
+      }}>
+        {segments.map(s => {
+          const pct = total > 0 ? (s.value / total) * 100 : 0
+          if (pct === 0) return null
+          return (
+            <div key={s.label}
+              title={`${s.label}: ${s.value} (${pct.toFixed(1)}%)`}
+              style={{
+                width: `${pct}%`,
+                background: s.color,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, fontWeight: 700, color: '#0a0a12',
+                fontVariantNumeric: 'tabular-nums',
+              }}>
+              {pct >= 8 && `${pct.toFixed(0)}%`}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Leyenda */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {segments.map(s => {
+          const pct = total > 0 ? (s.value / total) * 100 : 0
+          return (
+            <div key={s.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: a.color }} />
-                <span style={{ fontSize: 12, color: 'var(--text)' }}>{a.label}</span>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
+                <span style={{ fontSize: 12.5, color: 'var(--text)' }}>{s.label}</span>
               </div>
-              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontVariantNumeric: 'tabular-nums' }}>
-                {a.value} <span style={{ color: 'var(--text3)' }}>({(a.pct * 100).toFixed(1)}%)</span>
+              <span style={{ fontSize: 12.5, color: 'var(--text2)', fontVariantNumeric: 'tabular-nums' }}>
+                <strong style={{ color: 'var(--text)' }}>{s.value}</strong>
+                <span style={{ color: 'var(--text3)', marginLeft: 6 }}>{pct.toFixed(1)}%</span>
               </span>
             </div>
-          ))}
-        </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -1368,6 +1409,229 @@ function ConfianzaRow({ label, sub, count, color }: { label: string; sub: string
       <span style={{ fontSize: 11, color: count > 0 ? color : 'var(--text3)', fontWeight: 600 }}>
         {count} segmento{count === 1 ? '' : 's'}
       </span>
+    </div>
+  )
+}
+
+// ─── Patrones de cierre — perfil de los leads que cerraron ─────────────
+function PatronesCierreSection({ scoped, cycle }: {
+  scoped: Lead[]
+  cycle: ReturnType<typeof cycleStats>
+}) {
+  const closed = scoped.filter(l => PIPELINE_CLOSED.includes(l.status))
+  const total = closed.length
+
+  const buckets = useMemo(() => {
+    const make = (keyOf: (l: Lead) => string | null) => {
+      const m = new Map<string, number>()
+      for (const l of closed) {
+        const k = keyOf(l) || 'Sin dato'
+        m.set(k, (m.get(k) || 0) + 1)
+      }
+      return Array.from(m.entries())
+        .map(([key, count]) => ({ key, count, pct: total > 0 ? count / total : 0 }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5)
+    }
+    return {
+      canal: make(l => l.canal_adquisicion),
+      presupuesto: make(l => fmtPresupuesto(l.presupuesto)),
+      vacante: make(l => l.vacante),
+      ubicacion: make(l => l.estado || phoneToState(l.telefono)),
+    }
+  }, [closed, total])
+
+  // Velocity breakdown: rápidos / medios / lentos
+  const velocityBuckets = useMemo(() => {
+    const DAY_MS = 86400_000
+    const fast: number[] = [], mid: number[] = [], slow: number[] = []
+    for (const l of closed) {
+      const start = new Date(l.created_at).getTime()
+      const end = l.status_changed_at ? new Date(l.status_changed_at).getTime() : new Date(l.updated_at).getTime()
+      const days = Math.max(0, (end - start) / DAY_MS)
+      if (days < 7) fast.push(days)
+      else if (days < 30) mid.push(days)
+      else slow.push(days)
+    }
+    return [
+      { label: 'Cierran rápido (<7 días)', count: fast.length, color: '#22d68a' },
+      { label: 'Cierran en 7-30 días',     count: mid.length,  color: '#f5c842' },
+      { label: 'Cierran lento (>30 días)', count: slow.length, color: '#f05a5a' },
+    ]
+  }, [closed])
+
+  return (
+    <section style={{
+      background: 'var(--glass)', border: '1px solid var(--border)',
+      borderRadius: 14, padding: '22px 24px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>
+            🎯 Patrones de cierre
+          </h3>
+          <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>
+            Perfil de los <strong style={{ color: 'var(--text)' }}>{total}</strong> leads que cerraron en este periodo
+            {cycle.count > 0 && <> · ciclo promedio <strong style={{ color: 'var(--text)' }}>{cycle.avgDays.toFixed(1)} días</strong></>}
+          </span>
+        </div>
+      </div>
+
+      {total === 0
+        ? <div style={{ fontSize: 13, color: 'var(--text3)', padding: 12 }}>Aún no hay cierres en este rango.</div>
+        : (
+          <>
+            {/* Grid de 4 breakdowns */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 18, marginBottom: 18 }}>
+              <PatronCol title="🎯 Origen del cierre" rows={buckets.canal} />
+              <PatronCol title="💰 Presupuesto declarado" rows={buckets.presupuesto} />
+              <PatronCol title="👔 Vacante buscada" rows={buckets.vacante} />
+              <PatronCol title="📍 Ubicación" rows={buckets.ubicacion} />
+            </div>
+
+            {/* Velocity de cierre */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, marginBottom: 12 }}>
+                ⏱ Velocidad de cierre
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                {velocityBuckets.map(v => {
+                  const pct = total > 0 ? (v.count / total) * 100 : 0
+                  return (
+                    <div key={v.label} style={{
+                      background: 'var(--glass)', border: '1px solid var(--border)',
+                      borderLeft: `3px solid ${v.color}`,
+                      borderRadius: 10, padding: '10px 12px',
+                    }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>{v.label}</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                        <span style={{
+                          fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800,
+                          color: v.color, lineHeight: 1, fontVariantNumeric: 'tabular-nums',
+                        }}>{v.count}</span>
+                        <span style={{ fontSize: 12, color: 'var(--text3)', fontVariantNumeric: 'tabular-nums' }}>
+                          ({pct.toFixed(0)}%)
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </>
+        )}
+    </section>
+  )
+}
+
+function PatronCol({ title, rows }: { title: string; rows: Array<{ key: string; count: number; pct: number }> }) {
+  const max = rows[0]?.pct || 0
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 10 }}>
+        {title}
+      </div>
+      {rows.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>Sin datos</div>
+        : rows.map(r => (
+            <div key={r.key} style={{ marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12, marginBottom: 3 }}>
+                <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                  {r.key}
+                </span>
+                <span style={{ color: 'var(--text2)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                  {(r.pct * 100).toFixed(0)}% <span style={{ color: 'var(--text3)', fontSize: 10.5, fontWeight: 400 }}>({r.count})</span>
+                </span>
+              </div>
+              <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${max > 0 ? (r.pct / max) * 100 : 0}%`, background: 'linear-gradient(90deg, #22d68a, #00c8a0)', borderRadius: 3 }} />
+              </div>
+            </div>
+          ))}
+    </div>
+  )
+}
+
+// ─── Tiempos de conversión — timeline horizontal 5 nodos ──────────────
+function TiemposConversionTimeline({ aging, cycle }: {
+  aging: ReturnType<typeof agingByStage>
+  cycle: ReturnType<typeof cycleStats>
+}) {
+  // Mapeamos los 5 stages principales del journey de venta
+  const STAGES: Array<{ status: Lead['status']; label: string; icon: string; color: string }> = [
+    { status: 'nuevo',                 label: 'Nuevo',                icon: '✨', color: '#4ea8f5' },
+    { status: 'contactado',            label: 'Contactado',           icon: '📞', color: '#f5c842' },
+    { status: 'presentacion_enviada',  label: 'Propuesta enviada',    icon: '📨', color: '#a594ff' },
+    { status: 'espera_aprobacion',     label: 'Espera de aprobación', icon: '⏳', color: '#ffba3d' },
+    { status: 'convertido',            label: 'Convertido',           icon: '✅', color: '#22d68a' },
+  ]
+  // Para cada stage tomamos su mediana de días en el agingByStage
+  const data = STAGES.map(s => {
+    const found = aging.find(a => a.status === s.status)
+    return { ...s, days: found?.medianDays || 0, count: found?.count || 0 }
+  })
+
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '20px 24px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Tiempos de conversión</h3>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 24 }}>Mediana de días por etapa</div>
+
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', position: 'relative', marginBottom: 18 }}>
+        {data.map((s, i) => (
+          <div key={s.status} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative', minWidth: 0 }}>
+            {/* Línea conectora hacia la derecha */}
+            {i < data.length - 1 && (
+              <div style={{
+                position: 'absolute',
+                top: 22, left: 'calc(50% + 22px)', right: 'calc(-50% + 22px)',
+                height: 2, background: 'var(--border)',
+                zIndex: 0,
+              }} />
+            )}
+            {/* Nodo circular con icono */}
+            <div style={{
+              width: 44, height: 44, borderRadius: '50%',
+              background: s.color + '20',
+              border: `2px solid ${s.color}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 18, zIndex: 1, position: 'relative',
+            }}>
+              <span>{s.icon}</span>
+            </div>
+            {/* Label */}
+            <div style={{
+              fontSize: 11.5, color: 'var(--text)', fontWeight: 500,
+              marginTop: 10, textAlign: 'center', maxWidth: 110,
+              lineHeight: 1.25,
+            }}>{s.label}</div>
+            {/* Días */}
+            <div style={{
+              fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 800,
+              color: s.color, marginTop: 6, fontVariantNumeric: 'tabular-nums',
+            }}>{s.days.toFixed(1)} días</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Banner resumen */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        background: 'rgba(255,255,255,0.025)',
+        border: '1px solid var(--border)',
+        borderRadius: 10, padding: '10px 14px',
+      }}>
+        <span style={{
+          width: 22, height: 22, borderRadius: '50%',
+          background: 'var(--bg2)', color: 'var(--text3)',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, flexShrink: 0,
+        }}>i</span>
+        <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+          {cycle.count > 0
+            ? <>Los leads que se convierten tardan en promedio <strong style={{ color: 'var(--text)' }}>{cycle.avgDays.toFixed(1)} días</strong> en cerrar. Mediana: <strong>{cycle.medianDays.toFixed(1)} días</strong> · {cycle.count} cerrados en el rango.</>
+            : 'Aún no hay leads cerrados en este rango para medir el ciclo.'}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1504,22 +1768,23 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
 
-          {/* Main: tabla con tabs + sidebar insights */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
-            <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />
-            <InsightsSidebar insights={buildInsights({ byCanal, byPresupuesto, avgConvRate: stats.conversionRate, totalLeads: stats.total })} />
-          </div>
+          {/* Patrones de cierre — perfil de los leads que cerraron en el periodo */}
+          <PatronesCierreSection scoped={scoped} cycle={stats.cycle} />
 
-          {/* Bottom row — 4 cards compactas */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+          {/* Tabla principal con tabs (full width, sin sidebar) */}
+          <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />
+
+          {/* Tiempos de conversión — timeline horizontal */}
+          <TiemposConversionTimeline aging={stageAging} cycle={stats.cycle} />
+
+          {/* Bottom row — 3 cards compactas (Funnel/Volumen/Velocidad cierre eliminadas) */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
             <EficienciaPorCanal byCanal={byCanal} />
             <DistribucionConversiones leads={scoped} />
-            <VolumenConfianza byCanal={byCanal} />
-            <VelocidadCierreCard cycle={stats.cycle} />
+            <SourcesDonut leads={scoped} />
           </div>
 
-          {/* Funnel de ventas + Ventas por semana + Leads por día */}
-          <FunnelChart leads={scoped} cycle={stats.cycle} />
+          {/* Ventas por semana + Leads por día (Funnel por status eliminado) */}
           <WeeklyConversionChart leads={scoped} range={dateRange} />
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
