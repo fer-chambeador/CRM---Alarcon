@@ -602,7 +602,9 @@ export async function fetchRecurrentes(opts: FetchOpts = {}): Promise<{
     c.has_override = true
     if (ov.nombre) c.cliente = ov.nombre
     if (ov.email) c.email = ov.email
-    if (ov.fecha_inicio) c.fecha_inicio = ov.fecha_inicio
+    // NO aplicamos override de fecha_inicio — la fecha siempre es la
+    // del primer pago real registrado en el sheet. Overrides viejos
+    // se ignoran (quedan en la DB pero ya no se usan).
     if (ov.canal) c.canales = [ov.canal]
     c.notas = ov.notas
     c.hidden = ov.hidden === true
