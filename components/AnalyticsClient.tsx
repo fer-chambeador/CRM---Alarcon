@@ -1552,84 +1552,102 @@ function PatronCol({ title, rows }: { title: string; rows: Array<{ key: string; 
   )
 }
 
-// ─── Tiempos de conversión — timeline horizontal 5 nodos ──────────────
-function TiemposConversionTimeline({ aging, cycle }: {
-  aging: ReturnType<typeof agingByStage>
+// ─── Tiempos de conversión — lista de saltos entre etapas (simple) ─────
+function TiemposConversionTimeline({ movement, cycle }: {
+  movement: MovementData | null
   cycle: ReturnType<typeof cycleStats>
 }) {
-  // Mapeamos los 5 stages principales del journey de venta
-  const STAGES: Array<{ status: Lead['status']; label: string; icon: string; color: string }> = [
-    { status: 'nuevo',                 label: 'Nuevo',                icon: '✨', color: '#4ea8f5' },
-    { status: 'contactado',            label: 'Contactado',           icon: '📞', color: '#f5c842' },
-    { status: 'presentacion_enviada',  label: 'Propuesta enviada',    icon: '📨', color: '#a594ff' },
-    { status: 'espera_aprobacion',     label: 'Espera de aprobación', icon: '⏳', color: '#ffba3d' },
-    { status: 'convertido',            label: 'Convertido',           icon: '✅', color: '#22d68a' },
+  // Saltos principales del funnel
+  const JUMPS: Array<{ from: Lead['status']; to: Lead['status']; fromLabel: string; toLabel: string; fromIcon: string; toIcon: string }> = [
+    { from: 'nuevo',                 to: 'contactado',           fromIcon: '✨', toIcon: '📞', fromLabel: 'Nuevo',                toLabel: 'Contactado'           },
+    { from: 'contactado',            to: 'presentacion_enviada', fromIcon: '📞', toIcon: '📨', fromLabel: 'Contactado',           toLabel: 'Propuesta enviada'    },
+    { from: 'presentacion_enviada',  to: 'espera_aprobacion',    fromIcon: '📨', toIcon: '⏳', fromLabel: 'Propuesta enviada',    toLabel: 'Espera de aprobación' },
+    { from: 'espera_aprobacion',     to: 'convertido',           fromIcon: '⏳', toIcon: '✅', fromLabel: 'Espera de aprobación', toLabel: 'Convertido'           },
   ]
-  // Para cada stage tomamos su mediana de días en el agingByStage
-  const data = STAGES.map(s => {
-    const found = aging.find(a => a.status === s.status)
-    return { ...s, days: found?.medianDays || 0, count: found?.count || 0 }
+
+  const rows = JUMPS.map(j => {
+    const stat = movement?.transitions.find(t => t.from === j.from && t.to === j.to)
+    return { ...j, days: stat?.medianDays ?? null, count: stat?.count ?? 0 }
   })
 
-  return (
-    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '20px 24px' }}>
-      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>Tiempos de conversión</h3>
-      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 24 }}>Mediana de días por etapa</div>
+  // Total estimado: suma de medianas de cada salto que sí tenemos
+  const totalEstimado = rows.reduce((s, r) => s + (r.days || 0), 0)
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', position: 'relative', marginBottom: 18 }}>
-        {data.map((s, i) => (
-          <div key={s.status} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative', minWidth: 0 }}>
-            {/* Línea conectora hacia la derecha */}
-            {i < data.length - 1 && (
-              <div style={{
-                position: 'absolute',
-                top: 22, left: 'calc(50% + 22px)', right: 'calc(-50% + 22px)',
-                height: 2, background: 'var(--border)',
-                zIndex: 0,
-              }} />
-            )}
-            {/* Nodo circular con icono */}
-            <div style={{
-              width: 44, height: 44, borderRadius: '50%',
-              background: s.color + '20',
-              border: `2px solid ${s.color}`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 18, zIndex: 1, position: 'relative',
-            }}>
-              <span>{s.icon}</span>
+  return (
+    <div style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '22px 24px' }}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>
+        ⏱ Tiempos de conversión
+      </h3>
+      <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 20 }}>
+        Cuánto tarda un lead, en promedio, en pasar de una etapa a la siguiente.
+      </div>
+
+      {/* Lista de saltos */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr auto 1fr auto',
+            alignItems: 'center', gap: 14,
+            background: 'rgba(255,255,255,0.02)',
+            border: '1px solid var(--border)',
+            borderRadius: 10, padding: '12px 16px',
+          }}>
+            {/* From */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 18 }}>{r.fromIcon}</span>
+              <span style={{ fontSize: 13, color: 'var(--text2)' }}>{r.fromLabel}</span>
             </div>
-            {/* Label */}
-            <div style={{
-              fontSize: 11.5, color: 'var(--text)', fontWeight: 500,
-              marginTop: 10, textAlign: 'center', maxWidth: 110,
-              lineHeight: 1.25,
-            }}>{s.label}</div>
+            {/* Flecha */}
+            <span style={{ color: 'var(--text3)', fontSize: 18 }}>→</span>
+            {/* To */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 18 }}>{r.toIcon}</span>
+              <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{r.toLabel}</span>
+            </div>
             {/* Días */}
-            <div style={{
-              fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 800,
-              color: s.color, marginTop: 6, fontVariantNumeric: 'tabular-nums',
-            }}>{s.days.toFixed(1)} días</div>
+            <div style={{ textAlign: 'right', minWidth: 100 }}>
+              {r.days != null && r.count > 0
+                ? <>
+                    <div style={{
+                      fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 800,
+                      color: '#7c6af7', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+                    }}>{r.days.toFixed(1)} días</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
+                      basado en {r.count} caso{r.count === 1 ? '' : 's'}
+                    </div>
+                  </>
+                : <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>sin datos</div>}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Banner resumen */}
+      {/* Resumen total */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        background: 'rgba(255,255,255,0.025)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'linear-gradient(90deg, rgba(34,214,138,0.08), rgba(124,106,247,0.08))',
         border: '1px solid var(--border)',
-        borderRadius: 10, padding: '10px 14px',
+        borderRadius: 10, padding: '12px 16px',
       }}>
-        <span style={{
-          width: 22, height: 22, borderRadius: '50%',
-          background: 'var(--bg2)', color: 'var(--text3)',
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 12, flexShrink: 0,
-        }}>i</span>
-        <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>Tiempo TOTAL para cerrar una venta</div>
+          <div style={{ fontSize: 13.5, color: 'var(--text)' }}>
+            De <strong>Nuevo</strong> a <strong>Convertido</strong> tarda en promedio
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
           {cycle.count > 0
-            ? <>Los leads que se convierten tardan en promedio <strong style={{ color: 'var(--text)' }}>{cycle.avgDays.toFixed(1)} días</strong> en cerrar. Mediana: <strong>{cycle.medianDays.toFixed(1)} días</strong> · {cycle.count} cerrados en el rango.</>
-            : 'Aún no hay leads cerrados en este rango para medir el ciclo.'}
+            ? <>
+                <div style={{
+                  fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800,
+                  color: '#22d68a', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+                }}>{cycle.medianDays.toFixed(1)} días</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                  mediana de {cycle.count} cierres {totalEstimado > 0 && <>· suma de saltos: ~{totalEstimado.toFixed(0)}d</>}
+                </div>
+              </>
+            : <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>Sin cierres en el rango</div>}
         </div>
       </div>
     </div>
@@ -1768,24 +1786,22 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
 
-          {/* Patrones de cierre — perfil de los leads que cerraron en el periodo */}
-          <PatronesCierreSection scoped={scoped} cycle={stats.cycle} />
-
           {/* Tabla principal con tabs (full width, sin sidebar) */}
           <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />
 
-          {/* Tiempos de conversión — timeline horizontal */}
-          <TiemposConversionTimeline aging={stageAging} cycle={stats.cycle} />
+          {/* Tiempos de conversión — lista de saltos entre etapas */}
+          <TiemposConversionTimeline movement={movement} cycle={stats.cycle} />
 
-          {/* Bottom row — 3 cards compactas (Funnel/Volumen/Velocidad cierre eliminadas) */}
+          {/* Bottom row — 2 cards (Eficiencia por canal eliminada) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-            <EficienciaPorCanal byCanal={byCanal} />
             <DistribucionConversiones leads={scoped} />
             <SourcesDonut leads={scoped} />
           </div>
 
-          {/* Ventas por semana + Leads por día (Funnel por status eliminado) */}
-          <WeeklyConversionChart leads={scoped} range={dateRange} />
+          {/* Patrones de cierre — movido al final */}
+          <PatronesCierreSection scoped={scoped} cycle={stats.cycle} />
+
+          {/* Leads por día (Ventas por semana eliminada) */}
           <DailyTimeline leads={scoped} range={dateRange} />
         </div>
       </main>
