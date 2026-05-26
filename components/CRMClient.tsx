@@ -394,6 +394,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     initialLeadId ? initialLeads.find(l => l.id === initialLeadId) || null : null
   )
   const [showAddModal, setShowAddModal] = useState(initialNew)
+  const [exportOpen, setExportOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
@@ -533,9 +534,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   }, [dateScoped])
   const periodGoal = goalForPeriod(dateRange)
 
-  // Descarga los leads que pasan filtros + búsqueda + sort. Útil para
-  // listas tipo "todos los en 1er contacto con >7 días sin contactar".
-  const exportFiltered = useCallback(() => {
+  // Build CSV de leads — usado por el modal de export.
+  const buildLeadsCsv = useCallback((leads: Lead[]) => {
     const headers = [
       'Nombre', 'Email', 'Empresa', 'Teléfono', 'Ubicación',
       'Status', 'Intentos de contacto', 'Días sin contactar',
@@ -543,7 +543,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       'Monto', 'Fecha de creación', 'Última actualización',
       'Notas',
     ]
-    const rows = sorted.map(l => [
+    const rows = leads.map(l => [
       l.nombre || '',
       l.email,
       l.empresa || '',
@@ -561,9 +561,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       l.updated_at ? new Date(l.updated_at).toLocaleString('es-MX') : '',
       l.notas || '',
     ])
-    const csv = rowsToCsv(headers, rows)
-    downloadCsv(exportFilename('Leads'), csv)
-  }, [sorted])
+    return rowsToCsv(headers, rows)
+  }, [])
 
   return (
     <div className={styles.root}>
@@ -625,8 +624,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               <option key={r} value={r}>{DATE_LABELS[r]}</option>
             ))}
           </select>
-          <button onClick={exportFiltered}
-            title="Descarga los leads visibles (con filtros aplicados) en formato CSV/Excel"
+          <button onClick={() => setExportOpen(true)}
+            title="Afina y descarga los leads visibles en formato CSV/Excel"
             style={{
               background: 'var(--glass)', border: '1px solid var(--border2)',
               color: 'var(--text2)', padding: '9px 16px', borderRadius: 'var(--radius-pill)',
@@ -790,11 +789,198 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
       {selectedLead && <LeadModal lead={selectedLead} onClose={() => setSelectedLead(null)} onSave={handleSave} onDelete={handleDelete} />}
       {showAddModal && <AddLeadModal onClose={() => setShowAddModal(false)} onAdd={handleAdd} />}
+      {exportOpen && (
+        <ExportModal
+          leads={sorted}
+          onClose={() => setExportOpen(false)}
+          onDownload={(subset) => {
+            const csv = buildLeadsCsv(subset)
+            downloadCsv(exportFilename('Leads'), csv)
+            setExportOpen(false)
+          }}
+        />
+      )}
       {popover && (
         <StatusPopover current={popover.current} anchor={{ x: popover.x, y: popover.y }}
           onPick={(s) => { updateStatus(popover.leadId, s); setPopover(null) }}
           onClose={() => setPopover(null)} />
       )}
+    </div>
+  )
+}
+
+// ─── Export Modal ────────────────────────────────────────────────────────────
+function ExportModal({ leads, onClose, onDownload }: {
+  leads: Lead[]
+  onClose: () => void
+  onDownload: (subset: Lead[]) => void
+}) {
+  const SIN_DATO = '— sin dato —'
+
+  // Indexa los valores únicos por dimensión, con count
+  type Bucket = { value: string; label: string; count: number }
+  const buckets = useMemo(() => {
+    const canalMap = new Map<string, number>()
+    const ubicacionMap = new Map<string, number>()
+    const presupuestoMap = new Map<string, number>()
+    const intentosMap = new Map<string, number>()
+
+    for (const l of leads) {
+      const canal = l.canal_adquisicion || SIN_DATO
+      canalMap.set(canal, (canalMap.get(canal) || 0) + 1)
+
+      const ubi = l.estado || phoneToState(l.telefono) || SIN_DATO
+      ubicacionMap.set(ubi, (ubicacionMap.get(ubi) || 0) + 1)
+
+      const pres = l.presupuesto
+        ? PRESUPUESTO_LABELS[l.presupuesto as Presupuesto]
+        : SIN_DATO
+      presupuestoMap.set(pres, (presupuestoMap.get(pres) || 0) + 1)
+
+      const intentos = String(l.veces_contactado || 0)
+      intentosMap.set(intentos, (intentosMap.get(intentos) || 0) + 1)
+    }
+    const toList = (m: Map<string, number>): Bucket[] =>
+      Array.from(m.entries())
+        .map(([value, count]) => ({ value, label: value, count }))
+        .sort((a, b) => b.count - a.count)
+    return {
+      canales: toList(canalMap),
+      ubicaciones: toList(ubicacionMap),
+      presupuestos: toList(presupuestoMap),
+      intentos: toList(intentosMap),
+    }
+  }, [leads])
+
+  // Estado de cada bucket: por default todos seleccionados
+  const allValues = (bs: Bucket[]) => new Set(bs.map(b => b.value))
+  const [selCanales, setSelCanales] = useState<Set<string>>(() => allValues(buckets.canales))
+  const [selUbicaciones, setSelUbicaciones] = useState<Set<string>>(() => allValues(buckets.ubicaciones))
+  const [selPresupuestos, setSelPresupuestos] = useState<Set<string>>(() => allValues(buckets.presupuestos))
+  const [selIntentos, setSelIntentos] = useState<Set<string>>(() => allValues(buckets.intentos))
+
+  // Subset filtrado en vivo
+  const subset = useMemo(() => {
+    return leads.filter(l => {
+      const canal = l.canal_adquisicion || SIN_DATO
+      if (!selCanales.has(canal)) return false
+      const ubi = l.estado || phoneToState(l.telefono) || SIN_DATO
+      if (!selUbicaciones.has(ubi)) return false
+      const pres = l.presupuesto ? PRESUPUESTO_LABELS[l.presupuesto as Presupuesto] : SIN_DATO
+      if (!selPresupuestos.has(pres)) return false
+      const intentos = String(l.veces_contactado || 0)
+      if (!selIntentos.has(intentos)) return false
+      return true
+    })
+  }, [leads, selCanales, selUbicaciones, selPresupuestos, selIntentos])
+
+  const toggleSet = (set: Set<string>, key: string): Set<string> => {
+    const next = new Set(set)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
+  }
+
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: 720 }}>
+        <div className={styles.modalHeader}>
+          <div>
+            <div className={styles.modalEmail}>⇣ Afinar export</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text3)', marginTop: 4 }}>
+              {leads.length} leads visibles · desmarcá lo que no quieras incluir
+            </div>
+          </div>
+          <button className={styles.closeBtn} onClick={onClose}>✕</button>
+        </div>
+        <div className={styles.modalBody}>
+          <ExportGroup title="Canal de adquisición" buckets={buckets.canales}
+            selected={selCanales} onToggle={(v) => setSelCanales(s => toggleSet(s, v))}
+            onAll={() => setSelCanales(allValues(buckets.canales))}
+            onNone={() => setSelCanales(new Set())} />
+          <ExportGroup title="Ubicación (estado)" buckets={buckets.ubicaciones}
+            selected={selUbicaciones} onToggle={(v) => setSelUbicaciones(s => toggleSet(s, v))}
+            onAll={() => setSelUbicaciones(allValues(buckets.ubicaciones))}
+            onNone={() => setSelUbicaciones(new Set())} />
+          <ExportGroup title="Presupuesto declarado" buckets={buckets.presupuestos}
+            selected={selPresupuestos} onToggle={(v) => setSelPresupuestos(s => toggleSet(s, v))}
+            onAll={() => setSelPresupuestos(allValues(buckets.presupuestos))}
+            onNone={() => setSelPresupuestos(new Set())} />
+          <ExportGroup title="Intentos de contacto" buckets={buckets.intentos}
+            selected={selIntentos} onToggle={(v) => setSelIntentos(s => toggleSet(s, v))}
+            onAll={() => setSelIntentos(allValues(buckets.intentos))}
+            onNone={() => setSelIntentos(new Set())} />
+        </div>
+        <div className={styles.modalFooter}>
+          <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>
+            Vas a descargar <strong style={{ color: 'var(--text)' }}>{subset.length}</strong> de {leads.length} leads
+          </span>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            <button className={styles.cancelBtn} onClick={onClose}>Cancelar</button>
+            <button className={styles.saveBtn}
+              disabled={subset.length === 0}
+              onClick={() => onDownload(subset)}>
+              ⇣ Descargar ({subset.length})
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ExportGroup({ title, buckets, selected, onToggle, onAll, onNone }: {
+  title: string
+  buckets: Array<{ value: string; label: string; count: number }>
+  selected: Set<string>
+  onToggle: (v: string) => void
+  onAll: () => void
+  onNone: () => void
+}) {
+  if (buckets.length === 0) return null
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+        <strong style={{ fontSize: 11.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>
+          {title}
+        </strong>
+        <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+          <button onClick={onAll}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+            todos
+          </button>
+          <button onClick={onNone}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+            ninguno
+          </button>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {buckets.map(b => {
+          const on = selected.has(b.value)
+          return (
+            <label key={b.value}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                background: on ? 'rgba(124,106,247,0.18)' : 'var(--glass)',
+                border: `1px solid ${on ? 'rgba(124,106,247,0.45)' : 'var(--border)'}`,
+                color: on ? 'var(--text)' : 'var(--text3)',
+                borderRadius: 'var(--radius-pill)',
+                padding: '5px 11px',
+                fontSize: 12,
+                cursor: 'pointer',
+                userSelect: 'none',
+                transition: 'all 0.12s',
+              }}>
+              <input type="checkbox" checked={on} onChange={() => onToggle(b.value)}
+                style={{ accentColor: '#7c6af7', cursor: 'pointer' }} />
+              <span>{b.label}</span>
+              <span style={{ fontSize: 10.5, color: on ? 'var(--text3)' : 'var(--text3)', fontFamily: 'var(--mono)' }}>
+                {b.count}
+              </span>
+            </label>
+          )
+        })}
+      </div>
     </div>
   )
 }
