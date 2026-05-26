@@ -862,9 +862,9 @@ function ExportModal({ leads, onClose, onDownload }: {
       Array.from(m.entries())
         .map(([value, count]) => ({ value, label: value, count }))
         .sort((a, b) => b.count - a.count)
-    // Aging en el orden definido en EXPORT_AGING_BUCKETS (1-3, 4-6, 7-10, 11-15, >15)
+    // Aging en el orden definido en EXPORT_AGING_BUCKETS (1-3, 4-6, 7-10, 11-15, >15).
+    // Siempre los 5 buckets, aunque alguno tenga 0 (es info útil "no hay leads en ese rango").
     const agingList: Bucket[] = EXPORT_AGING_BUCKETS
-      .filter(b => agingMap.has(b.value))
       .map(b => ({ value: b.value, label: b.label, count: agingMap.get(b.value) || 0 }))
     return {
       canales: toList(canalMap),
@@ -991,24 +991,27 @@ function ExportGroup({ title, buckets, selected, onToggle, onAll, onNone }: {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {buckets.map(b => {
           const on = selected.has(b.value)
+          const empty = b.count === 0
           return (
             <label key={b.value}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 background: on ? 'rgba(124,106,247,0.18)' : 'var(--glass)',
                 border: `1px solid ${on ? 'rgba(124,106,247,0.45)' : 'var(--border)'}`,
-                color: on ? 'var(--text)' : 'var(--text3)',
+                color: empty ? 'var(--text3)' : on ? 'var(--text)' : 'var(--text2)',
+                opacity: empty ? 0.55 : 1,
                 borderRadius: 'var(--radius-pill)',
                 padding: '5px 11px',
                 fontSize: 12,
-                cursor: 'pointer',
+                cursor: empty ? 'default' : 'pointer',
                 userSelect: 'none',
                 transition: 'all 0.12s',
               }}>
               <input type="checkbox" checked={on} onChange={() => onToggle(b.value)}
-                style={{ accentColor: '#7c6af7', cursor: 'pointer' }} />
+                disabled={empty}
+                style={{ accentColor: '#7c6af7', cursor: empty ? 'default' : 'pointer' }} />
               <span>{b.label}</span>
-              <span style={{ fontSize: 10.5, color: on ? 'var(--text3)' : 'var(--text3)', fontFamily: 'var(--mono)' }}>
+              <span style={{ fontSize: 10.5, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
                 {b.count}
               </span>
             </label>
