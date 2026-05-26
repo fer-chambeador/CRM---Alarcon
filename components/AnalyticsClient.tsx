@@ -741,6 +741,28 @@ function NotasSection({ leads }: { leads: Lead[] }) {
   )
 }
 
+// ─── Separador entre grupos temáticos (estilo CRO dashboard) ────────────
+function GroupHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div style={{
+      marginTop: 8, marginBottom: -6,
+      paddingBottom: 8,
+      borderBottom: '1px solid var(--border)',
+    }}>
+      <h2 style={{
+        margin: 0, fontFamily: 'var(--font-display)',
+        fontSize: 20, fontWeight: 800, color: 'var(--text)',
+        letterSpacing: '-0.015em',
+      }}>{title}</h2>
+      {subtitle && (
+        <div style={{ fontSize: 12.5, color: 'var(--text3)', marginTop: 4 }}>
+          {subtitle}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 type MovementData = {
   passCounts: StagePassCount[]
@@ -850,12 +872,29 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
         </header>
 
         <div className={styles.body}>
+          {/* HERO */}
           <ForecastSection buckets={forecastBuckets} forecast={stats.forecast} cerradoReal={stats.pipelineCerrado} goal={periodGoal} goalLabel={periodGoalLabel} convRate={stats.conversionRate} totalLeads={stats.total} />
+
+          {/* FUNNEL */}
+          <GroupHeader title="Funnel" subtitle="Cómo se mueven los leads por las etapas" />
           <FunnelChart leads={scoped} cycle={stats.cycle} />
+
+          {/* PATRONES DE CIERRE */}
+          <GroupHeader title="Patrones de cierre" subtitle="Quiénes están convirtiendo más — para duplicar lo que funciona" />
           <ConvertersSection byCanal={byCanal} byPresupuesto={byPresupuesto} byVacante={byVacante} />
-          <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
+
+          {/* TIPOS DE CLIENTE */}
+          <GroupHeader title="Tipos de cliente" subtitle="Segmentación por presupuesto y geografía" />
+          <BreakdownTable title="Por presupuesto declarado" subtitle="Tier de inversión que entra al pipeline" rows={byPresupuesto} />
           <BreakdownTable title="Por estado (LADA)" subtitle="De dónde se están registrando los leads" rows={byEstado} />
+
+          {/* TIEMPOS DE CONVERSIÓN */}
+          <GroupHeader title="Tiempos de conversión" subtitle="Dónde se atoran los leads y cuánto tardan en cerrar" />
+          <FunnelHealthSection aging={stageAging} cycle={stats.cycle} movement={movement} />
           <DailyTimeline leads={scoped} range={dateRange} />
+
+          {/* SUGERENCIAS al final — acciones que salen de todo lo anterior */}
+          <GroupHeader title="Sugerencias" subtitle="Acciones calculadas desde el pipeline actual" />
           <TacticsSection tactics={tactics} />
         </div>
       </main>
