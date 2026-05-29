@@ -382,12 +382,28 @@ const norm = (s: string) => s
   .replace(/[_-]/g, '')
 
 function mapPresupuesto(raw: string): FormFields['presupuesto'] {
-  const t = norm(raw)
-  if (!t || t.includes('noinvier') || t.includes('noinviert')) return 'none'
-  if (t.includes('0a1000') || t.includes('0-1000') || t.includes('hasta1000') || t.includes('menosde1000')) return '100_to_1000'
-  if (t.includes('2000a5000') || t.includes('2000-5000') || t.includes('2k') || t.includes('2,000')) return '2000_to_5000'
-  if (t.includes('10000') || t.includes('10k') || t.includes('+10') || t.includes('masde10')) return '10000_plus'
-  return undefined
+  if (!raw) return undefined
+  const lower = raw.toLowerCase()
+
+  // Cualquier variante de "no invierto" cae en 'none'
+  if (/no\s*(invier|invert|gast)/.test(lower)) return 'none'
+
+  // Extraer todos los números del texto (manejando comas como miles)
+  const numbers = (raw.match(/\d[\d,]*/g) || [])
+    .map(n => parseInt(n.replace(/,/g, ''), 10))
+    .filter(n => !isNaN(n))
+
+  if (numbers.length === 0) return undefined
+
+  // Si solo aparece "0" o "$0", también es 'none'
+  if (numbers.every(n => n === 0)) return 'none'
+
+  // Tomar el máximo para clasificar el bucket (cubre rangos tipo "$2,000 - $5,000")
+  const max = Math.max(...numbers)
+
+  if (max <= 1000) return '100_to_1000'
+  if (max <= 5000) return '2000_to_5000'
+  return '10000_plus'
 }
 
 /**
