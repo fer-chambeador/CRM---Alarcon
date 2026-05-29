@@ -300,9 +300,30 @@ export type VambeMessage = {
 export async function getMessages(aiContactId: string, limit = 50): Promise<VambeMessage[]> {
   const raw = await vambeFetch('GET', `/api/public/contact/${aiContactId}/messages`, {
     query: { limit: String(limit) },
-  }) as { messages?: VambeMessage[]; data?: VambeMessage[] } | VambeMessage[]
-  if (Array.isArray(raw)) return raw
-  return raw?.messages || raw?.data || []
+  }) as { messages?: unknown[]; data?: unknown[] } | unknown[]
+  const list: unknown[] = Array.isArray(raw)
+    ? raw
+    : (raw?.messages || raw?.data || [])
+
+  // Normalizar: Vambe puede usar `message`, `text`, `content`, `body` (o variantes).
+  // Buscar en todos los campos comunes y devolver siempre con `message` poblado.
+  return list.map(m => {
+    const r = m as Record<string, unknown>
+    const candidates = [
+      r.message, r.text, r.content, r.body,
+      r.message_text, r.content_text, r.text_content,
+      // Algunas APIs anidan: data.message o payload.text
+      (r.data as Record<string, unknown> | undefined)?.message,
+      (r.data as Record<string, unknown> | undefined)?.text,
+      (r.payload as Record<string, unknown> | undefined)?.text,
+      (r.payload as Record<string, unknown> | undefined)?.body,
+    ]
+    const msg = candidates.find(v => typeof v === 'string' && v.length > 0) as string | undefined
+    return {
+      ...(r as object),
+      message: msg || '',
+    } as VambeMessage
+  })
 }
 
 // ─── Webhook helpers ─────────────────────────────────────────────────────
