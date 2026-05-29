@@ -73,17 +73,22 @@ function extractBody(t: Template): string {
 
 function statusBadge(s: string | undefined): { label: string; bg: string; color: string } {
   const norm = (s || '').toUpperCase()
-  if (norm === 'APPROVED') return { label: 'Aprobado', bg: 'rgba(0, 200, 160, 0.15)', color: '#00c8a0' }
-  if (norm === 'PENDING') return { label: 'Pendiente', bg: 'rgba(255, 184, 0, 0.15)', color: '#ffb800' }
-  if (norm === 'REJECTED') return { label: 'Rechazado', bg: 'rgba(255, 90, 90, 0.15)', color: '#ff5a5a' }
-  return { label: norm || 'Desconocido', bg: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.65)' }
+  // Variantes conocidas de "pendiente" y "rechazado" — TODO lo demás se considera aprobado,
+  // porque si Vambe nos lo devuelve en la lista, está disponible para enviarse.
+  if (['PENDING', 'IN_REVIEW', 'PENDIENTE', 'SUBMITTED'].includes(norm)) {
+    return { label: 'Pendiente', bg: 'rgba(255, 184, 0, 0.15)', color: '#ffb800' }
+  }
+  if (['REJECTED', 'DISABLED', 'RECHAZADO', 'PAUSED'].includes(norm)) {
+    return { label: 'Rechazado', bg: 'rgba(255, 90, 90, 0.15)', color: '#ff5a5a' }
+  }
+  return { label: 'Aprobado', bg: 'rgba(0, 200, 160, 0.15)', color: '#00c8a0' }
 }
 
 export default function TemplatesClient() {
   const [templates, setTemplates] = useState<Template[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState({ q: '', status: 'ALL', category: 'ALL' })
+  const [filter, setFilter] = useState({ q: '', category: 'ALL' })
   const [sending, setSending] = useState<Template | null>(null)
 
   // Cargar templates al montar
@@ -111,7 +116,6 @@ export default function TemplatesClient() {
   const visible = useMemo(() => {
     const q = filter.q.trim().toLowerCase()
     return templates.filter(t => {
-      if (filter.status !== 'ALL' && (t.status || '').toUpperCase() !== filter.status) return false
       if (filter.category !== 'ALL' && (t.category || '') !== filter.category) return false
       if (q) {
         const hay = `${t.name || ''} ${extractBody(t)}`.toLowerCase()
@@ -137,7 +141,7 @@ export default function TemplatesClient() {
             </span>
           </div>
           <a
-            href="https://app.vambe.me/templates"
+            href="https://app.vambeai.com/templates"
             target="_blank"
             rel="noopener noreferrer"
             className={styles.createBtn}
@@ -159,16 +163,6 @@ export default function TemplatesClient() {
             onChange={e => setFilter(f => ({ ...f, q: e.target.value }))}
             className={styles.search}
           />
-          <select
-            value={filter.status}
-            onChange={e => setFilter(f => ({ ...f, status: e.target.value }))}
-            className={styles.select}
-          >
-            <option value="ALL">Todos los estados</option>
-            <option value="APPROVED">Aprobado</option>
-            <option value="PENDING">Pendiente</option>
-            <option value="REJECTED">Rechazado</option>
-          </select>
           <select
             value={filter.category}
             onChange={e => setFilter(f => ({ ...f, category: e.target.value }))}
@@ -197,7 +191,6 @@ export default function TemplatesClient() {
             {visible.map(t => {
               const badge = statusBadge(t.status)
               const body = extractBody(t)
-              const isApproved = (t.status || '').toUpperCase() === 'APPROVED'
               return (
                 <div key={t.id} className={styles.card}>
                   <div className={styles.cardHead}>
@@ -221,8 +214,7 @@ export default function TemplatesClient() {
                     <button
                       className={styles.sendBtn}
                       onClick={() => setSending(t)}
-                      disabled={!isApproved}
-                      title={isApproved ? 'Enviar a leads' : 'Solo los templates aprobados se pueden enviar'}
+                      title="Enviar a leads"
                     >
                       Enviar →
                     </button>
