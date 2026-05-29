@@ -97,7 +97,11 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
 
 async function handleMessage(supabase: Supabase, type: string, aiContactId: string | undefined, data: Record<string, unknown>) {
   const isInbound = type === 'message.received'
-  const text = (data.message || '') as string
+  // Vambe puede mandar el texto en `body` o `message` (y a veces anidado). Probar varios.
+  const text = ((data.message || data.body || data.text || data.content
+    || (data.payload as Record<string, unknown> | undefined)?.body
+    || (data.payload as Record<string, unknown> | undefined)?.text
+    || '') as string)
 
   // CASO ESPECIAL: mensaje con el patrón del formulario. NO creamos el lead
   // todavía — solo guardamos los datos en vambe_pending_leads. La creación
