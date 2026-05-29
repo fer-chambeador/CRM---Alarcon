@@ -219,6 +219,38 @@ export async function sendTemplateBulk(params: {
   })
 }
 
+// ─── Get contacts by days (filtrable por stage_id) ─────────────────────
+export type VambeContact = {
+  id: string                              // = aiContactId
+  name?: string
+  phone?: string
+  email?: string
+  platform?: string
+  last_message_at?: string
+  chat_status?: string
+  created_at?: string
+  default_stage_id?: string | null
+  active_ticket_v2?: { id?: string; current_stage_id?: string | null } | null
+  [k: string]: unknown
+}
+
+export async function getContactsByDays(params: {
+  days: number
+  stageId?: string
+  pipelineId?: string
+}): Promise<VambeContact[]> {
+  const query: Record<string, string | undefined> = {
+    days: String(params.days),
+    stage_id: params.stageId,
+    pipeline_id: params.pipelineId,
+  }
+  const raw = await vambeFetch('GET', '/api/public/contacts', { query }) as
+    | { contacts?: VambeContact[]; data?: VambeContact[] }
+    | VambeContact[]
+  if (Array.isArray(raw)) return raw
+  return raw?.contacts || raw?.data || []
+}
+
 // ─── List pipelines (incluye stages) ────────────────────────────────────
 export type VambePipeline = {
   id: string
