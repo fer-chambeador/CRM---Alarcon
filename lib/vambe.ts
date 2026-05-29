@@ -409,14 +409,30 @@ function mapPresupuesto(raw: string): FormFields['presupuesto'] {
 /**
  * Detecta si un mensaje contiene el formulario y extrae los campos.
  * Retorna null si no detecta formato de formulario.
+ *
+ * Maneja dos formatos:
+ *  - Multi-línea: cada `key: value` en su propia línea (formato canónico).
+ *  - Inline:      todos los campos pegados en una sola línea separados por espacios.
+ *                 Se inserta `\n` antes de cada `key:` candidato y se reintenta.
  */
 export function parseFormMessage(text: string): FormFields | null {
   if (!text) return null
-  // Heurística: el formulario tiene varias líneas "key: value"
+
+  // 1) Intento canónico: parsear tal cual viene
+  const first = parseKeyValueLines(text)
+  if (first) return first
+
+  // 2) Fallback: inline single-line. Insertar `\n` antes de cada key candidato.
+  //    Key candidato = `¿...?` o palabra ASCII (letras/dígitos/underscore),
+  //    seguido de `:` y espacio. Idempotente con multi-línea (matchea \s+ incluido \n).
+  const expanded = text.replace(/\s+([¿][^:]+?\?|[a-zA-Z][\w]+)\s*:\s*/g, '\n$1: ')
+  return parseKeyValueLines(expanded)
+}
+
+function parseKeyValueLines(text: string): FormFields | null {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
   const kv: Record<string, string> = {}
   for (const line of lines) {
-    // Match "key: value" o "key:value"
     const m = line.match(/^([^:]+?)\s*:\s*(.*)$/)
     if (!m) continue
     const key = norm(m[1])
@@ -424,12 +440,10 @@ export function parseFormMessage(text: string): FormFields | null {
     if (!key || !value) continue
     kv[key] = value
   }
-  // Si tiene menos de 3 pares, no es formulario
   if (Object.keys(kv).length < 3) return null
 
   const out: FormFields = { raw: kv }
 
-  // Buscar por keys normalizadas — flexible a variaciones
   for (const [k, v] of Object.entries(kv)) {
     if (!v) continue
     if (k === 'fullname' || k === 'nombre' || k === 'name') out.nombre = v
@@ -442,7 +456,6 @@ export function parseFormMessage(text: string): FormFields | null {
     else if (k === 'inboxurl' || k.includes('inbox')) out.inbox_url = v
   }
 
-  // Si no detectó ni nombre ni email ni teléfono, no es formulario
   if (!out.nombre && !out.email && !out.telefono) return null
   return out
 }
