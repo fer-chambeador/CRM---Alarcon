@@ -1,18 +1,26 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// El módulo se evalúa durante `next build` (page data collection).
+// Si las env vars no están disponibles en build-time (Railway no siempre
+// las expone al builder), usamos placeholders para no tirar abajo el build.
+// En runtime las env vars reales están presentes.
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   realtime: { params: { eventsPerSecond: 10 } },
 })
 
-// Client con privilegios de servicio (solo para API routes del servidor)
+// Client con privilegios de servicio (solo para API routes del servidor).
+// Acá sí explotamos si faltan vars en runtime — no queremos queries
+// silenciosas contra un placeholder.
 export function createServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !serviceKey) {
+    throw new Error('Supabase env vars no configuradas (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)')
+  }
+  return createClient(url, serviceKey)
 }
 
 export type Lead = {
