@@ -22,5 +22,9 @@ export async function POST(req: NextRequest) {
   }).select().single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // NOTA: El mensaje de bienvenida en Vambe lo dispara la propia campaña de Vambe.
+  // El CRM NO envía nada a Vambe al crear leads — el flujo es Vambe → CRM (vía webhook).
+
   return NextResponse.json(data)
 }

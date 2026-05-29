@@ -260,7 +260,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'settings' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -283,6 +283,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
       {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
       {link('/asistente', 'asistente', 'Asistente', '🧠')}
+      {link('/templates', 'templates', 'Templates', '✉️')}
       {link('/settings', 'settings', 'Settings', '⚙️')}
     </nav>
   )
@@ -339,6 +340,7 @@ export function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
       { kind: 'nav', label: '📋 Lista de leads', href: '/leads' },
       { kind: 'nav', label: '📊 Analítica', href: '/analytics' },
       { kind: 'nav', label: '🧠 Asistente', href: '/asistente' },
+      { kind: 'nav', label: '✉️ Templates', href: '/templates' },
       { kind: 'create' },
     ]
     if (!q.trim()) return navs

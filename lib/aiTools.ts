@@ -1,6 +1,7 @@
 import { createServiceClient } from './supabase'
 import { STATUS_ORDER } from './status'
 import type { Lead } from './supabase'
+import { sendTemplate, sendMessage, syncLeadToVambe } from './vambe'
 
 /**
  * Tools que el asistente AI puede ejecutar contra la DB.
@@ -74,6 +75,43 @@ IMPORTANTE: por default es dry-run (no aplica cambios, solo lista los afectados)
       properties: {
         lead_emails: { type: 'array', items: { type: 'string' }, description: 'Emails de leads a llamar' },
         prompt: { type: 'string', description: 'Guion / contexto para el agente de Vambe' },
+      },
+      required: ['lead_emails'],
+    },
+  },
+  {
+    name: 'send_vambe_template',
+    description: 'Envía un template de WhatsApp pre-aprobado vía Vambe a UN lead. Útil para mandar bienvenida, follow-up, recordatorio de propuesta, etc. El template_id se obtiene del dashboard de Vambe. Para mandar a varios leads, llamala N veces.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lead_email: { type: 'string', description: 'Email del lead destinatario' },
+        template_id: { type: 'string', description: 'UUID del template en Vambe' },
+        variables: { type: 'object', description: 'Variables del template (clave/valor)', additionalProperties: true },
+      },
+      required: ['lead_email', 'template_id'],
+    },
+  },
+  {
+    name: 'send_vambe_message',
+    description: 'Envía un mensaje de WhatsApp directo (sin template) a un lead vía Vambe. Útil para responder ad-hoc o iniciar conversación con texto libre.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lead_email: { type: 'string' },
+        message: { type: 'string', description: 'Texto del mensaje' },
+      },
+      required: ['lead_email', 'message'],
+    },
+  },
+  {
+    name: 'start_vambe_conversation',
+    description: 'Para uno o varios leads: hace upsert en Vambe (si no existían) y opcionalmente manda un template de bienvenida. Útil cuando el user dice "arrancá conversación con X leads".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lead_emails: { type: 'array', items: { type: 'string' } },
+        send_welcome: { type: 'boolean', description: 'Si true, manda el welcome template del CRM. Default true.' },
       },
       required: ['lead_emails'],
     },
@@ -253,6 +291,88 @@ async function execQueueVambeCalls(input: { lead_emails: string[]; prompt?: stri
   }
 }
 
+async function findLeadByEmail(supabase: Supabase, email: string): Promise<Lead | null> {
+  const { data } = await supabase.from('leads').select('*').ilike('email', email).maybeSingle()
+  return (data as Lead | null) ?? null
+}
+
+async function execSendVambeTemplate(input: { lead_email: string; template_id: string; variables?: Record<string, unknown> }, supabase: Supabase): Promise<ToolResult> {
+  const lead = await findLeadByEmail(supabase, input.lead_email)
+  if (!lead) return { ok: false, summary: `Lead ${input.lead_email} no encontrado`, error: 'not_found' }
+  if (!lead.telefono) return { ok: false, summary: `Lead ${input.lead_email} no tiene teléfono`, error: 'no_phone' }
+  try {
+    await sendTemplate({ phone: lead.telefono, templateId: input.template_id, data: input.variables || {} })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'vambe_template_sent',
+      descripcion: `Template ${input.template_id.slice(0, 8)}… enviado vía Vambe`,
+      metadata: { source: 'asistente_ai', template_id: input.template_id, variables: input.variables },
+    })
+    return {
+      ok: true,
+      summary: `Template enviado a ${lead.nombre || lead.email} por WhatsApp`,
+      affected: [{ id: lead.id, email: lead.email, nombre: lead.nombre }],
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, summary: `Falló envío de template: ${msg}`, error: msg }
+  }
+}
+
+async function execSendVambeMessage(input: { lead_email: string; message: string }, supabase: Supabase): Promise<ToolResult> {
+  const lead = await findLeadByEmail(supabase, input.lead_email)
+  if (!lead) return { ok: false, summary: `Lead ${input.lead_email} no encontrado`, error: 'not_found' }
+  if (!lead.telefono) return { ok: false, summary: `Lead ${input.lead_email} no tiene teléfono`, error: 'no_phone' }
+  try {
+    await sendMessage({ phone: lead.telefono, message: input.message })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'vambe_message_sent',
+      descripcion: `📤 Vambe (asistente): ${input.message.slice(0, 100)}`,
+      metadata: { source: 'asistente_ai', message: input.message },
+    })
+    return {
+      ok: true,
+      summary: `Mensaje enviado a ${lead.nombre || lead.email}`,
+      affected: [{ id: lead.id, email: lead.email, nombre: lead.nombre }],
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, summary: `Falló envío: ${msg}`, error: msg }
+  }
+}
+
+async function execStartVambeConversation(input: { lead_emails: string[]; send_welcome?: boolean }, supabase: Supabase): Promise<ToolResult> {
+  const sendWelcome = input.send_welcome !== false  // default true
+  const affected: Array<{ id: string; email: string; nombre: string | null }> = []
+  const errors: string[] = []
+  for (const email of input.lead_emails) {
+    const lead = await findLeadByEmail(supabase, email)
+    if (!lead) { errors.push(`${email}: no encontrado`); continue }
+    const sync = await syncLeadToVambe(lead, { sendWelcome })
+    if (sync.ok) {
+      if (sync.ai_contact_id) {
+        await supabase.from('leads').update({ vambe_contact_id: sync.ai_contact_id }).eq('id', lead.id)
+      }
+      affected.push({ id: lead.id, email: lead.email, nombre: lead.nombre })
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'vambe_sync',
+        descripcion: `Conversación iniciada en Vambe${sync.welcome_sent ? ' (welcome enviado)' : ''}`,
+        metadata: { source: 'asistente_ai', ...sync },
+      })
+    } else {
+      errors.push(`${email}: ${sync.error}`)
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    summary: `${affected.length} conversaciones iniciadas en Vambe${errors.length ? ` · ${errors.length} fallaron` : ''}`,
+    affected,
+    data: { errors, sendWelcome },
+  }
+}
+
 async function execGenerateFile(input: {
   filename: string
   mime_type: string
@@ -282,8 +402,11 @@ export async function executeTool(name: string, input: unknown, supabase: Supaba
       case 'update_lead_status':  return await execUpdateLeadStatus(input as Parameters<typeof execUpdateLeadStatus>[0], supabase)
       case 'bulk_update_status':  return await execBulkUpdateStatus(input as Parameters<typeof execBulkUpdateStatus>[0], supabase)
       case 'add_note_to_lead':    return await execAddNote(input as Parameters<typeof execAddNote>[0], supabase)
-      case 'queue_vambe_calls':   return await execQueueVambeCalls(input as Parameters<typeof execQueueVambeCalls>[0], supabase)
-      case 'generate_file':       return await execGenerateFile(input as Parameters<typeof execGenerateFile>[0], supabase)
+      case 'queue_vambe_calls':       return await execQueueVambeCalls(input as Parameters<typeof execQueueVambeCalls>[0], supabase)
+      case 'send_vambe_template':     return await execSendVambeTemplate(input as Parameters<typeof execSendVambeTemplate>[0], supabase)
+      case 'send_vambe_message':      return await execSendVambeMessage(input as Parameters<typeof execSendVambeMessage>[0], supabase)
+      case 'start_vambe_conversation':return await execStartVambeConversation(input as Parameters<typeof execStartVambeConversation>[0], supabase)
+      case 'generate_file':           return await execGenerateFile(input as Parameters<typeof execGenerateFile>[0], supabase)
       default:                    return { ok: false, summary: `Tool desconocida: ${name}`, error: 'unknown_tool' }
     }
   } catch (e) {

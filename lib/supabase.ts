@@ -41,6 +41,8 @@ export type Lead = {
   updated_at: string
   status_changed_at: string
   google_calendar_event_id: string | null
+  vambe_contact_id: string | null
+  vambe_stage_id: string | null
 }
 
 export type LeadActividad = {
