@@ -35,19 +35,36 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'VAMBE_API_KEY no configurada' }, { status: 500 })
   }
 
-  const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days') || '2')))
+  const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days') || '3')))
   const dry = url.searchParams.get('dry') !== 'false'   // default = true por seguridad
 
   const stageMap = getStageMap()
-  const stageIds = Object.keys(stageMap)
-  if (stageIds.length === 0) {
+  if (Object.keys(stageMap).length === 0) {
     return NextResponse.json({ error: 'VAMBE_STAGE_MAP vacío — configurá los UUIDs' }, { status: 500 })
   }
 
   const supabase = createServiceClient()
+
+  // Traer TODOS los contactos con actividad en N días — sin filtrar por stage en
+  // la API porque el filtro de Vambe es por default_stage_id y no captura
+  // contactos que viven en active_ticket_v2.current_stage_id.
+  const allContacts = await getContactsByDays({ days })
+
+  // Filtrar client-side: stage relevante = current_stage_id del ticket activo
+  // (fallback: default_stage_id).
+  const relevant = allContacts
+    .map(c => ({
+      contact: c,
+      stage: (c.active_ticket_v2?.current_stage_id || c.default_stage_id || '') as string,
+    }))
+    .filter(({ stage }) => stage && stageMap[stage])
+
   const results = {
     days,
     dry,
+    total_contacts_fetched: allContacts.length,
+    relevant_contacts: relevant.length,
+    distribution: {} as Record<string, { count: number; target_status: string }>,
     by_stage: [] as Array<{
       stage_id: string
       target_status: Lead['status']
@@ -57,28 +74,47 @@ export async function GET(req: NextRequest) {
       skipped: number
       errors: Array<{ contact_id: string; reason: string }>
     }>,
-    total_contacts: 0,
     total_created: 0,
     total_updated: 0,
     total_skipped: 0,
     sample_leads: [] as Array<{ id?: string; nombre: string | null; email: string | null; telefono: string | null; status: string; created: boolean }>,
+    // Mostrar también las stages "desconocidas" para diagnóstico
+    unknown_stages: {} as Record<string, number>,
   }
 
-  for (const stageId of stageIds) {
+  // Contar distribución y stages no mapeadas
+  for (const c of allContacts) {
+    const stage = (c.active_ticket_v2?.current_stage_id || c.default_stage_id || '') as string
+    if (!stage) continue
+    if (stageMap[stage]) {
+      const key = stage
+      if (!results.distribution[key]) results.distribution[key] = { count: 0, target_status: stageMap[stage] }
+      results.distribution[key].count++
+    } else {
+      results.unknown_stages[stage] = (results.unknown_stages[stage] || 0) + 1
+    }
+  }
+
+  // Agrupar relevantes por stage para reportar por bloque
+  const byStage: Record<string, Array<{ contact: typeof allContacts[number] }>> = {}
+  for (const { contact, stage } of relevant) {
+    if (!byStage[stage]) byStage[stage] = []
+    byStage[stage].push({ contact })
+  }
+
+  for (const [stageId, items] of Object.entries(byStage)) {
     const targetStatus = stageMap[stageId]
-    const contacts = await getContactsByDays({ days, stageId })
     const block = {
       stage_id: stageId,
       target_status: targetStatus,
-      contacts_found: contacts.length,
+      contacts_found: items.length,
       created: 0,
       updated: 0,
       skipped: 0,
       errors: [] as Array<{ contact_id: string; reason: string }>,
     }
-    results.total_contacts += contacts.length
 
-    for (const c of contacts) {
+    for (const { contact: c } of items) {
       try {
         const outcome = await processContact(supabase, c, targetStatus, stageId, dry)
         if (outcome.created) {
