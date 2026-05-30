@@ -72,23 +72,60 @@ async function handleEvent(supabase: Supabase, type: string, event: VambeWebhook
   const aiContactId = event.aiContactId
   const data = (event.data || {}) as Record<string, unknown>
 
-  switch (type) {
-    case 'message.received':
-    case 'message.sent':
-      return handleMessage(supabase, type, aiContactId, data)
-    case 'ticket.created':
-    case 'ticket.updated':
-      return handleTicket(supabase, type, aiContactId, data)
-    case 'ticket.closed':
-      return handleTicketClosed(supabase, aiContactId, data)
-    case 'stage.changed':
-      return handleStageChanged(supabase, aiContactId, data)
-    case 'contact.created':
-    case 'contact.updated':
-      return  // no-op por ahora — el CRM es source of truth para contactos
-    default:
-      // unknown event — log y skip
-      return
+  // Normalizar el tipo de evento — Vambe usa varios formatos según versión:
+  //   'stage.changed' | 'contact.stage.changed' | 'stage_change' | 'contact.stage_changed'
+  //   'message.received' | 'contact.message.received' | 'message_received'
+  const norm = type.toLowerCase().replace(/[._]/g, '.')
+
+  // Mensajes (inbound/outbound)
+  if (norm.includes('message.received') || norm === 'message.received') {
+    return handleMessage(supabase, 'message.received', aiContactId, data)
+  }
+  if (norm.includes('message.sent') || norm === 'message.sent') {
+    return handleMessage(supabase, 'message.sent', aiContactId, data)
+  }
+
+  // Cambio de stage en pipeline — la versión más común sería 'stage.changed' pero
+  // Vambe también usa 'contact.stage.changed' o 'contact.stage_changed' (de ahí el
+  // label en español "Cambio de etapa del contacto").
+  if (norm.includes('stage.changed') || norm.includes('stage.change')
+      || norm === 'pipeline.stage.changed' || norm.includes('etapa')) {
+    return handleStageChanged(supabase, aiContactId, data)
+  }
+
+  // Tickets
+  if (norm.includes('ticket.created') || norm === 'ticket.opened') {
+    return handleTicket(supabase, 'ticket.created', aiContactId, data)
+  }
+  if (norm.includes('ticket.updated')) {
+    return handleTicket(supabase, 'ticket.updated', aiContactId, data)
+  }
+  if (norm.includes('ticket.closed')) {
+    return handleTicketClosed(supabase, aiContactId, data)
+  }
+
+  // Contacts — no-op por ahora
+  if (norm.includes('contact.created') || norm.includes('contact.updated')
+      || norm === 'contact.metadata.updated') {
+    return
+  }
+
+  // Unknown event — loguear en una fila de actividad para diagnóstico futuro,
+  // pero sin lead (porque no sabemos a quién corresponde). Logueamos sin lead_id
+  // si no hay match, así nos enteramos qué nombre real usa Vambe.
+  console.warn('Vambe webhook UNKNOWN event type:', type, '| normalized:', norm, '| sample data keys:', Object.keys(data))
+
+  // Si el evento tiene aiContactId, intentamos asociar el log a un lead
+  if (aiContactId) {
+    const lead = await findLead(supabase, aiContactId, data)
+    if (lead) {
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'vambe_webhook_unknown',
+        descripcion: `❓ Evento Vambe no reconocido: "${type}" (normalized: "${norm}")`,
+        metadata: { source: 'vambe', original_type: type, normalized: norm, data },
+      })
+    }
   }
 }
 
