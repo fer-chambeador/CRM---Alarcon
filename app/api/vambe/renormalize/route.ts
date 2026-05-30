@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
-import { extractCompanyFromEmail, normalizePuesto, normalizeVacante } from '@/lib/vambeNormalize'
+import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -29,11 +29,25 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   const { data: leads, error } = await supabase
     .from('leads')
-    .select('id, email, empresa, puesto, vacante, canal_adquisicion, tipo_evento')
+    .select('id, email, empresa, puesto, vacante, notas, canal_adquisicion, tipo_evento')
     .eq('canal_adquisicion', 'Vambe')
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  const rows = (leads || []) as Pick<Lead, 'id' | 'email' | 'empresa' | 'puesto' | 'vacante' | 'canal_adquisicion' | 'tipo_evento'>[]
+  const rows = (leads || []) as Pick<Lead, 'id' | 'email' | 'empresa' | 'puesto' | 'vacante' | 'notas' | 'canal_adquisicion' | 'tipo_evento'>[]
+
+  // Cargar el form de cada lead desde lead_actividad (backfill_created o form_received)
+  const ids = rows.map(r => r.id)
+  const { data: activityRows } = await supabase
+    .from('lead_actividad')
+    .select('lead_id, metadata, tipo')
+    .in('lead_id', ids)
+    .in('tipo', ['vambe_backfill_created', 'vambe_form_received'])
+  const formByLead = new Map<string, Record<string, unknown> | null>()
+  for (const a of activityRows || []) {
+    const meta = (a.metadata || {}) as Record<string, unknown>
+    const form = (meta.form || null) as Record<string, unknown> | null
+    if (form && !formByLead.has(a.lead_id)) formByLead.set(a.lead_id, form)
+  }
 
   const stats = {
     dry,
@@ -41,6 +55,7 @@ export async function GET(req: NextRequest) {
     vacante_changed: 0,
     puesto_changed: 0,
     empresa_added: 0,
+    notas_added: 0,
     unchanged: 0,
     samples: [] as Array<{ id: string; email: string | null; before: Record<string, string | null>; after: Record<string, string | null> }>,
   }
@@ -81,6 +96,22 @@ export async function GET(req: NextRequest) {
         before.empresa = null
         after.empresa = company
         stats.empresa_added++
+      }
+    }
+
+    // notas desde el form guardado en lead_actividad
+    const form = formByLead.get(lead.id) as {
+      vacantes_por_mes?: string
+      inbox_url?: string
+      rol?: string
+    } | undefined
+    if (form) {
+      const newNotas = buildNotasFromForm(form)
+      if (newNotas && (!lead.notas || !lead.notas.includes('Vacantes/mes:'))) {
+        updates.notas = newNotas
+        before.notas = lead.notas || null
+        after.notas = newNotas
+        stats.notas_added++
       }
     }
 
