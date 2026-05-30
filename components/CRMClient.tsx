@@ -464,11 +464,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     } catch {}
   }, [])
 
-  const canales = useMemo(
-    () => Array.from(new Set(leads.map(l => l.canal_adquisicion).filter((x): x is string => !!x))).sort(),
-    [leads]
-  )
-
   const dateScoped = useMemo(() => {
     const { from, to } = dateRangeBounds(dateRange)
     if (!from && !to) return leads
@@ -505,9 +500,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         case 'monto': return l.monto ?? 0
         case 'score': return leadPriorityScore(l)
         case 'presupuesto': {
-          // Sort by tier rank: none < 100_to_1000 < 2000_to_5000 < 10000_plus, null last
+          // Sort by tier rank: null < none < 100_to_1000 < 2000_to_5000 < 10000_plus
           const rank: Record<string, number> = { none: 1, '100_to_1000': 2, '2000_to_5000': 3, '10000_plus': 4 }
-          return l.presupuesto ? rank[l.presupuesto] || 0 : 0
+          return l.presupuesto ? (rank[l.presupuesto] || 0) : -1
         }
         case 'contacto': return l.veces_contactado || 0
         case 'fecha': return l.created_at

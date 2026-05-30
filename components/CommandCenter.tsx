@@ -264,7 +264,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
-      {key === 'pendientes' && alertsCount && alertsCount > 0
+      {key === 'pendientes' && (alertsCount ?? 0) > 0
         ? <span className={styles.navBadge}>{alertsCount}</span>
         : null}
     </Link>
