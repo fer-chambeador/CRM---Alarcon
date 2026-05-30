@@ -254,7 +254,18 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <div>
-            <div className={styles.modalEmail}>{tipoLabel(lead.tipo_evento)} {lead.email}</div>
+            <div className={styles.modalEmail}>
+              {tipoLabel(lead.tipo_evento)} {lead.email}
+              <a
+                href={`/leads/${lead.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ marginLeft: 10, fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}
+                title="Ver detalle completo con timeline"
+              >
+                Ver detalle ↗
+              </a>
+            </div>
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}
               <span className={styles.contactBadge}>💵 {fmtMoney(form.monto)}</span>

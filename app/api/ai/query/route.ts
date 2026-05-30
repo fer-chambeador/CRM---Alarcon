@@ -144,6 +144,16 @@ export async function POST(req: NextRequest) {
   const question: string = (body?.question || '').toString().trim()
   if (!question) return NextResponse.json({ error: 'Pregunta vacía' }, { status: 400 })
 
+  // Memoria entre conversaciones: el cliente puede pasar `history` con turnos
+  // anteriores (role+content). El backend los antepone a la nueva pregunta
+  // para que el asistente recuerde follow-ups ("de esos, cuántos respondieron?").
+  // Cap a últimos 6 turnos para no estallar tokens.
+  type HistoryTurn = { role: 'user' | 'assistant'; content: string }
+  const rawHistory = Array.isArray(body?.history) ? body.history as HistoryTurn[] : []
+  const history = rawHistory
+    .filter(t => t && (t.role === 'user' || t.role === 'assistant') && typeof t.content === 'string' && t.content.trim())
+    .slice(-6)
+
   const supabase = createServiceClient()
   const { data: leads, error } = await supabase
     .from('leads')
@@ -191,9 +201,14 @@ ${JSON.stringify(compact)}
 Pregunta del user:
 ${question}`
 
-  // Loop de tool use
+  // Loop de tool use con memoria de conversación
   type AnthropicMessage = { role: 'user' | 'assistant'; content: unknown }
-  const messages: AnthropicMessage[] = [{ role: 'user', content: userMsg }]
+  const messages: AnthropicMessage[] = []
+  // Inyectar historia previa como contexto (sin el dump de LEADS — eso solo en el turno actual)
+  for (const t of history) {
+    messages.push({ role: t.role, content: t.content })
+  }
+  messages.push({ role: 'user', content: userMsg })
   const actionsApplied: Array<{ tool: string; input: unknown; result: ToolResult }> = []
   let finalAnswer = ''
   let totalUsage = { input_tokens: 0, output_tokens: 0 }

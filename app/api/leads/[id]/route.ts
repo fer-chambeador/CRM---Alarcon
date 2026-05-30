@@ -51,6 +51,18 @@ function describeChange(field: string, before: unknown, after: unknown): string 
   return `${label}: ${fmtVal(field, before)} → ${fmtVal(field, after)}`
 }
 
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', params.id)
+    .maybeSingle()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!data) return NextResponse.json({ error: 'lead no encontrado' }, { status: 404 })
+  return NextResponse.json(data)
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createServiceClient()
   const body = await req.json()

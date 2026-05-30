@@ -117,6 +117,42 @@ IMPORTANTE: por default es dry-run (no aplica cambios, solo lista los afectados)
     },
   },
   {
+    name: 'send_template_campaign',
+    description: `Manda un template de Vambe a un segmento de leads. Útil cuando el user pide "manda el template X a los nuevos" o "manda follow-up a los que llevan 5 días sin contactar".
+IMPORTANTE: por default DRY-RUN (solo cuenta). Para mandar de verdad, llamala una segunda vez con dry_run=false después de mostrar al user los conteos y que confirme.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        template_id: { type: 'string', description: 'ID del template de Vambe' },
+        template_name: { type: 'string', description: 'Nombre del template (para historial)' },
+        segment: {
+          type: 'object',
+          description: 'Filtros del segmento (combinable)',
+          properties: {
+            status: { type: 'array', items: { type: 'string', enum: [...STATUS_LIST] } },
+            canal: { type: 'array', items: { type: 'string' } },
+            vacante_contains: { type: 'string' },
+            min_dias_sin_contactar: { type: 'number' },
+            max_dias_sin_contactar: { type: 'number' },
+          },
+        },
+        override_vars: { type: 'object', description: 'Variables que se mandan a TODOS (ej. {"oferta": "20% off")}', additionalProperties: { type: 'string' } },
+        dry_run: { type: 'boolean', description: 'false = manda de verdad. true (default) = solo cuenta.' },
+      },
+      required: ['template_id'],
+    },
+  },
+  {
+    name: 'query_campaigns',
+    description: 'Consulta el historial de campañas enviadas. Útil cuando el user pregunta "cómo van las campañas", "cuál fue la última", "qué tasa de respuesta tuvo X".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Cuántas devolver (max 20)', default: 10 },
+      },
+    },
+  },
+  {
     name: 'generate_file',
     description: `Genera un archivo descargable para el user. Úsalo cuando el user pida "dame CSV", "exporta a archivo", "descárgame la lista", etc. NO uses esta tool para mostrar info en pantalla — para eso solo respondé en markdown. Esta tool es específicamente para entregar un archivo que el user puede guardar.
 
@@ -407,10 +443,132 @@ export async function executeTool(name: string, input: unknown, supabase: Supaba
       case 'send_vambe_message':      return await execSendVambeMessage(input as Parameters<typeof execSendVambeMessage>[0], supabase)
       case 'start_vambe_conversation':return await execStartVambeConversation(input as Parameters<typeof execStartVambeConversation>[0], supabase)
       case 'generate_file':           return await execGenerateFile(input as Parameters<typeof execGenerateFile>[0], supabase)
+      case 'send_template_campaign':  return await execSendTemplateCampaign(input as Parameters<typeof execSendTemplateCampaign>[0], supabase)
+      case 'query_campaigns':         return await execQueryCampaigns(input as Parameters<typeof execQueryCampaigns>[0], supabase)
       default:                    return { ok: false, summary: `Tool desconocida: ${name}`, error: 'unknown_tool' }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return { ok: false, summary: `Error ejecutando ${name}: ${msg}`, error: msg }
+  }
+}
+
+// ─── send_template_campaign ────────────────────────────────────────────
+type SendTemplateCampaignInput = {
+  template_id: string
+  template_name?: string
+  segment?: {
+    status?: Lead['status'][]
+    canal?: string[]
+    vacante_contains?: string
+    min_dias_sin_contactar?: number
+    max_dias_sin_contactar?: number
+  }
+  override_vars?: Record<string, string>
+  dry_run?: boolean
+}
+
+async function execSendTemplateCampaign(input: SendTemplateCampaignInput, supabase: Supabase): Promise<ToolResult> {
+  if (!input.template_id) return { ok: false, summary: 'falta template_id', error: 'missing_template_id' }
+  const dryRun = input.dry_run !== false
+
+  // Resolver leads matcheantes
+  let q = supabase.from('leads').select('*')
+  if (input.segment?.status?.length) q = q.in('status', input.segment.status)
+  if (input.segment?.canal?.length) q = q.in('canal_adquisicion', input.segment.canal)
+  if (input.segment?.vacante_contains) q = q.ilike('vacante', `%${input.segment.vacante_contains}%`)
+  const { data: leads } = await q
+  let filtered = (leads || []) as Lead[]
+
+  if (input.segment?.min_dias_sin_contactar != null || input.segment?.max_dias_sin_contactar != null) {
+    const now = Date.now()
+    filtered = filtered.filter(l => {
+      const ref = l.ultimo_contacto || l.status_changed_at || l.created_at
+      if (!ref) return false
+      const days = (now - new Date(ref).getTime()) / 86400000
+      if (input.segment?.min_dias_sin_contactar != null && days < input.segment.min_dias_sin_contactar) return false
+      if (input.segment?.max_dias_sin_contactar != null && days > input.segment.max_dias_sin_contactar) return false
+      return true
+    })
+  }
+
+  const sendable = filtered.filter(l => !!l.telefono)
+
+  if (dryRun) {
+    return {
+      ok: true,
+      summary: `🔍 DRY-RUN: ${sendable.length} leads recibirían el template (${filtered.length - sendable.length} sin teléfono saltados). Para mandarlo de verdad, llamala otra vez con dry_run=false.`,
+      affected: sendable.slice(0, 20).map(l => ({ id: l.id, email: l.email, nombre: l.nombre })),
+      data: { sendable_count: sendable.length, skipped: filtered.length - sendable.length },
+    }
+  }
+
+  // Real send: delegate al endpoint /api/templates/send para reusar toda la lógica
+  // (campaign tracking, auto-status, actividad, etc.)
+  const baseUrl = process.env.NEXT_PUBLIC_CRM_URL || 'https://crm-alarcon-production.up.railway.app'
+  const secret = process.env.VAMBE_WEBHOOK_SECRET || ''
+  try {
+    const res = await fetch(`${baseUrl}/api/templates/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-internal-secret': secret },
+      body: JSON.stringify({
+        templateId: input.template_id,
+        templateName: input.template_name,
+        leadIds: sendable.map(l => l.id),
+        overrideVars: input.override_vars,
+      }),
+    })
+    const data = await res.json()
+    if (data.error) return { ok: false, summary: `Error: ${data.error}`, error: data.error }
+    return {
+      ok: true,
+      summary: `✅ Campaña enviada — ${data.sent} leads contactados. Campaign ID: ${data.campaign_id || '(sin tracking)'}`,
+      affected: sendable.slice(0, 20).map(l => ({ id: l.id, email: l.email, nombre: l.nombre })),
+      data,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, summary: `Falla disparando campaña: ${msg}`, error: msg }
+  }
+}
+
+// ─── query_campaigns ────────────────────────────────────────────────────
+type QueryCampaignsInput = { limit?: number }
+
+async function execQueryCampaigns(input: QueryCampaignsInput, supabase: Supabase): Promise<ToolResult> {
+  const limit = Math.min(20, Math.max(1, input.limit || 10))
+  const { data: campaigns, error } = await supabase
+    .from('vambe_campaigns')
+    .select('id, template_name, template_id, total_sent, total_failed, source, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) {
+    return { ok: false, summary: `No pude leer campaigns: ${error.message}`, error: error.message }
+  }
+  const rows = campaigns || []
+  if (rows.length === 0) {
+    return { ok: true, summary: 'No hay campañas registradas todavía.', data: { campaigns: [] } }
+  }
+
+  // Outcomes
+  const ids = rows.map(c => c.id)
+  const { data: outcomes } = await supabase
+    .from('vambe_campaign_recipients')
+    .select('campaign_id, sent_at, responded_at, scheduled_call_at, paid_at')
+    .in('campaign_id', ids)
+  const m: Record<string, { sent: number; responded: number; scheduled: number; paid: number }> = {}
+  for (const id of ids) m[id] = { sent: 0, responded: 0, scheduled: 0, paid: 0 }
+  for (const r of outcomes || []) {
+    const id = r.campaign_id as string
+    if (r.sent_at) m[id].sent++
+    if (r.responded_at) m[id].responded++
+    if (r.scheduled_call_at) m[id].scheduled++
+    if (r.paid_at) m[id].paid++
+  }
+  const enriched = rows.map(c => ({ ...c, metrics: m[c.id] }))
+  return {
+    ok: true,
+    summary: `${rows.length} campaña${rows.length === 1 ? '' : 's'} encontrada${rows.length === 1 ? '' : 's'}.`,
+    data: { campaigns: enriched },
   }
 }

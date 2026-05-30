@@ -78,6 +78,8 @@ type ConfirmKey = string  // `${turnIdx}-${actionIdx}`
 type ConfirmState = { loading?: boolean; result?: Action['result']; error?: string }
 type AttachedFile = { name: string; content: string; size: number }
 
+const STORAGE_KEY = 'chambas-asistente-turns'
+
 export default function AsistenteClient() {
   const [question, setQuestion] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
@@ -88,10 +90,38 @@ export default function AsistenteClient() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { inputRef.current?.focus() }, [])
+  // Cargar turnos persistidos al montar
+  useEffect(() => {
+    inputRef.current?.focus()
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed)) setTurns(parsed)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  // Persistir turnos en localStorage al cambiar
+  useEffect(() => {
+    if (turns.length === 0) return
+    try {
+      // Cap a últimos 20 turnos para no llenar localStorage
+      const toSave = turns.slice(-20).map(t => ({ ...t, loading: false, actions: undefined }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
+    } catch { /* ignore */ }
+  }, [turns])
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [turns])
+
+  const clearHistory = () => {
+    if (!confirm('¿Limpiar todo el historial del asistente?')) return
+    setTurns([])
+    setConfirmed({})
+    try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+  }
 
   const ask = async (q: string) => {
     if ((!q.trim() && !attachedFile) || busy) return
@@ -107,11 +137,19 @@ export default function AsistenteClient() {
       fullQuestion = `[ARCHIVO ADJUNTO: ${file.name}, ${file.size} bytes]\n\`\`\`\n${file.content}\n\`\`\`\n\n${q || '(usá el archivo adjunto como contexto para responder)'}`
     }
     setTurns(prev => [...prev, { question: q + (file ? ` 📎 ${file.name}` : ''), answer: null, loading: true }])
+    // Memoria: mandar los últimos 3 turnos completos (preguntas + respuestas) para
+    // permitir follow-ups tipo "y de esos, cuántos respondieron?"
+    const history = turns.slice(-3).flatMap(t => {
+      const h: Array<{ role: 'user' | 'assistant'; content: string }> = []
+      if (t.question) h.push({ role: 'user', content: t.question })
+      if (t.answer) h.push({ role: 'assistant', content: t.answer })
+      return h
+    })
     try {
       const res = await fetch('/api/ai/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: fullQuestion }),
+        body: JSON.stringify({ question: fullQuestion, history }),
       })
       const data = await res.json()
       setTurns(prev => prev.map((t, i) => i === idx
@@ -176,6 +214,20 @@ export default function AsistenteClient() {
         <header className={styles.topBar}>
           <h1>🧠 Asistente</h1>
           <span className={styles.topSubtitle}>Preguntá lo que sea sobre tus leads — en lenguaje natural.</span>
+          {turns.length > 0 && (
+            <button
+              onClick={clearHistory}
+              style={{
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text3)', fontSize: 11, padding: '4px 10px',
+                borderRadius: 6, cursor: 'pointer', marginLeft: 'auto',
+                fontFamily: 'var(--font)',
+              }}
+              title="Borra el historial del asistente"
+            >
+              🗑️ Limpiar historial
+            </button>
+          )}
         </header>
 
         <div className={styles.body} ref={scrollRef}>
