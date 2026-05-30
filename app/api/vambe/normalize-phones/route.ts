@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 30
+export const maxDuration = 60
 
 /**
  * GET /api/vambe/normalize-phones?dry=true|false&secret=...
@@ -46,6 +46,8 @@ export async function GET(req: NextRequest) {
     samples: [] as Array<{ id: string; before: string; after: string }>,
   }
 
+  // Primera pasada: clasificar (sin escribir)
+  const toUpdate: Array<{ id: string; before: string; after: string }> = []
   for (const lead of rows) {
     const normalized = normalizeMexicanPhone(lead.telefono)
     if (!normalized) {
@@ -57,19 +59,29 @@ export async function GET(req: NextRequest) {
       continue
     }
     stats.changed++
-    if (stats.samples.length < 30) {
-      stats.samples.push({ id: lead.id, before: lead.telefono, after: normalized })
-    }
-    if (!dry) {
+    toUpdate.push({ id: lead.id, before: lead.telefono, after: normalized })
+  }
+
+  // Tomar samples primero (antes de batchear)
+  stats.samples = toUpdate.slice(0, 30)
+
+  // Si dry, devolver
+  if (dry) return NextResponse.json(stats)
+
+  // Updates en paralelo en batches de 50 (Supabase aguanta sin rate limit)
+  const BATCH_SIZE = 50
+  for (let i = 0; i < toUpdate.length; i += BATCH_SIZE) {
+    const batch = toUpdate.slice(i, i + BATCH_SIZE)
+    const results = await Promise.all(batch.map(async (item) => {
       const { error: upErr } = await supabase
         .from('leads')
-        .update({ telefono: normalized })
-        .eq('id', lead.id)
-      if (upErr) {
-        stats.write_errors.push({ id: lead.id, reason: upErr.message })
-      } else {
-        stats.write_ok++
-      }
+        .update({ telefono: item.after })
+        .eq('id', item.id)
+      return { id: item.id, error: upErr?.message || null }
+    }))
+    for (const r of results) {
+      if (r.error) stats.write_errors.push({ id: r.id, reason: r.error })
+      else stats.write_ok++
     }
   }
 
