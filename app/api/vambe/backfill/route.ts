@@ -198,14 +198,16 @@ async function processContact(
   if (TIPO_LLAMADA_BY_STAGE[stageId]) fields.tipo_llamada = TIPO_LLAMADA_BY_STAGE[stageId]
   if (form?.nombre) fields.nombre = form.nombre
   if (form?.email) fields.email = form.email.toLowerCase().trim()
-  if (form?.telefono) fields.telefono = normalizeMexicanPhone(form.telefono) || form.telefono
   if (form?.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form?.presupuesto) fields.presupuesto = form.presupuesto
   if (form?.rol) fields.puesto = normalizePuesto(form.rol)
   // Fallback al contact metadata
   if (!fields.nombre && contact.name) fields.nombre = contact.name
   if (!fields.email && contact.email) fields.email = contact.email.toLowerCase()
-  if (!fields.telefono && contact.phone) fields.telefono = normalizeMexicanPhone(contact.phone) || contact.phone
+  // Para teléfono: SIEMPRE preferir contact.phone (Vambe lo mantiene actualizado)
+  // sobre form.telefono (puede ser un número viejo que el cliente ya no usa).
+  const phoneSource = contact.phone || form?.telefono
+  if (phoneSource) fields.telefono = normalizeMexicanPhone(phoneSource) || phoneSource
 
   // Empresa derivada del dominio del email si es corporativo
   const emailForCompany = (fields.email || '') as string
