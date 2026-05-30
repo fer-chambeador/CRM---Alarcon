@@ -220,18 +220,25 @@ export async function POST(req: NextRequest) {
   })
 
   // ── 4) Crear la campaña en DB ANTES de mandar (para poder linkear actividad) ──
-  const { data: campaign } = await supabase.from('vambe_campaigns').insert({
-    template_id: templateId,
-    template_name: body.templateName || null,
-    template_body: body.templateBody || null,
-    segment: body.segment || null,
-    override_vars: body.overrideVars || null,
-    total_targeted: sendable.length,
-    total_sent: 0,
-    total_failed: 0,
-    source,
-  }).select('id').maybeSingle()
-  const campaignId = (campaign as { id?: string } | null)?.id || null
+  // Si las tablas no existen aún (migration no corrida), seguimos sin tracking.
+  let campaignId: string | null = null
+  try {
+    const { data: campaign, error: cErr } = await supabase.from('vambe_campaigns').insert({
+      template_id: templateId,
+      template_name: body.templateName || null,
+      template_body: body.templateBody || null,
+      segment: body.segment || null,
+      override_vars: body.overrideVars || null,
+      total_targeted: sendable.length,
+      total_sent: 0,
+      total_failed: 0,
+      source,
+    }).select('id').maybeSingle()
+    if (!cErr) campaignId = (campaign as { id?: string } | null)?.id || null
+    else console.warn('vambe_campaigns insert error (tabla probablemente no migrada):', cErr.message)
+  } catch (e) {
+    console.warn('vambe_campaigns insert exception:', e)
+  }
 
   // ── 5) Insertar recipients en DB con sent_at provisional null ──
   if (campaignId) {
@@ -244,7 +251,11 @@ export async function POST(req: NextRequest) {
       vars: r.extraVars || null,
     }))
     if (recipientRows.length) {
-      await supabase.from('vambe_campaign_recipients').insert(recipientRows)
+      try {
+        await supabase.from('vambe_campaign_recipients').insert(recipientRows)
+      } catch (e) {
+        console.warn('vambe_campaign_recipients insert exception:', e)
+      }
     }
   }
 
@@ -261,18 +272,22 @@ export async function POST(req: NextRequest) {
 
   // ── 7) Marcar recipients como enviados (o con error) ──
   if (campaignId) {
-    if (sendError) {
-      await supabase
-        .from('vambe_campaign_recipients')
-        .update({ send_error: sendError })
-        .eq('campaign_id', campaignId)
-      await supabase.from('vambe_campaigns').update({ total_failed: sendable.length }).eq('id', campaignId)
-    } else {
-      await supabase
-        .from('vambe_campaign_recipients')
-        .update({ sent_at: sentAt })
-        .eq('campaign_id', campaignId)
-      await supabase.from('vambe_campaigns').update({ total_sent: sendable.length }).eq('id', campaignId)
+    try {
+      if (sendError) {
+        await supabase
+          .from('vambe_campaign_recipients')
+          .update({ send_error: sendError })
+          .eq('campaign_id', campaignId)
+        await supabase.from('vambe_campaigns').update({ total_failed: sendable.length }).eq('id', campaignId)
+      } else {
+        await supabase
+          .from('vambe_campaign_recipients')
+          .update({ sent_at: sentAt })
+          .eq('campaign_id', campaignId)
+        await supabase.from('vambe_campaigns').update({ total_sent: sendable.length }).eq('id', campaignId)
+      }
+    } catch (e) {
+      console.warn('campaign tracking update exception:', e)
     }
   }
 

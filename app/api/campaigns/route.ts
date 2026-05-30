@@ -21,7 +21,13 @@ export async function GET(req: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    // Si la tabla no existe (migration no corrida) → devolver vacío en lugar de 500
+    if (error.message?.includes('relation') || error.code === '42P01') {
+      return NextResponse.json({ campaigns: [], note: 'Migration de vambe_campaigns pendiente. Corré sql/migrations/2026-05-30-vambe-campaigns.sql en Supabase.' })
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
   const rows = campaigns || []
 
   if (rows.length === 0) {
