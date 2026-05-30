@@ -405,28 +405,117 @@ function getStageMap(): Record<string, Lead['status']> {
   try { return JSON.parse(raw) } catch { return {} }
 }
 
-/** Busca cualquier campo en `data` que parezca fecha de llamada y lo devuelve como ISO string. */
-function extractLlamadaAt(data: Record<string, unknown>): string | null {
-  const candidates = [
-    'llamada_at', 'llamadaAt',
-    'appointment_at', 'appointmentAt',
-    'scheduled_at', 'scheduledAt',
-    'meeting_at', 'meetingAt',
-    'booking_at', 'bookingAt',
-    'fecha', 'fecha_hora', 'fechaHora',
-    'start', 'start_time', 'startTime',
-    'date', 'datetime',
-  ]
-  for (const key of candidates) {
-    const v = data[key]
-    if (typeof v === 'string' && v.trim()) {
-      const d = new Date(v)
-      if (!isNaN(d.getTime())) return d.toISOString()
-    } else if (typeof v === 'number' && v > 0) {
-      // Posible epoch (segundos o ms)
-      const ms = v < 1e12 ? v * 1000 : v
-      const d = new Date(ms)
-      if (!isNaN(d.getTime())) return d.toISOString()
+/** Keys que probablemente contienen una fecha de llamada/cita. */
+const DATE_KEY_PATTERNS = [
+  /llamada/i, /appointment/i, /scheduled/i, /meeting/i, /booking/i,
+  /\bfecha/i, /\bcita/i, /\bdate/i, /\btime/i,
+  /start[._]?(at|time)?$/i, /next[._]?call/i,
+]
+
+/**
+ * Busca recursivamente en el payload cualquier campo cuya key sugiera fecha
+ * de llamada y cuyo valor parsee como Date válido. Mira hasta 3 niveles
+ * de anidamiento. Devuelve la PRIMERA fecha futura (o cualquier válida).
+ */
+function extractLlamadaAt(data: unknown, depth = 3): string | null {
+  if (!data || typeof data !== 'object' || depth < 0) return null
+  const obj = data as Record<string, unknown>
+
+  // Primera pasada: keys obvias
+  for (const [key, v] of Object.entries(obj)) {
+    const looksLikeDate = DATE_KEY_PATTERNS.some(p => p.test(key))
+    if (!looksLikeDate) continue
+    const parsed = tryParseDate(v)
+    if (parsed) return parsed
+  }
+
+  // Segunda pasada: recursión en sub-objetos
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const found = extractLlamadaAt(v, depth - 1)
+      if (found) return found
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item && typeof item === 'object') {
+          const found = extractLlamadaAt(item, depth - 1)
+          if (found) return found
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function tryParseDate(v: unknown): string | null {
+  if (typeof v === 'string' && v.trim()) {
+    const d = new Date(v)
+    if (!isNaN(d.getTime()) && d.getFullYear() > 2020 && d.getFullYear() < 2100) {
+      return d.toISOString()
+    }
+  }
+  if (typeof v === 'number' && v > 0) {
+    const ms = v < 1e12 ? v * 1000 : v
+    const d = new Date(ms)
+    if (!isNaN(d.getTime()) && d.getFullYear() > 2020 && d.getFullYear() < 2100) {
+      return d.toISOString()
+    }
+  }
+  return null
+}
+
+/**
+ * Busca menciones de fechas/horas en texto plano de mensajes.
+ * Útil cuando Vambe AI confirma: "Perfecto, agendamos para mañana 11:30 am".
+ */
+function extractDateFromMessages(messages: Array<{ message: string; created_at: string }>): string | null {
+  // Buscar en los últimos 10 mensajes (de más reciente a más viejo)
+  const recent = messages.slice(0, 10)
+
+  for (const msg of recent) {
+    const text = msg.message || ''
+    if (!text) continue
+
+    // Patrones que sugieren confirmación de llamada
+    const isAgendaMsg = /(agendad[ao]|confirmad[ao]|cita|llamada|reunion|reunion[ée]).{0,40}(am|pm|hora|hrs|hr|:|\d)/i.test(text)
+    if (!isAgendaMsg) continue
+
+    // Patrón: hora estilo "11:30 am" o "13:45"
+    const hm = text.match(/(\b\d{1,2}):(\d{2})\s*(am|pm|hrs?)?\b/i)
+    if (!hm) continue
+    let hour = parseInt(hm[1], 10)
+    const minute = parseInt(hm[2], 10)
+    const ampm = (hm[3] || '').toLowerCase()
+    if (ampm === 'pm' && hour < 12) hour += 12
+    if (ampm === 'am' && hour === 12) hour = 0
+
+    // Patrón: día (hoy/mañana/lunes/martes/etc o fecha "30 de mayo")
+    const baseDate = new Date(msg.created_at)
+    let targetDate = new Date(baseDate)
+
+    if (/\bma[nñ]ana\b/i.test(text)) {
+      targetDate.setDate(targetDate.getDate() + 1)
+    } else if (/\bhoy\b/i.test(text)) {
+      // mantener mismo día
+    } else {
+      // Detectar día de la semana
+      const dayNames: Record<string, number> = {
+        domingo: 0, lunes: 1, martes: 2, mi: 3, miercoles: 3, jueves: 4, viernes: 5, sabado: 6, sab: 6,
+      }
+      for (const [name, dow] of Object.entries(dayNames)) {
+        if (new RegExp(`\\b${name}\\w*\\b`, 'i').test(text)) {
+          const currentDow = targetDate.getDay()
+          const diff = (dow - currentDow + 7) % 7 || 7
+          targetDate.setDate(targetDate.getDate() + diff)
+          break
+        }
+      }
+    }
+
+    targetDate.setHours(hour, minute, 0, 0)
+    if (!isNaN(targetDate.getTime())) {
+      return targetDate.toISOString()
     }
   }
   return null
@@ -521,7 +610,20 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
   // Si la nueva stage corresponde a "llamada agendada", intentar extraer fecha/hora
   let llamadaAtSaved: string | null = null
   if (mappedStatus === 'llamada_agendada') {
-    const llamadaAt = extractLlamadaAt(data)
+    // 1) Buscar en el payload del stage.changed
+    let llamadaAt = extractLlamadaAt(data)
+    // 2) Si no, buscar en los mensajes recientes del contacto
+    if (!llamadaAt && aiContactId) {
+      try {
+        const messages = await getMessages(aiContactId, 30)
+        llamadaAt = extractDateFromMessages(messages.map(m => ({
+          message: m.message || '',
+          created_at: m.created_at,
+        })))
+      } catch (e) {
+        console.warn('No pude pedir mensajes para extraer fecha:', e)
+      }
+    }
     if (llamadaAt) {
       updates.llamada_at = llamadaAt
       llamadaAtSaved = llamadaAt
