@@ -173,11 +173,33 @@ async function processContact(
 
   // 1) Intentar parsear el form desde los mensajes
   let form: FormFields | null = null
+  let emailFromConversation: string | null = null
+  let nameFromConversation: string | null = null
   try {
     const messages = await getMessages(aiContactId, 50)
     for (const m of messages) {
       const parsed = parseFormMessage(m.message)
       if (parsed) { form = parsed; break }
+    }
+    // Fallback: si NO hay form, escanear mensajes inbound buscando email/nombre
+    if (!form) {
+      const inboundMessages = messages.filter(m => m.direction === 'inbound')
+      for (const m of inboundMessages) {
+        if (!emailFromConversation) {
+          const emailMatch = (m.message || '').match(/[\w.+-]+@[\w-]+\.[\w.]+/)
+          if (emailMatch) emailFromConversation = emailMatch[0].toLowerCase()
+        }
+        // Detectar nombre: si Vambe AI escribió "¡Perfecto, X!" o "¡Hola X!"
+      }
+      // Nombre desde mensajes outbound (la AI suele dirigirse al cliente por nombre)
+      const outboundMessages = messages.filter(m => m.direction === 'outbound')
+      for (const m of outboundMessages.slice(0, 5)) {
+        const nameMatch = (m.message || '').match(/¡?(Hola|Perfecto|Excelente|Entendido)[,!]?\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)\b/)
+        if (nameMatch && nameMatch[2]) {
+          nameFromConversation = nameMatch[2].trim()
+          break
+        }
+      }
     }
   } catch {
     // si falla messages, seguimos con datos del contact
@@ -198,6 +220,8 @@ async function processContact(
   if (TIPO_LLAMADA_BY_STAGE[stageId]) fields.tipo_llamada = TIPO_LLAMADA_BY_STAGE[stageId]
   if (form?.nombre) fields.nombre = form.nombre
   if (form?.email) fields.email = form.email.toLowerCase().trim()
+  else if (emailFromConversation) fields.email = emailFromConversation
+  if (!fields.nombre && nameFromConversation) fields.nombre = nameFromConversation
   if (form?.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form?.presupuesto) fields.presupuesto = form.presupuesto
   if (form?.rol) fields.puesto = normalizePuesto(form.rol)
