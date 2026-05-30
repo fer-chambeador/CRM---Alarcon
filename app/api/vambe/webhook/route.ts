@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
-import { parseFormMessage, type VambeWebhookEvent, type FormFields } from '@/lib/vambe'
+import { parseFormMessage, getMessages, type VambeWebhookEvent, type FormFields } from '@/lib/vambe'
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
 
@@ -51,15 +51,23 @@ export async function POST(req: NextRequest) {
   const event = await req.json().catch(() => null) as VambeWebhookEvent | null
   if (!event) return NextResponse.json({ error: 'invalid payload' }, { status: 400 })
 
-  // Responder rápido — procesar en background no es trivial en serverless,
-  // así que lo hacemos sync pero rápido.
   const supabase = createServiceClient()
   const eventType = event.type || event.event || ''
 
+  // PRIMERO: log de cada evento entrante (para diagnóstico). Si la tabla no existe
+  // todavía, falla silenciosa.
+  try {
+    await supabase.from('vambe_webhook_log').insert({
+      event_type: eventType || '(empty)',
+      ai_contact_id: event.aiContactId || null,
+      payload: event as unknown as Record<string, unknown>,
+    })
+  } catch { /* tabla no migró aún — ignore */ }
+
+  // Después: dispatch normal
   try {
     await handleEvent(supabase, eventType, event)
   } catch (e) {
-    // Log pero devolver 200 para no triggerar retries en loop
     console.error('Vambe webhook error', eventType, e)
   }
 
@@ -424,6 +432,23 @@ function extractLlamadaAt(data: Record<string, unknown>): string | null {
   return null
 }
 
+/**
+ * Solo avanzar el status en el funnel — nunca retroceder.
+ * 'descartado' es independiente: si target es descartado, siempre se aplica
+ * (excepto si ya estaba descartado).
+ */
+function shouldAdvanceStatus(current: Lead['status'], target: Lead['status']): boolean {
+  const order: Lead['status'][] = [
+    'nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada',
+    'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente',
+  ]
+  if (target === 'descartado') return current !== 'descartado'
+  const ci = order.indexOf(current)
+  const ti = order.indexOf(target)
+  if (ci === -1 || ti === -1) return current !== target
+  return ti > ci
+}
+
 async function handleStageChanged(supabase: Supabase, aiContactId: string | undefined, data: Record<string, unknown>) {
   const newStageId = (data.new_stage_id || data.newStageId || data.stageId || '') as string
   const previousStageId = (data.previous_stage_id || data.previousStageId || '') as string
@@ -450,15 +475,45 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
         })
       }
     } else {
-      // Stage a Interesado pero no hay pending form — log y skip
-      console.warn(`Vambe stage→Interesado sin pending form. aiContactId=${aiContactId}`)
+      // No hay pending form en cache. Fallback: pedir mensajes a Vambe directo
+      // para encontrar el form y crear el lead de inmediato.
+      try {
+        const messages = await getMessages(aiContactId, 100)
+        let form: FormFields | null = null
+        for (const m of messages) {
+          const parsed = parseFormMessage(m.message || '')
+          if (parsed) { form = parsed; break }
+        }
+        if (form && form.email) {
+          await stashPendingForm(supabase, aiContactId, form, data)
+          const promo2 = await promotePendingLead(supabase, aiContactId)
+          if (promo2.lead) {
+            lead = promo2.lead
+            promoted = promo2.created
+            if (promo2.created) {
+              await supabase.from('lead_actividad').insert({
+                lead_id: lead.id,
+                tipo: 'vambe_lead_promoted',
+                descripcion: '🚀 Lead promovido en stage.changed (fetched form de Vambe API)',
+                metadata: { source: 'vambe-fallback', stage_id: newStageId, form },
+              })
+            }
+          }
+        } else {
+          console.warn(`Vambe stage→Interesado sin form ni cacheado ni en API. aiContactId=${aiContactId}`)
+        }
+      } catch (e) {
+        console.error('Vambe fallback fetch error', e)
+      }
     }
   }
 
   if (!lead) return
 
   const updates: Record<string, unknown> = { vambe_stage_id: newStageId }
-  if (mappedStatus && mappedStatus !== lead.status) {
+  // Solo avanzar el status — nunca retroceder (un lead convertido no vuelve a nuevo
+  // aunque Vambe diga Interesado).
+  if (mappedStatus && mappedStatus !== lead.status && shouldAdvanceStatus(lead.status, mappedStatus)) {
     updates.status = mappedStatus
     updates.status_changed_at = new Date().toISOString()
   }
