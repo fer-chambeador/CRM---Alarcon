@@ -73,11 +73,12 @@ export function normalizePuesto(raw: string | null | undefined): string | null {
   const t = raw.toLowerCase()
   if (!t.trim()) return null
 
-  // Orden importa — más específico primero
-  if (/reclut|rh\b|recursos humanos|gestiono personal|recluto/.test(t)) return 'Reclutador / RH'
-  if (/dueñ|propietari|fundador|founder|owner|empresari|emprendedor|soy due/.test(t)) return 'Dueño / Empresario'
-  if (/gerent|director|jefe|líder|supervisor|coordinador|manager|head/.test(t)) return 'Gerente / Director'
-  if (/operaciones|operativo/.test(t)) return 'Reclutador / RH'   // "operaciones" suele venir con RH
+  // Orden importa — más específico primero.
+  // Labels unificados con los existentes en el CRM (Slack): Reclutador, Dueño, Gerente, etc.
+  if (/reclut|rh\b|recursos humanos|gestiono personal|recluto/.test(t)) return 'Reclutador'
+  if (/dueñ|propietari|fundador|founder|owner|empresari|emprendedor|soy due/.test(t)) return 'Dueño'
+  if (/gerent|director|jefe|líder|supervisor|coordinador|manager|head/.test(t)) return 'Gerente'
+  if (/operaciones|operativo/.test(t)) return 'Reclutador'   // "operaciones" suele venir con RH
 
   return 'Otro'
 }

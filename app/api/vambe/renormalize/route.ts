@@ -57,11 +57,14 @@ export async function GET(req: NextRequest) {
     empresa_added: 0,
     notas_added: 0,
     unchanged: 0,
+    write_ok: 0,
+    write_errors: [] as Array<{ id: string; error: string }>,
     samples: [] as Array<{ id: string; email: string | null; before: Record<string, string | null>; after: Record<string, string | null> }>,
   }
 
-  // Procesar en paralelo
-  await Promise.all(rows.map(async (lead) => {
+  // Procesar SECUENCIAL — concurrent updates con Promise.all parecía perder
+  // writes (silenciosamente). Mejor seguro que rápido para una operación one-shot.
+  for (const lead of rows) {
     const updates: Record<string, unknown> = {}
     const before: Record<string, string | null> = {}
     const after: Record<string, string | null> = {}
@@ -117,7 +120,7 @@ export async function GET(req: NextRequest) {
 
     if (Object.keys(updates).length === 0) {
       stats.unchanged++
-      return
+      continue
     }
 
     if (stats.samples.length < 15) {
@@ -125,9 +128,14 @@ export async function GET(req: NextRequest) {
     }
 
     if (!dry) {
-      await supabase.from('leads').update(updates).eq('id', lead.id)
+      const { error: updateError } = await supabase.from('leads').update(updates).eq('id', lead.id)
+      if (updateError) {
+        stats.write_errors.push({ id: lead.id, error: updateError.message })
+      } else {
+        stats.write_ok++
+      }
     }
-  }))
+  }
 
   return NextResponse.json(stats)
 }
