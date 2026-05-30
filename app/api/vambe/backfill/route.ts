@@ -188,6 +188,13 @@ async function processContact(
     vambe_contact_id: aiContactId,
     vambe_stage_id: stageId,
   }
+  // Inferir tipo_llamada según UUID del stage (solo si es de llamada)
+  const TIPO_LLAMADA_BY_STAGE: Record<string, 'demo' | 'comercial'> = {
+    '971fe009-72d1-44fb-932b-aa94adcec4db': 'demo',       // Agendados Consultoría
+    '2fc44415-960f-4dbd-b65b-1500636fc41a': 'demo',       // Confirmados
+    'cd0ab574-c844-4346-bea3-4ddd084fcb92': 'comercial',  // Llamadas
+  }
+  if (TIPO_LLAMADA_BY_STAGE[stageId]) fields.tipo_llamada = TIPO_LLAMADA_BY_STAGE[stageId]
   if (form?.nombre) fields.nombre = form.nombre
   if (form?.email) fields.email = form.email.toLowerCase().trim()
   if (form?.telefono) fields.telefono = form.telefono

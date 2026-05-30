@@ -51,6 +51,7 @@ export type Lead = {
   google_calendar_event_id: string | null
   vambe_contact_id: string | null
   vambe_stage_id: string | null
+  tipo_llamada: 'demo' | 'comercial' | null
 }
 
 export type LeadActividad = {

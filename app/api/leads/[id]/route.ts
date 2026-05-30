@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase'
 import { normalizeCanal } from '@/lib/canales'
 import { syncLeadToCalendar } from '@/lib/googleCalendar'
 
-const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at'] as const
+const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at','tipo_llamada'] as const
 
 /** Labels human-readable para los registros de actividad. */
 const FIELD_LABELS: Record<string, string> = {
@@ -21,6 +21,7 @@ const FIELD_LABELS: Record<string, string> = {
   presupuesto: 'Presupuesto',
   vacante: 'Vacante',
   llamada_at: 'Llamada agendada',
+  tipo_llamada: 'Tipo de llamada',
   ultimo_contacto: 'Último contacto',
 }
 

@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   let query = supabase
     .from('leads')
-    .select('id, email, empresa, puesto, vacante, notas, canal_adquisicion, tipo_evento')
+    .select('id, email, empresa, puesto, vacante, notas, canal_adquisicion, tipo_evento, vambe_stage_id, tipo_llamada, status')
   if (canalFilter) query = query.eq('canal_adquisicion', canalFilter)
   const { data: leads, error } = await query
 
@@ -121,6 +121,22 @@ export async function GET(req: NextRequest) {
         before.notas = lead.notas || null
         after.notas = newNotas
         stats.notas_added++
+      }
+    }
+
+    // tipo_llamada — inferir desde vambe_stage_id si está en stage de llamada
+    const TIPO_LLAMADA_BY_STAGE: Record<string, 'demo' | 'comercial'> = {
+      '971fe009-72d1-44fb-932b-aa94adcec4db': 'demo',
+      '2fc44415-960f-4dbd-b65b-1500636fc41a': 'demo',
+      'cd0ab574-c844-4346-bea3-4ddd084fcb92': 'comercial',
+    }
+    const leadAny = lead as unknown as { vambe_stage_id?: string; tipo_llamada?: string; status?: string }
+    if (leadAny.status === 'llamada_agendada' && leadAny.vambe_stage_id) {
+      const tipo = TIPO_LLAMADA_BY_STAGE[leadAny.vambe_stage_id]
+      if (tipo && leadAny.tipo_llamada !== tipo) {
+        updates.tipo_llamada = tipo
+        before.tipo_llamada = leadAny.tipo_llamada || null
+        after.tipo_llamada = tipo
       }
     }
 

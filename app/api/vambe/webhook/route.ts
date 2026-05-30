@@ -7,9 +7,20 @@ import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/li
 
 // Stage UUIDs especiales para disparar alertas y triggers de negocio.
 // Si Vambe cambia los UUIDs, actualizar acá (o moverlo a env vars).
-const STAGE_ATENCION_HUMANA = 'dd41a38e-3b22-42f3-a6d3-b130b9ca449f'
-const STAGE_GANADOS         = 'c86a7911-ef9d-4f6d-8c90-3e9a9a4d6b50'
-const STAGE_PERDIDOS        = '9a43e657-b5cc-4baf-a503-1e0b37b9b366'
+const STAGE_ATENCION_HUMANA   = 'dd41a38e-3b22-42f3-a6d3-b130b9ca449f'
+const STAGE_GANADOS           = 'c86a7911-ef9d-4f6d-8c90-3e9a9a4d6b50'
+const STAGE_PERDIDOS          = '9a43e657-b5cc-4baf-a503-1e0b37b9b366'
+
+// Stages que corresponden a tipos específicos de llamada:
+const STAGE_DEMO_AGENDADA     = '971fe009-72d1-44fb-932b-aa94adcec4db'  // Agendados Consultoría 📆
+const STAGE_DEMO_CONFIRMADA   = '2fc44415-960f-4dbd-b65b-1500636fc41a'  // Confirmados ✅
+const STAGE_LLAMADA_COMERCIAL = 'cd0ab574-c844-4346-bea3-4ddd084fcb92'  // Llamadas ☎️
+
+function tipoLlamadaForStage(stageId: string): 'demo' | 'comercial' | null {
+  if (stageId === STAGE_DEMO_AGENDADA || stageId === STAGE_DEMO_CONFIRMADA) return 'demo'
+  if (stageId === STAGE_LLAMADA_COMERCIAL) return 'comercial'
+  return null
+}
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -423,6 +434,9 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
       updates.llamada_at = llamadaAt
       llamadaAtSaved = llamadaAt
     }
+    // Asignar tipo_llamada según UUID de stage
+    const tipo = tipoLlamadaForStage(newStageId)
+    if (tipo) updates.tipo_llamada = tipo
   }
 
   await supabase.from('lead_actividad').insert({
