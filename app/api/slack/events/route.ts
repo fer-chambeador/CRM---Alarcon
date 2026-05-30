@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import { createServiceClient } from '@/lib/supabase'
 import { parseSlackMessage } from '@/lib/slack-parser'
+import { normalizePuesto, normalizeVacante, extractCompanyFromEmail } from '@/lib/vambeNormalize'
 
 function verifySlackSignature(req: NextRequest, body: string): boolean {
   const signingSecret = process.env.SLACK_SIGNING_SECRET
@@ -39,7 +40,12 @@ export async function POST(req: NextRequest) {
     if (!parsed || !parsed.email) return NextResponse.json({ ok: true })
 
     const supabase = createServiceClient()
-    const { data: existing } = await supabase.from('leads').select('*').eq('email', parsed.email).single()
+    const { data: existing } = await supabase.from('leads').select('*').eq('email', parsed.email).maybeSingle()
+
+    // Normalizar campos crudos antes de cualquier insert/update — mismo tratamiento que Vambe
+    const normalizedPuesto = parsed.puesto ? normalizePuesto(parsed.puesto) : null
+    const normalizedVacante = parsed.vacante ? normalizeVacante(parsed.vacante) : null
+    const empresaFromEmail = parsed.empresa || extractCompanyFromEmail(parsed.email)
 
     // ── Pago confirmado → convertir automáticamente ──
     if (parsed.tipo_evento === 'pago_confirmado') {
@@ -68,30 +74,30 @@ export async function POST(req: NextRequest) {
 
       if (existing) {
         const updates: Record<string, unknown> = {}
-        if (parsed.empresa && !existing.empresa) updates.empresa = parsed.empresa
+        if (empresaFromEmail && !existing.empresa) updates.empresa = empresaFromEmail
         if (parsed.telefono && !existing.telefono) updates.telefono = parsed.telefono
-        if (parsed.puesto && !existing.puesto) updates.puesto = parsed.puesto
+        if (normalizedPuesto && !existing.puesto) updates.puesto = normalizedPuesto
         if (parsed.canal_adquisicion && !existing.canal_adquisicion) updates.canal_adquisicion = parsed.canal_adquisicion
         if (parsed.presupuesto && !existing.presupuesto) updates.presupuesto = parsed.presupuesto
-        if (parsed.vacante && !existing.vacante) updates.vacante = parsed.vacante
+        if (normalizedVacante && !existing.vacante) updates.vacante = normalizedVacante
         if (Object.keys(updates).length > 0) {
           await supabase.from('leads').update(updates).eq('id', existing.id)
         }
       } else {
         const { data: newLead } = await supabase.from('leads').insert({
-          email: parsed.email,
+          email: parsed.email.toLowerCase().trim(),
           nombre: parsed.nombre,
-          empresa: parsed.empresa,
+          empresa: empresaFromEmail,
           telefono: parsed.telefono,
-          puesto: parsed.puesto,
+          puesto: normalizedPuesto,
           canal_adquisicion: parsed.canal_adquisicion,
           presupuesto: parsed.presupuesto,
-          vacante: parsed.vacante,
+          vacante: normalizedVacante,
           status: 'nuevo',
           tipo_evento: parsed.tipo_evento,
           slack_ts: event.ts,
           slack_raw: event.text,
-        }).select('id').single()
+        }).select('id').maybeSingle()
         if (newLead) {
           await supabase.from('lead_actividad').insert({ lead_id: newLead.id, tipo: 'slack_update', descripcion: 'Lead creado desde Slack', metadata: { slack_ts: event.ts } })
         }

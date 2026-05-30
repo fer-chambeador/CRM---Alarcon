@@ -24,7 +24,14 @@ const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 
 
 function tipoLabel(t: string | null) {
   if (!t) return ''
-  return { usuario_nuevo: '👤', empresa_creada: '🏢', suscripcion_nueva: '💳', manual: '✏️', pago_confirmado: '💰' }[t] ?? ''
+  return ({
+    usuario_nuevo: '👤',
+    empresa_creada: '🏢',
+    suscripcion_nueva: '💳',
+    manual: '✏️',
+    pago_confirmado: '💰',
+    vambe_form: '💬',     // form de Vambe (Meta ad → conversación AI)
+  } as Record<string, string>)[t] ?? ''
 }
 
 function formatFecha(dateStr: string) {

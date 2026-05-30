@@ -60,12 +60,13 @@ export function extractCompanyFromEmail(email: string | null | undefined): strin
 
 /**
  * Mapea la respuesta libre del form "¿cuál describe mejor tu situación actual?"
- * a una de 4 categorías limpias.
+ * a una de 4 categorías limpias. Labels unificados con los existentes en el CRM
+ * (Slack los guardaba en singular sin sufijos).
  *
  * Ejemplos:
- *   'Recluto o gestiono personal (RH, operaciones, dueño de negocio)' → 'Reclutador / RH'
- *   'Soy dueño de mi negocio'                                          → 'Dueño / Empresario'
- *   'Soy gerente del área de operaciones'                              → 'Gerente / Director'
+ *   'Recluto o gestiono personal (RH, operaciones, dueño de negocio)' → 'Reclutador'
+ *   'Soy dueño de mi negocio'                                          → 'Dueño'
+ *   'Soy gerente del área de operaciones'                              → 'Gerente'
  *   ''                                                                  → null
  */
 export function normalizePuesto(raw: string | null | undefined): string | null {
@@ -86,58 +87,92 @@ export function normalizePuesto(raw: string | null | undefined): string | null {
 // ─── Vacante (puesto que el cliente quiere reclutar) ───────────────────
 
 /**
- * Lista canónica derivada de las vacantes existentes en el CRM.
- * Cada categoría tiene una lista de patrones que la disparan.
- * El orden importa: más específico arriba.
+ * Lista canónica de categorías de vacante.
+ * Derivada de las categorías existentes en el CRM, con consolidación de
+ * categorías con poco volumen en categorías más grandes (decisión del producto):
+ *
+ *   Garrotero, Hostess       → Mesero
+ *   Taquero, Lavaloza        → Cocinero
+ *   Mecánico                 → Mantenimiento
+ *   Gestor de Cobranza       → Call Center
+ *   Operativos, Multifuncional → Ayudante general
+ *   Promotor                 → Ventas
+ *
+ * El orden importa: la PRIMERA regla que matchea gana, así que las más
+ * específicas (que podrían absorberse en una genérica) van arriba.
  */
 const VACANTE_RULES: Array<{ label: string; patterns: RegExp[] }> = [
-  // Cocina y restaurante (antes de "Ayudante general" porque "ayudante de cocina" matchea cocinero)
-  { label: 'Cocinero', patterns: [/cociner/, /\bcocina\b/, /\bchef\b/, /ayudante de cocina/, /\bparrilla/, /pizzero/] },
-  { label: 'Mesero', patterns: [/\bmesero/, /\bmesera/, /\bcamarer/] },
-  { label: 'Garrotero', patterns: [/garroter/] },
-  { label: 'Hostess', patterns: [/\bhostess/, /\banfitrion/] },
-  { label: 'Lavaloza', patterns: [/lavalo[zs]a/, /\blavaplatos/] },
-  { label: 'Taquero', patterns: [/\btaquero/, /\btaquera/] },
-  { label: 'Barista', patterns: [/\bbarista/] },
+  // ── Cocina (consolida Taquero + Lavaloza) — antes de "Ayudante general" porque "ayudante de cocina" debe ir acá
+  { label: 'Cocinero', patterns: [
+    /cociner/, /\bcocina\b/, /\bchef\b/, /ayudante de cocina/,
+    /\bparrilla/, /pizzero/,
+    /\btaquero/, /\btaquera/,                    // ← Taquero merged
+    /lavalo[zs]a/, /\blavaplatos/,               // ← Lavaloza merged
+  ] },
+  // ── Restaurante front-of-house (consolida Garrotero + Hostess)
+  { label: 'Mesero', patterns: [
+    /\bmesero/, /\bmesera/, /\bcamarer/,
+    /garroter/,                                  // ← Garrotero merged
+    /\bhostess/, /\banfitrion/,                  // ← Hostess merged
+    /\bbarista/,                                 // ← Barista absorbido también
+  ] },
 
-  // Seguridad
+  // ── Seguridad
   { label: 'Seguridad', patterns: [/\bguardia/, /seguridad/, /vigilan/, /custodi/, /intramuros/] },
 
-  // Limpieza
+  // ── Limpieza
   { label: 'Limpieza', patterns: [/limpiez/, /\bintendenc/, /\baseo\b/, /\bmucam/, /housekeep/] },
 
-  // Choferes / Repartidores
-  { label: 'Chofer', patterns: [/\bchofer/, /\bconductor/, /\boperador\s+de\s+(camion|trailer|tractocami)/, /motorista/] },
+  // ── Choferes / Repartidores
   { label: 'Repartidor', patterns: [/repartid/, /\bdelivery/, /\bmotorizado/, /\bmensajer/, /entrega/] },
+  { label: 'Chofer', patterns: [/\bchofer/, /\bconductor/, /\boperador\s+de\s+(camion|trailer|tractocami)/, /motorista/] },
 
-  // Almacén y operación industrial
-  { label: 'Almacenista', patterns: [/almacenist/, /\balmacén\b/, /\balmacen\b/, /bodeguer/, /montacarguist/, /\bsurtidor/] },
-  { label: 'Operador Industrial', patterns: [/operador industrial/, /operario industrial/, /operador de máquin/, /operador de maquin/, /\bobrero/] },
+  // ── Almacén y operación industrial
+  { label: 'Almacenista', patterns: [/almacenist/, /\balmac[eé]n\b/, /bodeguer/, /montacarguist/, /\bsurtidor/, /cargador/, /estibador/, /descargador/] },
+  { label: 'Operador Industrial', patterns: [/operador industrial/, /operario industrial/, /operador de m[áa]quin/, /\bobrero/] },
 
-  // Mantenimiento y oficios
-  { label: 'Mantenimiento', patterns: [/mantenimient/, /electricis/, /plomer/, /alban|albañil/, /\bherrer/, /carpinter/, /\bsoldador/, /pintor\b/] },
-  { label: 'Mecánico', patterns: [/mec[áa]nic/, /hojalater/] },
+  // ── Mantenimiento (consolida Mecánico)
+  { label: 'Mantenimiento', patterns: [
+    /mantenimient/, /electricis/, /plomer/, /alban|albañil/, /\bherrer/, /carpinter/, /\bsoldador/, /pintor\b/,
+    /mec[áa]nic/, /hojalater/,                   // ← Mecánico merged
+  ] },
 
-  // Comercial
-  { label: 'Ventas', patterns: [/\bventas?\b/, /\bvendedor/, /\bvendedora/, /comercial/, /asesor\s+(comercial|de venta)/, /ejecutivo de venta/, /ejecutivos comerciales/, /promot/, /impulsador/] },
+  // ── Cajero / Call Center (consolida Gestor de Cobranza)
   { label: 'Cajero', patterns: [/\bcajer/] },
-  { label: 'Call Center', patterns: [/call ?center/, /\bcallcenter/, /telemark/, /telefonist/] },
-  { label: 'Gestor de Cobranza', patterns: [/cobran[zs]a/, /\bgestor de/] },
+  { label: 'Call Center', patterns: [
+    /call ?center/, /\bcallcenter/, /telemark/, /telefonist/,
+    /cobran[zs]a/, /\bgestor\s+de\s+cobran/,     // ← Gestor de Cobranza merged
+  ] },
 
-  // Administrativos / oficina
+  // ── Administrativos / oficina (más específicos primero)
   { label: 'Recepcionista', patterns: [/recepcionis/, /\brecepción\b/, /\brecepcion\b/] },
   { label: 'Auxiliar Administrativo', patterns: [/auxiliar admin/, /asistent/, /secretari/, /oficinist/, /administrativ/] },
-  { label: 'Contador', patterns: [/contador/, /contabil/] },
+  { label: 'Contador', patterns: [/\bcontador/, /contabil/] },
 
-  // Especializados
+  // ── Especializados
   { label: 'Enfermería', patterns: [/enfermer/, /\bparamedic/, /paramédic/] },
   { label: 'Técnico', patterns: [/t[ée]cnico/] },
   { label: 'Reclutador', patterns: [/reclutad/] },
 
-  // Generales (al final, son catch-all amplios)
-  { label: 'Gerente', patterns: [/gerent/, /\bdirector/, /\bjefe/, /\bsuperviso/, /coordinad/, /\bmanager\b/] },
-  { label: 'Ayudante general', patterns: [/ayudante[s]?\s+general/, /\bayudant/, /\bauxiliar\b/] },
-  { label: 'Operativos', patterns: [/operativ/] },
+  // ── Comercial (Promotor también va acá)
+  { label: 'Ventas', patterns: [
+    /\bventas?\b/, /\bvendedor/, /\bvendedora/, /comercial/,
+    /\basesor\b/, /asesor\s+(comercial|de venta|de seguros|de seguro|inmobiliari)/,
+    /ejecutivo de venta/, /ejecutivos comerciales/,
+    /preventist/, /cambaceo/,
+    /\bpromot/, /\bimpulsador/, /\bdemostrador/,   // ← Promotor merged (poco volumen)
+  ] },
+
+  // ── Gerente / Director (catch-all de liderazgo)
+  { label: 'Gerente', patterns: [/gerent/, /\bdirector/, /\bjefe/, /\bsuperviso/, /coordinad/, /\bmanager\b/, /\bhead\b/] },
+
+  // ── Ayudante general (catch-all final para roles genéricos — consolida Operativos + Multifuncional)
+  { label: 'Ayudante general', patterns: [
+    /ayudante[s]?\s+general/, /\bayudant/, /\bauxiliar\b/,
+    /operativ/,                                  // ← Operativos merged
+    /multifuncional/,                            // ← Multifuncional merged
+    /\bpeón\b/, /\bpeon\b/,
+  ] },
 ]
 
 /**

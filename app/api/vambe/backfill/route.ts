@@ -189,7 +189,7 @@ async function processContact(
     vambe_stage_id: stageId,
   }
   if (form?.nombre) fields.nombre = form.nombre
-  if (form?.email) fields.email = form.email
+  if (form?.email) fields.email = form.email.toLowerCase().trim()
   if (form?.telefono) fields.telefono = form.telefono
   if (form?.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form?.presupuesto) fields.presupuesto = form.presupuesto

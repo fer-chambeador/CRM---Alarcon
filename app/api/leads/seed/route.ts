@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       .from('leads')
       .select('id, nombre, empresa, telefono, puesto, canal_adquisicion, plan')
       .eq('email', parsed.email)
-      .single()
+      .maybeSingle()
 
     if (existing) {
       const updates: Record<string, unknown> = {}

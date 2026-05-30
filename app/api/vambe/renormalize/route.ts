@@ -7,16 +7,20 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
 /**
- * GET /api/vambe/renormalize?dry=true|false&secret=...
+ * GET /api/vambe/renormalize?dry=true|false&secret=...&canal=Vambe|all
  *
  * Re-normaliza data YA presente en el CRM sin tocar Vambe — solo lee/escribe en
  * Supabase. Mucho más rápido que el backfill completo cuando solo querés aplicar
  * los normalizadores actualizados a los leads existentes.
  *
- * Acciones:
- *  - vacante → normalizeVacante (Seguridad, Limpieza, etc)
- *  - puesto → normalizePuesto (Reclutador/RH, Dueno, Gerente, Otro)
+ * Acciones (idempotentes):
+ *  - vacante → normalizeVacante (Seguridad, Limpieza, Mesero, Cocinero, etc)
+ *  - puesto → normalizePuesto (Reclutador, Dueño, Gerente, Otro)
  *  - empresa ← extractCompanyFromEmail si está vacío y el email es corporativo
+ *  - notas ← buildNotasFromForm (solo para leads Vambe que tengan form guardado en activity)
+ *
+ * Por default procesa TODOS los leads (Slack + Vambe) para unificar categorías.
+ * Pasá ?canal=Vambe para limitarlo solo a leads de Vambe.
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -25,12 +29,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
   const dry = url.searchParams.get('dry') !== 'false'
+  const canalFilter = url.searchParams.get('canal')   // ej "Vambe" para limitar
 
   const supabase = createServiceClient()
-  const { data: leads, error } = await supabase
+  let query = supabase
     .from('leads')
     .select('id, email, empresa, puesto, vacante, notas, canal_adquisicion, tipo_evento')
-    .eq('canal_adquisicion', 'Vambe')
+  if (canalFilter) query = query.eq('canal_adquisicion', canalFilter)
+  const { data: leads, error } = await query
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   const rows = (leads || []) as Pick<Lead, 'id' | 'email' | 'empresa' | 'puesto' | 'vacante' | 'notas' | 'canal_adquisicion' | 'tipo_evento'>[]

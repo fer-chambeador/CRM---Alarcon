@@ -156,14 +156,36 @@ export async function POST(req: NextRequest) {
   const ctx = buildDateContext()
   const summary = buildSummary(enriched, ctx)
 
+  // Para evitar el rate limit de Anthropic (10k tokens/min) cuando hay cientos
+  // de leads, comprimimos el payload: aliases cortos + sin nulls/empty.
+  // El asistente sigue viendo TODOS los leads, solo más compacto.
+  const compact = enriched.map(l => {
+    const o: Record<string, unknown> = {}
+    if (l.email) o.e = l.email
+    if (l.nombre) o.n = l.nombre
+    if (l.empresa) o.emp = l.empresa
+    if (l.telefono) o.t = l.telefono
+    if (l.puesto) o.p = l.puesto
+    if (l.vacante) o.v = l.vacante
+    if (l.canal_adquisicion) o.c = l.canal_adquisicion
+    if (l.status) o.s = l.status
+    if (l.monto) o.m = l.monto
+    if (l.estado) o.est = l.estado
+    if (l.presupuesto) o.pres = l.presupuesto
+    if (l.veces_contactado) o.vc = l.veces_contactado
+    if (l.created_at) o.ca = l.created_at.slice(0, 10)
+    if (l.status_changed_at) o.sca = l.status_changed_at.slice(0, 10)
+    return o
+  })
+
   const userMsg = `SUMMARY pre-calculado (usá ESTOS números cuando preguntan por counts):
 \`\`\`json
 ${JSON.stringify(summary, null, 2)}
 \`\`\`
 
-LEADS completos (JSON, para queries específicos):
+LEADS (JSON compacto — aliases: e=email, n=nombre, emp=empresa, t=telefono, p=puesto, v=vacante, c=canal_adquisicion, s=status, m=monto, est=estado, pres=presupuesto, vc=veces_contactado, ca=created_at(date), sca=status_changed_at(date)):
 \`\`\`json
-${JSON.stringify(enriched)}
+${JSON.stringify(compact)}
 \`\`\`
 
 Pregunta del user:
