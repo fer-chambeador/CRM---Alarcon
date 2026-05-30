@@ -68,10 +68,19 @@ function leadMatchesQuery(query: string, lead: Lead): boolean {
   if (!q) return true
   const fields: (string | null | undefined)[] = [
     lead.email, lead.nombre, lead.empresa, lead.telefono,
-    lead.canal_adquisicion, lead.puesto,
+    lead.canal_adquisicion, lead.puesto, lead.vacante,
   ]
   for (const f of fields) {
     if (f && f.toLowerCase().includes(q)) return true
+  }
+  // Match especial por teléfono: si query es mayormente dígitos, comparar por últimos 10
+  const qDigits = q.replace(/\D/g, '')
+  if (qDigits.length >= 7 && lead.telefono) {
+    const leadDigits = lead.telefono.replace(/\D/g, '')
+    const qLast10 = qDigits.slice(-10)
+    const leadLast10 = leadDigits.slice(-10)
+    if (leadLast10 && qLast10 && leadLast10.includes(qLast10.slice(-7))) return true
+    if (qLast10 && leadLast10.endsWith(qLast10.slice(-Math.min(qLast10.length, leadLast10.length)))) return true
   }
   return false
 }

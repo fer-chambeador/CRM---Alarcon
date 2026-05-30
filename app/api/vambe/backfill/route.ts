@@ -9,6 +9,7 @@ import {
   type VambeContact,
 } from '@/lib/vambe'
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60   // Vercel free: 60s. Si tenés muchos, ajustar pageSize.
@@ -197,14 +198,14 @@ async function processContact(
   if (TIPO_LLAMADA_BY_STAGE[stageId]) fields.tipo_llamada = TIPO_LLAMADA_BY_STAGE[stageId]
   if (form?.nombre) fields.nombre = form.nombre
   if (form?.email) fields.email = form.email.toLowerCase().trim()
-  if (form?.telefono) fields.telefono = form.telefono
+  if (form?.telefono) fields.telefono = normalizeMexicanPhone(form.telefono) || form.telefono
   if (form?.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form?.presupuesto) fields.presupuesto = form.presupuesto
   if (form?.rol) fields.puesto = normalizePuesto(form.rol)
   // Fallback al contact metadata
   if (!fields.nombre && contact.name) fields.nombre = contact.name
   if (!fields.email && contact.email) fields.email = contact.email.toLowerCase()
-  if (!fields.telefono && contact.phone) fields.telefono = contact.phone
+  if (!fields.telefono && contact.phone) fields.telefono = normalizeMexicanPhone(contact.phone) || contact.phone
 
   // Empresa derivada del dominio del email si es corporativo
   const emailForCompany = (fields.email || '') as string

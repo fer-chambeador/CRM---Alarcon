@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import type { FormFields } from '@/lib/vambe'
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -94,7 +95,7 @@ export async function GET(req: NextRequest) {
     }
     if (form.nombre) fields.nombre = form.nombre
     if (form.email) fields.email = form.email.toLowerCase().trim()
-    if (form.telefono) fields.telefono = form.telefono
+    if (form.telefono) fields.telefono = normalizeMexicanPhone(form.telefono) || form.telefono
     if (form.vacante) fields.vacante = normalizeVacante(form.vacante)
     if (form.presupuesto) fields.presupuesto = form.presupuesto
     if (form.rol) fields.puesto = normalizePuesto(form.rol)

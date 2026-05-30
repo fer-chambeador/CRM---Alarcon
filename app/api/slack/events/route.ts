@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { createServiceClient } from '@/lib/supabase'
 import { parseSlackMessage } from '@/lib/slack-parser'
 import { normalizePuesto, normalizeVacante, extractCompanyFromEmail } from '@/lib/vambeNormalize'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 function verifySlackSignature(req: NextRequest, body: string): boolean {
   const signingSecret = process.env.SLACK_SIGNING_SECRET
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
     const normalizedPuesto = parsed.puesto ? normalizePuesto(parsed.puesto) : null
     const normalizedVacante = parsed.vacante ? normalizeVacante(parsed.vacante) : null
     const empresaFromEmail = parsed.empresa || extractCompanyFromEmail(parsed.email)
+    const normalizedTelefono = parsed.telefono ? (normalizeMexicanPhone(parsed.telefono) || parsed.telefono) : null
 
     // ── Pago confirmado → convertir automáticamente ──
     if (parsed.tipo_evento === 'pago_confirmado') {
@@ -75,7 +77,7 @@ export async function POST(req: NextRequest) {
       if (existing) {
         const updates: Record<string, unknown> = {}
         if (empresaFromEmail && !existing.empresa) updates.empresa = empresaFromEmail
-        if (parsed.telefono && !existing.telefono) updates.telefono = parsed.telefono
+        if (normalizedTelefono && !existing.telefono) updates.telefono = normalizedTelefono
         if (normalizedPuesto && !existing.puesto) updates.puesto = normalizedPuesto
         if (parsed.canal_adquisicion && !existing.canal_adquisicion) updates.canal_adquisicion = parsed.canal_adquisicion
         if (parsed.presupuesto && !existing.presupuesto) updates.presupuesto = parsed.presupuesto
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest) {
           email: parsed.email.toLowerCase().trim(),
           nombre: parsed.nombre,
           empresa: empresaFromEmail,
-          telefono: parsed.telefono,
+          telefono: normalizedTelefono,
           puesto: normalizedPuesto,
           canal_adquisicion: parsed.canal_adquisicion,
           presupuesto: parsed.presupuesto,
