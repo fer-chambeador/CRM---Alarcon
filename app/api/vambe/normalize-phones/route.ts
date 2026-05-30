@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -75,38 +76,4 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(stats)
 }
 
-/**
- * Normaliza un teléfono a formato +52XXXXXXXXXX (México).
- *
- * Casos:
- *   "7701836726"        → "+527701836726"
- *   "5217701836726"     → "+527701836726"  (quita el "1" intermedio de WhatsApp Mobile)
- *   "527701836726"      → "+527701836726"
- *   "+527701836726"     → "+527701836726"  (ya OK)
- *   "+52 770 183 6726"  → "+527701836726"
- *   "abc"               → null
- */
-export function normalizeMexicanPhone(raw: string): string | null {
-  if (!raw) return null
-  const cleaned = raw.replace(/[\s\-()+]/g, '')
-  if (!/^\d+$/.test(cleaned)) return null
-  const digits = cleaned
-
-  // Caso 1: 10 dígitos → asumir México sin código país
-  if (digits.length === 10) return `+52${digits}`
-
-  // Caso 2: 12 dígitos empezando con 52 → ya con código país
-  if (digits.length === 12 && digits.startsWith('52')) return `+${digits}`
-
-  // Caso 3: 13 dígitos con "521" (formato WhatsApp Mobile México) → quitar el 1 extra
-  if (digits.length === 13 && digits.startsWith('521')) return `+52${digits.slice(3)}`
-
-  // Caso 4: 11 dígitos empezando con 1 → posible formato antiguo MX, quitar el 1
-  if (digits.length === 11 && digits.startsWith('1')) return `+52${digits.slice(1)}`
-
-  // Si tiene + y código país no-México, dejarlo así
-  if (raw.startsWith('+') && digits.length >= 10) return `+${digits}`
-
-  // Resto: muy ambiguo, no tocar
-  return raw
-}
+// La función `normalizeMexicanPhone` se importa de '@/lib/phoneNormalize'.
