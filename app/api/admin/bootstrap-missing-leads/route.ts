@@ -160,23 +160,6 @@ export async function GET(req: NextRequest) {
   const results: ResultRow[] = []
 
   for (const contactId of ids) {
-    const { data: existing } = await supabase
-      .from('leads')
-      .select('id, nombre, email, status')
-      .eq('vambe_contact_id', contactId)
-      .maybeSingle()
-    if (existing) {
-      results.push({
-        contact_id: contactId,
-        action: 'skipped_exists',
-        nombre: (existing as { nombre?: string | null }).nombre,
-        email: (existing as { email?: string | null }).email,
-        status: (existing as { status?: string }).status,
-        reason: `ya existe (lead.id=${(existing as { id: string }).id})`,
-      })
-      continue
-    }
-
     const contact = contactsById[contactId]
     const stageId = contact?.active_ticket_v2?.current_stage_id || contact?.default_stage_id || STAGE_INTERESADO
     const { status, tipo_llamada } = stageToStatus(stageId)
@@ -207,6 +190,44 @@ export async function GET(req: NextRequest) {
         const nameMatch = (m.message || '').match(/¡?(Hola|Perfecto|Excelente|Entendido|Mucho gusto|Gracias)[,!]?\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)\b/)
         if (nameMatch && nameMatch[2]) { nombre = nameMatch[2].trim(); break }
       }
+    }
+
+    // Lookup existing lead by 3 keys: vambe_contact_id, email, phone last10
+    type ExistingLead = { id: string; nombre?: string | null; email?: string | null; status?: string; vambe_contact_id?: string | null; vambe_stage_id?: string | null }
+    let existing: ExistingLead | null = null
+    {
+      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').eq('vambe_contact_id', contactId).maybeSingle()
+      if (r.data) existing = r.data as ExistingLead
+    }
+    if (!existing && email && !email.endsWith('@chambas.placeholder')) {
+      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').ilike('email', email).maybeSingle()
+      if (r.data) existing = r.data as ExistingLead
+    }
+    if (!existing && telefono) {
+      const last10 = telefono.replace(/\D/g, '').slice(-10)
+      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').like('telefono', `%${last10}`).maybeSingle()
+      if (r.data) existing = r.data as ExistingLead
+    }
+
+    if (existing) {
+      // Link vambe_contact_id + advance stage if needed (no email/nombre overwrite)
+      const updates: Record<string, unknown> = {}
+      if (!existing.vambe_contact_id) updates.vambe_contact_id = contactId
+      if (existing.vambe_stage_id !== stageId) updates.vambe_stage_id = stageId
+      // Don't change status here — backfill flow already handles that. Just link.
+      if (Object.keys(updates).length > 0 && !dry) {
+        await supabase.from('leads').update(updates).eq('id', existing.id)
+      }
+      results.push({
+        contact_id: contactId,
+        action: 'skipped_exists',
+        nombre: existing.nombre,
+        email: existing.email,
+        status: existing.status,
+        stage_id: stageId,
+        reason: `ya existe (lead.id=${existing.id}, linked_now=${Object.keys(updates).length > 0})`,
+      })
+      continue
     }
 
     const llamadaAt = (status === 'llamada_agendada') ? extractDateFromMessages(messages) : null
