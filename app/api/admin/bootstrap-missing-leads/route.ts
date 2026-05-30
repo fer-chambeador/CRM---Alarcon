@@ -33,15 +33,15 @@ const STAGE_LLAMADA_COMERCIAL = 'cd0ab574-c844-4346-bea3-4ddd084fcb92'
 const STAGE_GANADOS           = 'c86a7911-ef9d-4f6d-8c90-3e9a9a4d6b50'
 const STAGE_PERDIDOS          = '9a43e657-b5cc-4baf-a503-1e0b37b9b366'
 
-function stageToStatus(stageId: string | null | undefined): { status: Lead['status']; tipo_llamada?: 'demo' | 'comercial' } {
-  if (!stageId) return { status: 'nuevo' }
-  if (stageId === STAGE_INTERESADO) return { status: 'nuevo' }
-  if (stageId === STAGE_DEMO_AGENDADA) return { status: 'llamada_agendada', tipo_llamada: 'demo' }
-  if (stageId === STAGE_DEMO_CONFIRMADA) return { status: 'llamada_agendada', tipo_llamada: 'demo' }
-  if (stageId === STAGE_LLAMADA_COMERCIAL) return { status: 'llamada_agendada', tipo_llamada: 'comercial' }
-  if (stageId === STAGE_GANADOS) return { status: 'convertido' }
-  if (stageId === STAGE_PERDIDOS) return { status: 'descartado' }
-  return { status: 'nuevo' }
+function stageToStatus(stageId: string | null | undefined): { status: Lead['status']; tipo_llamada?: 'demo' | 'comercial'; mapped: boolean } {
+  if (!stageId) return { status: 'nuevo', mapped: false }
+  if (stageId === STAGE_INTERESADO) return { status: 'nuevo', mapped: true }
+  if (stageId === STAGE_DEMO_AGENDADA) return { status: 'llamada_agendada', tipo_llamada: 'demo', mapped: true }
+  if (stageId === STAGE_DEMO_CONFIRMADA) return { status: 'llamada_agendada', tipo_llamada: 'demo', mapped: true }
+  if (stageId === STAGE_LLAMADA_COMERCIAL) return { status: 'llamada_agendada', tipo_llamada: 'comercial', mapped: true }
+  if (stageId === STAGE_GANADOS) return { status: 'convertido', mapped: true }
+  if (stageId === STAGE_PERDIDOS) return { status: 'descartado', mapped: true }
+  return { status: 'nuevo', mapped: false }
 }
 
 function extractDateFromMessages(messages: Array<{ message: string; created_at: string; direction: string }>): string | null {
@@ -162,7 +162,20 @@ export async function GET(req: NextRequest) {
   for (const contactId of ids) {
     const contact = contactsById[contactId]
     const stageId = contact?.active_ticket_v2?.current_stage_id || contact?.default_stage_id || STAGE_INTERESADO
-    const { status, tipo_llamada } = stageToStatus(stageId)
+    const { status, tipo_llamada, mapped } = stageToStatus(stageId)
+    const includeUnmapped = url.searchParams.get('include_unmapped') === 'true'
+    if (!mapped && !includeUnmapped) {
+      results.push({
+        contact_id: contactId,
+        action: 'skipped_no_email',
+        nombre: contact?.name || null,
+        telefono: contact?.phone ? (normalizeMexicanPhone(contact.phone) || contact.phone) : null,
+        stage_id: stageId,
+        status,
+        reason: `stage no mapeado (${stageId.slice(0, 8)}) — Lanzamiento/Asistencia/Contactados — usa &include_unmapped=true para forzar`,
+      })
+      continue
+    }
 
     let messages: Awaited<ReturnType<typeof getMessages>> = []
     try {
