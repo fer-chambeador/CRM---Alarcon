@@ -298,8 +298,9 @@ async function promotePendingLead(
   const notas = buildNotasFromForm(form)
   if (notas) fields.notas = notas
 
-  // Campos que SIEMPRE se sobreescriben para mantener data limpia
-  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas'])
+  // Campos que SIEMPRE se sobreescriben para mantener data limpia.
+  // `telefono` también — porque Vambe siempre tiene el actual y el viejo puede ser obsoleto.
+  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas', 'telefono'])
 
   let resultLead: Lead | null = lead
   let created = false

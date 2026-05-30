@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
 
     if (lead) {
       // Update solo campos vacíos + sobreescribir vacante/puesto/notas (normalizados)
-      const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas'])
+      const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas', 'telefono'])
       const updates: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(fields)) {
         const existing = (lead as unknown as Record<string, unknown>)[k]

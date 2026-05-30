@@ -233,9 +233,10 @@ async function processContact(
   }
 
   // 3) Crear o actualizar
-  // Campos normalizados se sobreescriben siempre (vacante, puesto, notas).
+  // Campos normalizados se sobreescriben siempre (vacante, puesto, notas, telefono).
+  // Telefono también: Vambe siempre tiene el actual del contacto, el viejo puede ser obsoleto.
   // Otros campos solo se rellenan si están vacíos (no pisar info real del CRM).
-  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas'])
+  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas', 'telefono'])
 
   if (lead) {
     const updates: Record<string, unknown> = {}
