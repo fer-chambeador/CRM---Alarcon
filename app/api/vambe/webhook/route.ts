@@ -3,6 +3,13 @@ import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { parseFormMessage, type VambeWebhookEvent, type FormFields } from '@/lib/vambe'
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
+import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
+
+// Stage UUIDs especiales para disparar alertas y triggers de negocio.
+// Si Vambe cambia los UUIDs, actualizar acá (o moverlo a env vars).
+const STAGE_ATENCION_HUMANA = 'dd41a38e-3b22-42f3-a6d3-b130b9ca449f'
+const STAGE_GANADOS         = 'c86a7911-ef9d-4f6d-8c90-3e9a9a4d6b50'
+const STAGE_PERDIDOS        = '9a43e657-b5cc-4baf-a503-1e0b37b9b366'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -142,6 +149,25 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
       ultimo_contacto: new Date().toISOString(),
       veces_contactado: (lead.veces_contactado || 0) + 1,
     }).eq('id', lead.id)
+  }
+
+  // Marcar responded_at en campaign recipients si este inbound es la primera
+  // respuesta del cliente a una campaña reciente.
+  if (isInbound) {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    const { data: recipients } = await supabase
+      .from('vambe_campaign_recipients')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .gte('sent_at', cutoff)
+      .is('responded_at', null)
+      .limit(10)
+    if (recipients && recipients.length > 0) {
+      await supabase
+        .from('vambe_campaign_recipients')
+        .update({ responded_at: new Date().toISOString() })
+        .in('id', recipients.map(r => r.id))
+    }
   }
 }
 
@@ -407,4 +433,78 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
   })
 
   await supabase.from('leads').update(updates).eq('id', lead.id)
+
+  // ── Alertas a Slack para eventos críticos ──
+  // No bloqueamos el response — corre best-effort en paralelo.
+  fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted).catch(e => {
+    console.error('Slack alert error', e)
+  })
+
+  // ── Marcar outcome en campaign recipients (si este lead recibió alguna campaña) ──
+  await markCampaignOutcome(supabase, lead.id, newStageId, mappedStatus).catch(e => {
+    console.error('campaign outcome error', e)
+  })
+}
+
+/** Dispara alertas a Slack según la stage que llegó. No-op si no hay webhook configurado. */
+async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean) {
+  if (newStageId === STAGE_ATENCION_HUMANA) {
+    await alertAtencionHumana({
+      leadId: lead.id,
+      nombre: lead.nombre,
+      email: lead.email,
+      telefono: lead.telefono,
+      vacante: lead.vacante,
+      empresa: lead.empresa,
+      inboxUrl: null,
+    })
+  } else if (newStageId === STAGE_GANADOS) {
+    await alertVentaCerrada({
+      leadId: lead.id,
+      nombre: lead.nombre,
+      email: lead.email,
+      empresa: lead.empresa,
+      monto: lead.monto || 1160,
+    })
+  } else if (promoted && lead.presupuesto === '10000_plus') {
+    // Lead nuevo high-value recién promovido
+    await alertHighValueLead({
+      leadId: lead.id,
+      nombre: lead.nombre,
+      email: lead.email,
+      empresa: lead.empresa,
+      vacante: lead.vacante,
+      presupuesto: lead.presupuesto,
+    })
+  }
+}
+
+/**
+ * Si este lead ha sido recipient de alguna campaign reciente, marcar el outcome
+ * (responded_at / scheduled_call_at / paid_at) en vambe_campaign_recipients.
+ * Lookback: 30 días para evitar atribuir a campaigns muy viejas.
+ */
+async function markCampaignOutcome(supabase: Supabase, leadId: string, newStageId: string, mappedStatus: Lead['status'] | undefined) {
+  // Determinar qué outcome marcar
+  let updateField: 'scheduled_call_at' | 'paid_at' | 'responded_at' | null = null
+  if (mappedStatus === 'llamada_agendada') updateField = 'scheduled_call_at'
+  else if (mappedStatus === 'convertido' || newStageId === STAGE_GANADOS) updateField = 'paid_at'
+  // (responded_at se setea desde handleMessage, no acá)
+  if (!updateField) return
+
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const { data: recipients } = await supabase
+    .from('vambe_campaign_recipients')
+    .select('id')
+    .eq('lead_id', leadId)
+    .gte('sent_at', cutoff)
+    .is(updateField, null)
+    .limit(10)
+
+  if (!recipients || recipients.length === 0) return
+
+  await supabase
+    .from('vambe_campaign_recipients')
+    .update({ [updateField]: new Date().toISOString() })
+    .in('id', recipients.map(r => r.id))
 }
