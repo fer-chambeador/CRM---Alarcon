@@ -534,13 +534,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       : { key, dir: key === 'fecha' || key === 'contacto' || key === 'monto' || key === 'score' ? 'desc' : 'asc' })
   }
 
-  // ── Paginación ──
-  const PAGE_SIZE = 100
-  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE)
-  // Reset visible cap si cambian los filtros (para no quedar paginado en fila 200 con 30 resultados)
-  useEffect(() => { setPageSize(PAGE_SIZE) }, [search, filterStatus, filterAttempts, filterCanal, dateRange])
-  const visibleSorted = useMemo(() => sorted.slice(0, pageSize), [sorted, pageSize])
-  const hasMore = sorted.length > pageSize
+  // Render completo — sin paginación (con 400-1000 leads el navegador maneja bien).
+  // Si llegamos a >2k leads, evaluamos virtualizar.
+  const visibleSorted = sorted
 
   const stats = useMemo(() => {
     const sumMonto = (rows: Lead[]) => rows.reduce((acc, l) => acc + (l.monto ?? DEFAULT_MONTO), 0)
@@ -805,39 +801,6 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               })}
             </tbody>
           </table>
-          {hasMore && (
-            <div style={{
-              padding: '20px 0', textAlign: 'center',
-              borderTop: '1px solid var(--border)',
-              background: 'var(--glass)',
-              position: 'sticky', bottom: 0,
-            }}>
-              <button
-                onClick={() => setPageSize(p => p + 100)}
-                style={{
-                  background: 'var(--glass-strong)', border: '1px solid var(--border2)',
-                  color: 'var(--text)', padding: '10px 20px', borderRadius: 10,
-                  fontFamily: 'var(--font)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                  marginRight: 10,
-                }}
-              >
-                Cargar 100 más
-              </button>
-              <button
-                onClick={() => setPageSize(sorted.length)}
-                style={{
-                  background: 'transparent', border: '1px solid var(--border)',
-                  color: 'var(--text3)', padding: '10px 20px', borderRadius: 10,
-                  fontFamily: 'var(--font)', fontSize: 13, cursor: 'pointer',
-                }}
-              >
-                Mostrar todos ({sorted.length})
-              </button>
-              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
-                Mostrando {visibleSorted.length} de {sorted.length} leads filtrados
-              </div>
-            </div>
-          )}
         </div>
       </main>
 
