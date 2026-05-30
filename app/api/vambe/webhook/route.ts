@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { parseFormMessage, type VambeWebhookEvent, type FormFields } from '@/lib/vambe'
+import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -198,7 +199,7 @@ async function promotePendingLead(
     if (data) lead = data as Lead
   }
 
-  // 3) Construir campos
+  // 3) Construir campos — aplicar normalizaciones a vacante y puesto
   const fields: Record<string, unknown> = {
     canal_adquisicion: 'Vambe',
     vambe_contact_id: aiContactId,
@@ -206,23 +207,28 @@ async function promotePendingLead(
   if (form.nombre) fields.nombre = form.nombre
   if (form.email) fields.email = form.email
   if (form.telefono) fields.telefono = form.telefono
-  if (form.vacante) fields.vacante = form.vacante
+  if (form.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form.presupuesto) fields.presupuesto = form.presupuesto
-  if (form.rol) fields.puesto = form.rol
-  const extraNotas: string[] = []
-  if (form.vacantes_por_mes) extraNotas.push(`Vacantes/mes: ${form.vacantes_por_mes}`)
-  if (form.inbox_url) extraNotas.push(`Inbox Vambe: ${form.inbox_url}`)
-  if (extraNotas.length) fields.notas = extraNotas.join('\n')
+  if (form.rol) fields.puesto = normalizePuesto(form.rol)
+  const company = extractCompanyFromEmail(form.email)
+  if (company) fields.empresa = company
+  const notas = buildNotasFromForm(form)
+  if (notas) fields.notas = notas
+
+  // Campos que SIEMPRE se sobreescriben para mantener data limpia
+  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas'])
 
   let resultLead: Lead | null = lead
   let created = false
 
   if (lead) {
-    // Solo actualizar campos vacíos para no pisar info real del CRM
     const updates: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(fields)) {
       const existing = (lead as unknown as Record<string, unknown>)[k]
-      if (v && (existing === null || existing === undefined || existing === '')) {
+      if (NORMALIZED_FIELDS.has(k) && v) {
+        // Re-normalizar siempre
+        if (v !== existing) updates[k] = v
+      } else if (v && (existing === null || existing === undefined || existing === '')) {
         updates[k] = v
       }
     }
