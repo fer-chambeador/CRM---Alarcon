@@ -110,19 +110,37 @@ export async function GET(req: NextRequest) {
   const dry = url.searchParams.get('dry') !== 'false'
   const debug = url.searchParams.get('debug') === 'true'
   const allowSynthetic = url.searchParams.get('synthetic') === 'true'
-  const ids = idsParam ? idsParam.split(',').map(s => s.trim()).filter(Boolean) : KNOWN_MISSING_IDS
+  const auditDays = parseInt(url.searchParams.get('audit_days') || '0', 10)
+  const auditMode = auditDays > 0 || idsParam === 'auto'
 
   const supabase = createServiceClient()
 
   // Fetch recent contacts so we can resolve phone + current stage per id
-  let contactsById: Record<string, Awaited<ReturnType<typeof getContactsByDays>>[number]> = {}
+  const daysToFetch = auditMode ? Math.max(auditDays, 3) : 7
+  const contactsById: Record<string, Awaited<ReturnType<typeof getContactsByDays>>[number]> = {}
   try {
-    const contacts = await getContactsByDays({ days: 7 })
+    const contacts = await getContactsByDays({ days: daysToFetch })
     for (const c of contacts) {
       if (c.id) contactsById[c.id] = c
     }
   } catch (e) {
     return NextResponse.json({ error: `getContactsByDays failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 502 })
+  }
+
+  // Build ids list: from query, hardcoded known-missing, or auto-discover via DB diff
+  let ids: string[]
+  if (idsParam && idsParam !== 'auto') {
+    ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
+  } else if (auditMode) {
+    const allVambeIds = Object.keys(contactsById)
+    const { data: existing } = await supabase
+      .from('leads')
+      .select('vambe_contact_id')
+      .in('vambe_contact_id', allVambeIds)
+    const existingSet = new Set(((existing || []) as Array<{ vambe_contact_id: string | null }>).map(r => r.vambe_contact_id).filter(Boolean) as string[])
+    ids = allVambeIds.filter(id => !existingSet.has(id))
+  } else {
+    ids = KNOWN_MISSING_IDS
   }
 
   type ResultRow = {
