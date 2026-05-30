@@ -43,17 +43,76 @@ export function extractCompanyFromEmail(email: string | null | undefined): strin
   const domain = lower.slice(at + 1)
   if (!domain || FREE_EMAIL_DOMAINS.has(domain)) return null
 
-  // Tomar el primer segmento del dominio (gabin.com.mx → gabin)
-  const firstSegment = domain.split('.')[0]
-  if (!firstSegment) return null
+  // Tomar el primer segmento (no la TLD): "gabin.com.mx" → "gabin"
+  // pero "rh.empresa.com.mx" → "empresa" si el primer segmento es genérico
+  const segments = domain.split('.').filter(Boolean)
+  if (segments.length === 0) return null
 
-  // Limpiar: reemplazar - y _ por espacio, capitalizar cada palabra
-  return firstSegment
-    .replace(/[-_]+/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ')
+  const GENERIC_SUBDOMAINS = new Set([
+    'rh', 'recursos', 'reclutamiento', 'reclutamientos', 'hr', 'people',
+    'contacto', 'info', 'mail', 'admin', 'team', 'sales', 'ventas',
+    'soporte', 'help', 'support', 'noreply', 'no-reply',
+    'recursoshumanos',
+  ])
+
+  // Si el primer segmento es genérico y hay otro segmento usable, tomar el siguiente
+  let raw = segments[0]
+  if (GENERIC_SUBDOMAINS.has(raw) && segments.length > 1) {
+    raw = segments[1]
+  }
+
+  return formatCompanyName(raw)
+}
+
+/**
+ * Formatea un slug de dominio a un nombre de empresa legible.
+ *  "capital-media"   → "Capital Media"
+ *  "capitalmedia"    → "Capital Media"   (split por palabras conocidas)
+ *  "grupo_vallemex"  → "Grupo Vallemex"
+ *  "delilife"        → "Delilife"        (no se puede splitear, pero igual capital)
+ */
+export function formatCompanyName(raw: string): string {
+  if (!raw) return ''
+  // Primero: split por separadores explícitos
+  let parts = raw.replace(/[-_+\.]+/g, ' ').split(/\s+/).filter(Boolean)
+
+  // Para cada parte, intentar split por palabras conocidas si está pegado
+  parts = parts.flatMap(p => splitConcatenatedWords(p))
+
+  return parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
+/**
+ * Intenta separar palabras pegadas como "capitalmedia" → ["capital", "media"].
+ * Usa una lista pequeña de palabras frecuentes en nombres corporativos.
+ * Si no encuentra splits razonables, devuelve la palabra original.
+ */
+function splitConcatenatedWords(word: string): string[] {
+  if (word.length < 8) return [word]    // muy corto para splitear
+
+  // Palabras frecuentes en nombres de empresa MX
+  const COMMON_WORDS = [
+    'grupo', 'media', 'capital', 'consult', 'servicios', 'soluciones',
+    'global', 'mexico', 'tech', 'tecnolog', 'industrial', 'comercial',
+    'corp', 'sistemas', 'logistic', 'transport', 'security', 'health',
+    'seguros', 'foods', 'distrib', 'inmobil', 'plaza', 'centro',
+    'farma', 'medic', 'auto', 'motors', 'express', 'rapid', 'fast',
+    'super', 'mega', 'mini', 'plus', 'pro', 'next', 'best', 'first',
+    'rrhh', 'staff', 'team', 'human', 'people',
+  ]
+
+  // Buscar la primera palabra común que aparezca como prefijo o sufijo
+  const lower = word.toLowerCase()
+  for (const w of COMMON_WORDS) {
+    if (lower.startsWith(w) && lower.length > w.length + 2) {
+      return [w, lower.slice(w.length)]
+    }
+    if (lower.endsWith(w) && lower.length > w.length + 2) {
+      return [lower.slice(0, lower.length - w.length), w]
+    }
+  }
+
+  return [word]
 }
 
 // ─── Puesto / rol del lead (situación actual) ──────────────────────────
@@ -129,7 +188,10 @@ const VACANTE_RULES: Array<{ label: string; patterns: RegExp[] }> = [
 
   // ── Almacén y operación industrial
   { label: 'Almacenista', patterns: [/almacenist/, /\balmac[eé]n\b/, /bodeguer/, /montacarguist/, /\bsurtidor/, /cargador/, /estibador/, /descargador/] },
-  { label: 'Operador Industrial', patterns: [/operador industrial/, /operario industrial/, /operador de m[áa]quin/, /\bobrero/] },
+  { label: 'Operador Industrial', patterns: [
+    /operador industrial/, /operario industrial/, /operador de m[áa]quin/, /\bobrero/,
+    /operador general/, /\boperador\b/,           // catch-all para "operador X" no específico
+  ] },
 
   // ── Mantenimiento (consolida Mecánico)
   { label: 'Mantenimiento', patterns: [
@@ -157,10 +219,11 @@ const VACANTE_RULES: Array<{ label: string; patterns: RegExp[] }> = [
   // ── Comercial (Promotor también va acá)
   { label: 'Ventas', patterns: [
     /\bventas?\b/, /\bvendedor/, /\bvendedora/, /comercial/,
-    /\basesor\b/, /asesor\s+(comercial|de venta|de seguros|de seguro|inmobiliari)/,
+    /\basesor\b/, /asesores?\b/, /asesor[ae]s?\s+(comercial|de venta|de seguros?|inmobiliari)/,
     /ejecutivo de venta/, /ejecutivos comerciales/,
     /preventist/, /cambaceo/,
     /\bpromot/, /\bimpulsador/, /\bdemostrador/,   // ← Promotor merged (poco volumen)
+    /\bseguros?\b/,                                 // "Asesores de seguros" → Ventas
   ] },
 
   // ── Gerente / Director (catch-all de liderazgo)
