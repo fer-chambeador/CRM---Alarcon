@@ -398,13 +398,33 @@ async function handleTicketClosed(supabase: Supabase, aiContactId: string | unde
 
 /**
  * Mapeo de stages de Vambe → status del CRM.
- * Configurable via env var VAMBE_STAGE_MAP en formato JSON:
- *   '{"stage-uuid-1":"contactado","stage-uuid-2":"presentacion_enviada"}'
+ *
+ * Default hardcoded (los UUIDs reales del pipeline en uso). Si querés overrideartlo
+ * a nivel ambiente, configurá `VAMBE_STAGE_MAP` con JSON; mergea encima del default.
+ *
+ * Stages no mapeados (Lanzamiento, Asistencia Humana, Contactados WhatsApp) NO se
+ * convierten a status del CRM — solo se guarda el `vambe_stage_id` y se mantiene
+ * el status actual del lead. Esto es intencional: esos stages son cold outreach
+ * o escalaciones, no avances del funnel.
  */
+const DEFAULT_STAGE_MAP: Record<string, Lead['status']> = {
+  '96c42cda-2828-45db-973c-3bc63a8141fd': 'nuevo',              // Interesado
+  '971fe009-72d1-44fb-932b-aa94adcec4db': 'llamada_agendada',   // Agendados Consultoría
+  '2fc44415-960f-4dbd-b65b-1500636fc41a': 'llamada_agendada',   // Confirmados
+  'cd0ab574-c844-4346-bea3-4ddd084fcb92': 'llamada_agendada',   // Llamadas
+  'c86a7911-ef9d-4f6d-8c90-3e9a9a4d6b50': 'convertido',         // Ganados
+  '9a43e657-b5cc-4baf-a503-1e0b37b9b366': 'descartado',         // Perdidos
+}
+
 function getStageMap(): Record<string, Lead['status']> {
   const raw = process.env.VAMBE_STAGE_MAP
-  if (!raw) return {}
-  try { return JSON.parse(raw) } catch { return {} }
+  if (!raw) return DEFAULT_STAGE_MAP
+  try {
+    const override = JSON.parse(raw) as Record<string, Lead['status']>
+    return { ...DEFAULT_STAGE_MAP, ...override }
+  } catch {
+    return DEFAULT_STAGE_MAP
+  }
 }
 
 /** Keys que probablemente contienen una fecha de llamada/cita. */
