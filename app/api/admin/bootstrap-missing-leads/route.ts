@@ -208,18 +208,23 @@ export async function GET(req: NextRequest) {
     // Lookup existing lead by 3 keys: vambe_contact_id, email, phone last10
     type ExistingLead = { id: string; nombre?: string | null; email?: string | null; status?: string; vambe_contact_id?: string | null; vambe_stage_id?: string | null }
     let existing: ExistingLead | null = null
+    let existingFoundBy: string | null = null
+    let lookupErrors: string[] = []
     {
       const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').eq('vambe_contact_id', contactId).maybeSingle()
-      if (r.data) existing = r.data as ExistingLead
+      if (r.error) lookupErrors.push(`by_vambe_id: ${r.error.message}`)
+      if (r.data) { existing = r.data as ExistingLead; existingFoundBy = 'vambe_contact_id' }
     }
     if (!existing && email && !email.endsWith('@chambas.placeholder')) {
-      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').ilike('email', email).maybeSingle()
-      if (r.data) existing = r.data as ExistingLead
+      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').ilike('email', email).limit(1)
+      if (r.error) lookupErrors.push(`by_email: ${r.error.message}`)
+      if (r.data && r.data.length > 0) { existing = r.data[0] as ExistingLead; existingFoundBy = 'email' }
     }
     if (!existing && telefono) {
       const last10 = telefono.replace(/\D/g, '').slice(-10)
-      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').like('telefono', `%${last10}`).maybeSingle()
-      if (r.data) existing = r.data as ExistingLead
+      const r = await supabase.from('leads').select('id, nombre, email, status, vambe_contact_id, vambe_stage_id').like('telefono', `%${last10}`).limit(1)
+      if (r.error) lookupErrors.push(`by_phone: ${r.error.message}`)
+      if (r.data && r.data.length > 0) { existing = r.data[0] as ExistingLead; existingFoundBy = 'phone' }
     }
 
     if (existing) {
@@ -238,7 +243,19 @@ export async function GET(req: NextRequest) {
         email: existing.email,
         status: existing.status,
         stage_id: stageId,
-        reason: `ya existe (lead.id=${existing.id}, linked_now=${Object.keys(updates).length > 0})`,
+        reason: `ya existe (lead.id=${existing.id}, found_by=${existingFoundBy}, linked_now=${Object.keys(updates).length > 0}${lookupErrors.length ? `, lookup_errors=${lookupErrors.join(';')}` : ''})`,
+      })
+      continue
+    }
+    // If we got here with email match should've happened but didn't, surface lookup errors
+    if (lookupErrors.length > 0 && debug) {
+      results.push({
+        contact_id: contactId,
+        action: 'error',
+        nombre,
+        email,
+        telefono,
+        reason: `lookup_errors: ${lookupErrors.join('; ')}`,
       })
       continue
     }
