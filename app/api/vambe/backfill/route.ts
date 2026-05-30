@@ -8,6 +8,7 @@ import {
   type FormFields,
   type VambeContact,
 } from '@/lib/vambe'
+import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60   // Vercel free: 60s. Si tenés muchos, ajustar pageSize.
@@ -181,28 +182,31 @@ async function processContact(
     // si falla messages, seguimos con datos del contact
   }
 
-  // Construir set de campos a partir del form + contact metadata
+  // Construir set de campos a partir del form + contact metadata (normalizado)
   const fields: Record<string, unknown> = {
     canal_adquisicion: 'Vambe',
     vambe_contact_id: aiContactId,
     vambe_stage_id: stageId,
   }
-  // Del form si tenemos
   if (form?.nombre) fields.nombre = form.nombre
   if (form?.email) fields.email = form.email
   if (form?.telefono) fields.telefono = form.telefono
-  if (form?.vacante) fields.vacante = form.vacante
+  if (form?.vacante) fields.vacante = normalizeVacante(form.vacante)
   if (form?.presupuesto) fields.presupuesto = form.presupuesto
-  if (form?.rol) fields.puesto = form.rol
+  if (form?.rol) fields.puesto = normalizePuesto(form.rol)
   // Fallback al contact metadata
   if (!fields.nombre && contact.name) fields.nombre = contact.name
   if (!fields.email && contact.email) fields.email = contact.email.toLowerCase()
   if (!fields.telefono && contact.phone) fields.telefono = contact.phone
 
-  const notas: string[] = []
-  if (form?.vacantes_por_mes) notas.push(`Vacantes/mes: ${form.vacantes_por_mes}`)
-  if (form?.inbox_url) notas.push(`Inbox Vambe: ${form.inbox_url}`)
-  if (notas.length) fields.notas = notas.join('\n')
+  // Empresa derivada del dominio del email si es corporativo
+  const emailForCompany = (fields.email || '') as string
+  const company = extractCompanyFromEmail(emailForCompany)
+  if (company) fields.empresa = company
+
+  // Notas con vacantes/mes + situación cruda + inbox_url
+  const notas = buildNotasFromForm(form)
+  if (notas) fields.notas = notas
 
   // 2) Buscar lead existente
   let lead: Lead | null = null
@@ -221,12 +225,17 @@ async function processContact(
   }
 
   // 3) Crear o actualizar
+  // Campos normalizados se sobreescriben siempre (vacante, puesto, notas).
+  // Otros campos solo se rellenan si están vacíos (no pisar info real del CRM).
+  const NORMALIZED_FIELDS = new Set(['vacante', 'puesto', 'notas'])
+
   if (lead) {
     const updates: Record<string, unknown> = {}
-    // Solo llenar campos vacíos (no pisar info real del CRM)
     for (const [k, v] of Object.entries(fields)) {
       const existing = (lead as unknown as Record<string, unknown>)[k]
-      if (v && (existing === null || existing === undefined || existing === '')) {
+      if (NORMALIZED_FIELDS.has(k) && v) {
+        if (v !== existing) updates[k] = v
+      } else if (v && (existing === null || existing === undefined || existing === '')) {
         updates[k] = v
       }
     }
