@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { alertAtencionHumanaVambe } from '@/lib/slackAlertVambe'
+import { getSetting } from '@/lib/systemSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,10 +46,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     lastMessage: t.last_message,
   })
 
+  const dbWebhook = await getSetting(supabase, 'slack_alertas_vambe_webhook')
+  let source = 'none'
+  if (process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL) source = 'env:SLACK_ALERTAS_VAMBE_WEBHOOK_URL'
+  else if (dbWebhook) source = 'db:system_settings.slack_alertas_vambe_webhook'
+  else if (process.env.SLACK_ALERT_WEBHOOK_URL) source = 'env:SLACK_ALERT_WEBHOOK_URL (fallback)'
+
   return NextResponse.json({
     ok: result.ok,
     error: result.error || null,
-    has_webhook_url: !!(process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL || process.env.SLACK_ALERT_WEBHOOK_URL),
-    webhook_var_used: process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL ? 'SLACK_ALERTAS_VAMBE_WEBHOOK_URL' : 'SLACK_ALERT_WEBHOOK_URL (fallback)',
+    webhook_source: source,
+    has_webhook: source !== 'none',
   })
 }
