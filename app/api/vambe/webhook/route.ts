@@ -5,6 +5,7 @@ import { parseFormMessage, getMessages, type VambeWebhookEvent, type FormFields 
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
+import { alertAtencionHumanaVambe } from '@/lib/slackAlertVambe'
 
 // Stage UUIDs especiales para disparar alertas y triggers de negocio.
 // Si Vambe cambia los UUIDs, actualizar acá (o moverlo a env vars).
@@ -805,14 +806,68 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 /** Dispara alertas a Slack según la stage que llegó. No-op si no hay webhook configurado. */
 async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean) {
   if (newStageId === STAGE_ATENCION_HUMANA) {
-    await alertAtencionHumana({
-      leadId: lead.id,
-      nombre: lead.nombre,
-      email: lead.email,
-      telefono: lead.telefono,
-      vacante: lead.vacante,
-      empresa: lead.empresa,
-      inboxUrl: null,
+    // Crear ticket de atención humana + alerta a #alertas-vambe con resumen
+    // del último mensaje y botones Atendido/Dismiss.
+    const supabase = createServiceClient()
+
+    // Buscar último mensaje inbound del cliente (lo que provocó la escalación)
+    const { data: lastMsg } = await supabase
+      .from('lead_actividad')
+      .select('metadata, descripcion')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'vambe_message')
+      .like('descripcion', '📥%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lastMessage = lastMsg
+      ? (((lastMsg as { metadata?: { text?: string; last_text?: string } }).metadata?.text)
+        || ((lastMsg as { metadata?: { text?: string; last_text?: string } }).metadata?.last_text)
+        || null)
+      : null
+
+    // Idempotente: si ya hay un ticket pending para este lead, no creamos otro
+    const { data: existingTicket } = await supabase
+      .from('vambe_atencion_tickets')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('status', 'pending')
+      .maybeSingle()
+    if (existingTicket) {
+      console.log('Asistencia Humana: ticket pending ya existe para lead', lead.id, '— skip Slack')
+      return
+    }
+
+    // Crear ticket
+    const { data: ticket, error: ticketErr } = await supabase
+      .from('vambe_atencion_tickets')
+      .insert({
+        lead_id: lead.id,
+        status: 'pending',
+        last_message: lastMessage,
+        vambe_stage_id: newStageId,
+      })
+      .select('id')
+      .single()
+    if (ticketErr || !ticket) {
+      console.error('Error creando atencion ticket:', ticketErr)
+      // Fallback al alert legacy si no se puede crear ticket
+      await alertAtencionHumana({
+        leadId: lead.id, nombre: lead.nombre, email: lead.email,
+        telefono: lead.telefono, vacante: lead.vacante, empresa: lead.empresa,
+        inboxUrl: null,
+      })
+      return
+    }
+
+    await alertAtencionHumanaVambe({
+      ticketId: (ticket as { id: string }).id,
+      lead: {
+        id: lead.id, nombre: lead.nombre, email: lead.email,
+        telefono: lead.telefono, empresa: lead.empresa,
+        vacante: lead.vacante, presupuesto: lead.presupuesto,
+      },
+      lastMessage,
     })
   } else if (newStageId === STAGE_GANADOS) {
     await alertVentaCerrada({
