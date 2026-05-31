@@ -49,19 +49,51 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const event = await req.json().catch(() => null) as VambeWebhookEvent | null
-  if (!event) return NextResponse.json({ error: 'invalid payload' }, { status: 400 })
+  const rawEvent = await req.json().catch(() => null) as Record<string, unknown> | null
+  if (!rawEvent) return NextResponse.json({ error: 'invalid payload' }, { status: 400 })
+
+  // Vambe usa DOS formatos según el tipo de evento:
+  //   Formato A (mensajes): { type, aiContactId, data: {...} }
+  //   Formato B (stage/ticket): { topic, event_type, entity_name, entity_data: {...}, previous_entity_data }
+  // Normalizamos ambos a un shape único para el handler.
+  const entityData = (rawEvent.entity_data || rawEvent.entityData || null) as Record<string, unknown> | null
+  const eventType = String(
+    rawEvent.type
+    || rawEvent.event
+    || rawEvent.topic                          // formato B
+    || (entityData && rawEvent.event_type ? `${rawEvent.event_type}.${rawEvent.entity_name || 'unknown'}` : rawEvent.event_type)
+    || ''
+  )
+  const aiContactId = String(
+    rawEvent.aiContactId
+    || rawEvent.ai_contact_id
+    || entityData?.ai_contact_id
+    || entityData?.aiContactId
+    || ''
+  ) || undefined
+
+  // Para handlers que esperan `data`, mergeamos data + entity_data en un solo objeto
+  const data = {
+    ...(rawEvent.data as Record<string, unknown> || {}),
+    ...(entityData || {}),
+    previous_entity_data: rawEvent.previous_entity_data,
+  } as Record<string, unknown>
+
+  const event: VambeWebhookEvent = {
+    type: eventType,
+    aiContactId,
+    data,
+    ...rawEvent,
+  }
 
   const supabase = createServiceClient()
-  const eventType = event.type || event.event || ''
 
-  // PRIMERO: log de cada evento entrante (para diagnóstico). Si la tabla no existe
-  // todavía, falla silenciosa.
+  // PRIMERO: log de cada evento entrante (para diagnóstico).
   try {
     await supabase.from('vambe_webhook_log').insert({
       event_type: eventType || '(empty)',
-      ai_contact_id: event.aiContactId || null,
-      payload: event as unknown as Record<string, unknown>,
+      ai_contact_id: aiContactId || null,
+      payload: rawEvent,
     })
   } catch { /* tabla no migró aún — ignore */ }
 
@@ -564,8 +596,24 @@ function shouldAdvanceStatus(current: Lead['status'], target: Lead['status']): b
 }
 
 async function handleStageChanged(supabase: Supabase, aiContactId: string | undefined, data: Record<string, unknown>) {
-  const newStageId = (data.new_stage_id || data.newStageId || data.stageId || '') as string
-  const previousStageId = (data.previous_stage_id || data.previousStageId || '') as string
+  // Formato A (legacy): data.new_stage_id / data.newStageId / data.stageId
+  // Formato B (TicketStageHistoryEntity): data.stage.id / data.stage_id
+  const stageObj = (data.stage || null) as { id?: string; name?: string } | null
+  const newStageId = ((stageObj?.id)
+    || data.stage_id
+    || data.new_stage_id
+    || data.newStageId
+    || data.stageId
+    || '') as string
+
+  const prevStageObj = (data.previous_stage || null) as { id?: string; name?: string } | null
+  const prevEntityData = (data.previous_entity_data || null) as Record<string, unknown> | null
+  const previousStageId = ((prevStageObj?.id)
+    || data.previous_stage_id
+    || data.previousStageId
+    || (prevEntityData?.stage_id as string)
+    || ((prevEntityData?.stage as { id?: string } | null)?.id)
+    || '') as string
 
   const map = getStageMap()
   const mappedStatus = map[newStageId]
