@@ -276,16 +276,19 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
     </Link>
   )
   const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
+  const onSettings = active === 'settings' || active === 'templates'
   return (
     <nav className={styles.sidebarNav}>
       {link('/leads', 'leads', 'Leads', '📋')}
+      {link('/aprobaciones', 'aprobaciones', 'Aprobaciones', '✋')}
       {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
       {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
       {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
       {link('/analytics', 'analytics', 'Analítica', '📊')}
       {link('/asistente', 'asistente', 'Asistente', '🧠')}
-      {link('/templates', 'templates', 'Templates', '✉️')}
       {link('/settings', 'settings', 'Settings', '⚙️')}
+      {onSettings && subLink('/settings', 'settings', 'General')}
+      {onSettings && subLink('/templates', 'templates', 'Templates')}
     </nav>
   )
 }
