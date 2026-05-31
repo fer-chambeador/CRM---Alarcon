@@ -385,13 +385,33 @@ export type ImportResult = {
 
 type LeadMatch = { id: string; email: string; nombre: string | null; telefono: string | null; status: string; llamada_at: string | null; google_calendar_event_id: string | null }
 
+/**
+ * Decide si un evento del Calendar es relevante para importar al CRM.
+ * Filtro conservador para evitar que reuniones personales / 1:1s caigan al CRM.
+ *
+ * Considera relevante un evento si:
+ *  - El título contiene "Llamada" o "Vendedor" o "Chambas" (case insensitive)
+ *  - O la descripción tiene "Booked by" (formato del Google Appointment Scheduler / onboarding)
+ *  - O la descripción menciona "Chambas Ay"
+ *  - O fue creado por el Appointment Scheduler (organizer típico viene de calendars del scheduler)
+ */
+export function isRelevantCalendarEvent(ev: GCalEvent): boolean {
+  if (ev.status === 'cancelled') return false
+  if (!ev.start?.dateTime) return false  // skip all-day events
+  const title = (ev.summary || '').toLowerCase()
+  const desc = (ev.description || '').toLowerCase()
+  if (title.includes('llamada') || title.includes('vendedor') || title.includes('chambas')) return true
+  if (desc.includes('booked by') || desc.includes('chambas ay') || desc.includes('chambas')) return true
+  return false
+}
+
 export async function importEventsToLeads(supabase: Supabase): Promise<ImportResult> {
   const auth = await getValidAccessToken(supabase)
   if (!auth) throw new Error('Google Calendar no conectado')
 
   const events = await listUpcomingEvents(supabase, 30)
-  // Solo eventos confirmados con dateTime (no all-day)
-  const valid = events.filter(e => e.status !== 'cancelled' && (e.start?.dateTime))
+  // Filtro relevancia: solo eventos que parecen llamadas comerciales / onboarding
+  const valid = events.filter(isRelevantCalendarEvent)
 
   const result: ImportResult = {
     events_scanned: valid.length,
