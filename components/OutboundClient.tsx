@@ -44,6 +44,27 @@ type ApiResponse = {
 
 type Tab = 'mensajes' | 'llamadas'
 
+type ColKey = 'lead' | 'vacante' | 'telefono' | 'score' | 'edad' | 'acciones'
+const DEFAULT_COL_ORDER: ColKey[] = ['lead', 'vacante', 'telefono', 'score', 'edad', 'acciones']
+const COL_STORAGE_KEY = 'outbound_col_order_v1'
+
+function loadColOrder(): ColKey[] {
+  if (typeof window === 'undefined') return DEFAULT_COL_ORDER
+  try {
+    const raw = window.localStorage.getItem(COL_STORAGE_KEY)
+    if (!raw) return DEFAULT_COL_ORDER
+    const parsed = JSON.parse(raw) as string[]
+    const valid = parsed.filter((k): k is ColKey => DEFAULT_COL_ORDER.includes(k as ColKey))
+    // Asegurar que todas las columnas estén (por si agregamos una nueva en el futuro)
+    const missing = DEFAULT_COL_ORDER.filter(k => !valid.includes(k))
+    return [...valid, ...missing]
+  } catch { return DEFAULT_COL_ORDER }
+}
+function saveColOrder(order: ColKey[]) {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(order)) } catch {}
+}
+
 function fmtRelative(iso: string | null): string {
   if (!iso) return '—'
   const ms = Date.now() - new Date(iso).getTime()
@@ -77,6 +98,20 @@ export default function OutboundClient() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('mensajes')
   const [busy, setBusy] = useState<Record<string, 'approve' | 'reject' | null>>({})
+  const [colOrder, setColOrder] = useState<ColKey[]>(DEFAULT_COL_ORDER)
+  useEffect(() => { setColOrder(loadColOrder()) }, [])
+  const moveCol = (key: ColKey, dir: -1 | 1) => {
+    setColOrder(prev => {
+      const idx = prev.indexOf(key)
+      if (idx < 0) return prev
+      const target = idx + dir
+      if (target < 0 || target >= prev.length) return prev
+      const next = [...prev]
+      ;[next[idx], next[target]] = [next[target], next[idx]]
+      saveColOrder(next)
+      return next
+    })
+  }
 
   const load = useCallback(async () => {
     try {
@@ -174,64 +209,22 @@ export default function OutboundClient() {
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th>Lead</th>
-                    <th>Vacante / Empresa</th>
-                    <th>Teléfono</th>
-                    <th style={{ textAlign: 'center' }}>Score</th>
-                    <th>{tab === 'mensajes' ? 'Fecha registro' : 'Cuándo'}</th>
-                    <th style={{ width: 280 }}>Acciones</th>
+                    {colOrder.map((key, idx) => (
+                      <ColHeader key={key} colKey={key} idx={idx} total={colOrder.length}
+                        tab={tab} onMove={moveCol} />
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map(a => (
                     <tr key={a.id} style={{ cursor: a.leads ? 'pointer' : 'default' }}
                       onClick={() => a.leads && router.push(`/leads/${a.leads.id}`)}>
-                      <td>
-                        <div className={styles.leadName}>{a.leads?.nombre || a.leads?.email || '(sin nombre)'}</div>
-                        {a.leads?.email && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.email}</div>}
-                      </td>
-                      <td>
-                        {a.leads?.vacante && <div style={{ fontSize: 13 }}>{a.leads.vacante}</div>}
-                        {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
-                      </td>
-                      <td className={styles.mono}>{a.leads?.telefono || '—'}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                          padding: '4px 10px', borderRadius: 999, minWidth: 56,
-                          fontSize: 11, fontWeight: 600,
-                          background: scoreBg(a.score_snapshot),
-                          color: scoreFg(a.score_snapshot),
-                          border: `1px solid ${scoreBorder(a.score_snapshot)}`,
-                        }}>{a.score_snapshot ?? '—'} pts</span>
-                      </td>
-                      <td className={styles.muted} style={{ fontSize: 12 }}>
-                        {tab === 'mensajes'
-                          ? <>
-                            <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
-                            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtRelative(a.leads?.created_at || null)}</div>
-                          </>
-                          : <>
-                            <div style={{ color: '#b8a3ff', fontWeight: 600 }}>{fmtDate(a.scheduled_at)}</div>
-                            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtFuture(a.scheduled_at)}</div>
-                          </>}
-                      </td>
-                      <td onClick={e => e.stopPropagation()}>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button className={styles.primaryBtn}
-                            style={{ padding: '6px 12px', fontSize: 12, boxShadow: 'none' }}
-                            disabled={!!busy[a.id]}
-                            onClick={() => approve(a.id)}>
-                            {busy[a.id] === 'approve' ? '⏳…' : tab === 'mensajes' ? '📨 Mandar' : '📞 Dapta'}
-                          </button>
-                          <button className={styles.btnSecondary}
-                            style={{ padding: '6px 12px', fontSize: 12 }}
-                            disabled={!!busy[a.id]}
-                            onClick={() => reject(a.id)}>
-                            {busy[a.id] === 'reject' ? '⏳…' : '✋ Manual'}
-                          </button>
-                        </div>
-                      </td>
+                      {colOrder.map(key => (
+                        <Cell key={key} colKey={key} apro={a} tab={tab}
+                          busy={busy[a.id]}
+                          onApprove={() => approve(a.id)}
+                          onReject={() => reject(a.id)} />
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -281,4 +274,131 @@ function scoreBorder(s: number | null): string {
   if (s >= 60) return 'rgba(255,90,90,0.35)'
   if (s >= 30) return 'rgba(255,186,61,0.35)'
   return 'rgba(78,168,245,0.35)'
+}
+
+// ─── Column headers + cells (reordenables con flechas) ──────────────────
+const COL_LABELS: Record<ColKey, string> = {
+  lead: 'Lead',
+  vacante: 'Vacante / Empresa',
+  telefono: 'Teléfono',
+  score: 'Score',
+  edad: 'Fecha registro',
+  acciones: 'Acciones',
+}
+
+function ColHeader({ colKey, idx, total, tab, onMove }: {
+  colKey: ColKey
+  idx: number
+  total: number
+  tab: Tab
+  onMove: (k: ColKey, dir: -1 | 1) => void
+}) {
+  const isFirst = idx === 0
+  const isLast = idx === total - 1
+  const label = colKey === 'edad' && tab === 'llamadas' ? 'Cuándo' : COL_LABELS[colKey]
+  const align = colKey === 'score' ? 'center' : 'left'
+  const width = colKey === 'acciones' ? 280 : colKey === 'score' ? 90 : undefined
+  return (
+    <th style={{ textAlign: align, width }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <button
+          disabled={isFirst}
+          onClick={(e) => { e.stopPropagation(); onMove(colKey, -1) }}
+          title="Mover columna a la izquierda"
+          style={{
+            background: 'transparent', border: 'none', color: 'var(--text3)',
+            cursor: isFirst ? 'default' : 'pointer', padding: 0,
+            fontSize: 11, opacity: isFirst ? 0.2 : 0.7,
+          }}>◀</button>
+        <span>{label}</span>
+        <button
+          disabled={isLast}
+          onClick={(e) => { e.stopPropagation(); onMove(colKey, 1) }}
+          title="Mover columna a la derecha"
+          style={{
+            background: 'transparent', border: 'none', color: 'var(--text3)',
+            cursor: isLast ? 'default' : 'pointer', padding: 0,
+            fontSize: 11, opacity: isLast ? 0.2 : 0.7,
+          }}>▶</button>
+      </div>
+    </th>
+  )
+}
+
+function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
+  colKey: ColKey
+  apro: Aprobacion
+  tab: Tab
+  busy: 'approve' | 'reject' | null | undefined
+  onApprove: () => void
+  onReject: () => void
+}) {
+  const a = apro
+  if (colKey === 'lead') {
+    return (
+      <td>
+        <div className={styles.leadName}>{a.leads?.nombre || a.leads?.email || '(sin nombre)'}</div>
+        {a.leads?.email && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.email}</div>}
+      </td>
+    )
+  }
+  if (colKey === 'vacante') {
+    return (
+      <td>
+        {a.leads?.vacante && <div style={{ fontSize: 13 }}>{a.leads.vacante}</div>}
+        {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
+      </td>
+    )
+  }
+  if (colKey === 'telefono') {
+    return <td className={styles.mono}>{a.leads?.telefono || '—'}</td>
+  }
+  if (colKey === 'score') {
+    return (
+      <td style={{ textAlign: 'center' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          padding: '4px 10px', borderRadius: 999, minWidth: 56,
+          fontSize: 11, fontWeight: 600,
+          background: scoreBg(a.score_snapshot),
+          color: scoreFg(a.score_snapshot),
+          border: `1px solid ${scoreBorder(a.score_snapshot)}`,
+        }}>{a.score_snapshot ?? '—'} pts</span>
+      </td>
+    )
+  }
+  if (colKey === 'edad') {
+    return (
+      <td className={styles.muted} style={{ fontSize: 12 }}>
+        {tab === 'mensajes'
+          ? <>
+            <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
+            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtRelative(a.leads?.created_at || null)}</div>
+          </>
+          : <>
+            <div style={{ color: '#b8a3ff', fontWeight: 600 }}>{fmtDate(a.scheduled_at)}</div>
+            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtFuture(a.scheduled_at)}</div>
+          </>}
+      </td>
+    )
+  }
+  // acciones
+  return (
+    <td onClick={e => e.stopPropagation()}>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button className={styles.primaryBtn}
+          style={{ padding: '6px 12px', fontSize: 12, boxShadow: 'none' }}
+          disabled={!!busy}
+          onClick={onApprove}>
+          {busy === 'approve' ? '⏳…' : tab === 'mensajes' ? '📨 Mandar' : '📞 Dapta'}
+        </button>
+        <button className={styles.btnSecondary}
+          style={{ padding: '6px 12px', fontSize: 12 }}
+          disabled={!!busy}
+          onClick={onReject}>
+          {busy === 'reject' ? '⏳…' : '✋ Manual'}
+        </button>
+      </div>
+    </td>
+  )
 }
