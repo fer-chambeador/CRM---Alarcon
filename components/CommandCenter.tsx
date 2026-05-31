@@ -277,16 +277,68 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   )
   const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   return (
-    <nav className={styles.sidebarNav}>
-      {link('/leads', 'leads', 'Leads', '📋')}
-      {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
-      {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
-      {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
-      {link('/analytics', 'analytics', 'Analítica', '📊')}
-      {link('/asistente', 'asistente', 'Asistente', '🧠')}
-      {link('/templates', 'templates', 'Templates', '✉️')}
-      {link('/settings', 'settings', 'Settings', '⚙️')}
-    </nav>
+    <>
+      <nav className={styles.sidebarNav}>
+        {link('/leads', 'leads', 'Leads', '📋')}
+        {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
+        {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
+        {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
+        {link('/analytics', 'analytics', 'Analítica', '📊')}
+        {link('/asistente', 'asistente', 'Asistente', '🧠')}
+        {link('/templates', 'templates', 'Templates', '✉️')}
+        {link('/settings', 'settings', 'Settings', '⚙️')}
+      </nav>
+      <MobileTabBar active={active} />
+    </>
+  )
+}
+
+// ─── Mobile bottom tab bar ───────────────────────────────────────────────────
+const MOBILE_TABS = [
+  { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
+  { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
+  { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
+  { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
+  { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
+] as const
+
+export function MobileTabBar({ active }: { active: string }) {
+  const [moreOpen, setMoreOpen] = useState(false)
+  // recurrentes sub-page should keep the Recurrentes tab lit
+  const norm = active === 'recurrentes-analitica' ? 'recurrentes' : active
+  const moreActive = norm === 'templates' || norm === 'settings'
+  return (
+    <>
+      {moreOpen && (
+        <div className={styles.mobileSheetOverlay} onClick={() => setMoreOpen(false)}>
+          <div className={styles.mobileSheet} onClick={e => e.stopPropagation()}>
+            <div className={styles.mobileSheetHandle} />
+            <Link href="/templates" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'templates' && styles.mobileSheetItemActive)}>
+              ✉️ Templates
+            </Link>
+            <Link href="/settings" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'settings' && styles.mobileSheetItemActive)}>
+              ⚙️ Settings
+            </Link>
+          </div>
+        </div>
+      )}
+      <nav className={styles.mobileTabBar}>
+        {MOBILE_TABS.map(t => (
+          <Link key={t.key} href={t.href}
+            className={clsx(styles.mobileTab, norm === t.key && styles.mobileTabActive)}>
+            <span className={styles.mobileTabIcon}>{t.icon}</span>
+            <span className={styles.mobileTabLabel}>{t.label}</span>
+          </Link>
+        ))}
+        <button type="button" onClick={() => setMoreOpen(v => !v)}
+          className={clsx(styles.mobileTab, moreActive && styles.mobileTabActive)}>
+          <span className={styles.mobileTabIcon}>•••</span>
+          <span className={styles.mobileTabLabel}>Más</span>
+        </button>
+      </nav>
+    </>
   )
 }
 
