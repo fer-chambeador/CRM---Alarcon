@@ -51,6 +51,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!a.leads) {
     return NextResponse.json({ error: 'lead asociado no encontrado' }, { status: 404 })
   }
+
+  // LOCK OPTIMISTA: marcar como 'approved' atomically con condición
+  // `status='pending'` en el WHERE. Si dos requests llegan en paralelo,
+  // solo el primero gana el UPDATE (rows=1); el segundo recibe rows=0
+  // y aborta sin disparar Vambe/Dapta de nuevo.
+  const { data: lockRows } = await supabase
+    .from('aprobaciones')
+    .update({
+      status: 'approved',
+      decided_at: new Date().toISOString(),
+    })
+    .eq('id', a.id)
+    .eq('status', 'pending')
+    .select('id')
+  if (!lockRows || lockRows.length === 0) {
+    return NextResponse.json({ ok: false, error: 'aprobación ya fue procesada (race condition)' }, { status: 409 })
+  }
+
   const lead = a.leads
   if (!lead.telefono) {
     await supabase.from('aprobaciones').update({

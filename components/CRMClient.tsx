@@ -686,11 +686,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerrado)}</div>
             <div className={styles.kpiHeroSub}>
               {stats.pipelineCerradoCount} deals · {goalLabel(dateRange)} {fmtMoney(periodGoal)}
-              {' '}({Math.round(Math.min(1, stats.pipelineCerrado / periodGoal) * 100)}%)
+              {' '}({periodGoal > 0 ? Math.round(Math.min(1, stats.pipelineCerrado / periodGoal) * 100) : 0}%)
             </div>
             <div className={styles.kpiHeroBar}>
               <div className={styles.kpiHeroBarFill}
-                style={{ width: `${Math.min(100, (stats.pipelineCerrado / periodGoal) * 100)}%` }} />
+                style={{ width: `${periodGoal > 0 ? Math.min(100, (stats.pipelineCerrado / periodGoal) * 100) : 0}%` }} />
             </div>
           </div>
         </div>
@@ -794,7 +794,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         : <span className={styles.empty}>No registrado</span>}
                     </td>
                     <td>
-                      {lead.veces_contactado > 0
+                      {(lead.veces_contactado || 0) > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
                         : <span className={styles.empty}>—</span>}
                     </td>

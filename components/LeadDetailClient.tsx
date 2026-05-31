@@ -46,8 +46,8 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
     let cancelled = false
     setLoading(true)
     Promise.all([
-      fetch(`/api/leads/${leadId}`).then(r => r.json()).catch(() => null),
-      fetch(`/api/leads/${leadId}/actividad`).then(r => r.json()).catch(() => []),
+      fetch(`/api/leads/${leadId}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`/api/leads/${leadId}/actividad`).then(r => r.ok ? r.json() : []).catch(() => []),
     ]).then(([l, a]) => {
       if (cancelled) return
       setLead(l && l.id ? l : null)

@@ -43,6 +43,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!tpl?.template_id) {
       return NextResponse.json({ error: 'Template Vambe no configurado. Ve a Settings.' }, { status: 500 })
     }
+    // Anti-doble-click: si ya hay un template_sent en los últimos 30s,
+    // este es probablemente un doble click. Abort para no duplicar.
+    const since = new Date(Date.now() - 30_000).toISOString()
+    const { data: recentSends } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'template_sent')
+      .gte('created_at', since)
+      .limit(1)
+    if (recentSends && recentSends.length > 0) {
+      return NextResponse.json({ ok: false, error: 'mensaje ya enviado recientemente (anti doble-click)' }, { status: 409 })
+    }
     try {
       const result = await sendTemplate({
         phone: lead.telefono,
@@ -69,6 +82,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // action === 'call'
+  // Anti-doble-click: si hay llamada dialing/queued en los últimos 60s, abort.
+  const since60 = new Date(Date.now() - 60_000).toISOString()
+  const { data: recentCalls } = await supabase
+    .from('llamadas')
+    .select('id')
+    .eq('lead_id', lead.id)
+    .in('status', ['dialing', 'queued', 'ringing', 'connected'])
+    .gte('created_at', since60)
+    .limit(1)
+  if (recentCalls && recentCalls.length > 0) {
+    return NextResponse.json({ ok: false, error: 'llamada ya disparada recientemente (anti doble-click)' }, { status: 409 })
+  }
   const tr = await triggerDaptaCall({
     lead_id: lead.id,
     to_number: lead.telefono,

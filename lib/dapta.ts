@@ -252,11 +252,13 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
   const rawStatus = c.call_status || c.status || (payload as { status?: string }).status || null
 
   // Duración: priorizar duration_ms (ms) → segundos. Si no, total_duration_seconds.
+  // Validamos >= 0 — si Dapta manda un valor negativo (raro pero posible),
+  // lo tratamos como ausente para evitar persistir basura en DB.
   let durationSeconds: number | null = null
-  if (typeof c.duration_ms === 'number') durationSeconds = Math.round(c.duration_ms / 1000)
-  else if (typeof c.total_duration_seconds === 'number') durationSeconds = Math.round(c.total_duration_seconds)
-  else if (typeof c.duration_seconds === 'number') durationSeconds = c.duration_seconds
-  else if (typeof c.duration === 'number') durationSeconds = c.duration
+  if (typeof c.duration_ms === 'number' && c.duration_ms >= 0) durationSeconds = Math.round(c.duration_ms / 1000)
+  else if (typeof c.total_duration_seconds === 'number' && c.total_duration_seconds >= 0) durationSeconds = Math.round(c.total_duration_seconds)
+  else if (typeof c.duration_seconds === 'number' && c.duration_seconds >= 0) durationSeconds = c.duration_seconds
+  else if (typeof c.duration === 'number' && c.duration >= 0) durationSeconds = c.duration
 
   // Started/Ended: epoch MS → ISO si están como number, sino usar ISO directo.
   const startedAtIso: string | null = typeof c.start_timestamp === 'number'

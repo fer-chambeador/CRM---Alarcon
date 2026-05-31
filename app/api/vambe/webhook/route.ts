@@ -187,6 +187,9 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
   for (const phone of candidatePhones) {
     // Match parcial — el sheet/CRM puede no tener prefijo +52
     const last10 = phone.slice(-10)
+    // SAFETY: si last10 < 10 dígitos, el LIKE %X% matchearía CUALQUIER lead.
+    // Mejor saltarse este número que riesgo de contaminar la BD.
+    if (last10.length < 10) continue
     const { data: byPhone } = await supabase.from('leads').select('*').like('telefono', `%${last10}`).maybeSingle()
     if (byPhone) return byPhone as Lead
   }
