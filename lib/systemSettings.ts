@@ -15,6 +15,7 @@ export type SystemSettings = {
     template_id: string
     template_name: string
   }
+  slack_alertas_vambe_webhook?: string
 }
 
 type Supabase = ReturnType<typeof createServiceClient>
