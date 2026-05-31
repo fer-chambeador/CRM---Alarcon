@@ -288,39 +288,62 @@ export async function listUpcomingEvents(supabase: Supabase, daysAhead = 30): Pr
 }
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/g
+// Acepta teléfonos mexicanos con o sin +52, con o sin espacios — 10 dígitos mínimo.
 const PHONE_RE = /(?:\+?52\s*)?(?:\d[\s-]?){10,15}\d/
 
 /**
  * Parsea la info del cliente desde el evento.
  *
- * El appointment scheduler de Google Calendar mete una sección "Booked by:"
- * en la descripción con el nombre + email + teléfono del que agendó:
+ * Soporta los 3 patrones reales que aparecen:
  *
- *   Booked by
- *   Guadalupe Pérez González
- *   luisantoniocp27@gmail.com
- *   5576725706
+ *  (A) Google Appointment Scheduler / onboarding — sección "Booked by" en description:
  *
- * También el nombre puede venir en el title como "Llamada - Vendedor (Nombre)".
+ *        Booked by
+ *        Guadalupe Pérez González
+ *        luisantoniocp27@gmail.com
+ *        5576725706
+ *
+ *  (B) Eventos de Vambe — formato del título:
+ *        "Nombre <> Llamada ChambasAI <> Nombre +5215517282187"
+ *      El nombre + teléfono viven en el título; el email del attendee a veces
+ *      no es del cliente (puede ser un email random del invite).
+ *
+ *  (C) Llamada genérica desde onboarding:
+ *        "Llamada - Vendedor (gabriela arias)"
+ *      Solo nombre en el título — sin teléfono ni email directo.
+ *
+ * Para evitar matchear con attendees random, intentamos PRIMERO el teléfono
+ * del título (cuando hay) y solo si no hay, vamos al email.
  */
 type ClientInfo = {
   email: string | null
   nombre: string | null
   telefono: string | null
 }
+
+/** Lista de emails que NO son del cliente (owner del calendar + organizer del evento). */
+function getOwnerEmails(ev: GCalEvent, ownerEmail: string | null): Set<string> {
+  const owners = new Set<string>()
+  if (ownerEmail) owners.add(ownerEmail.toLowerCase())
+  if (ev.organizer?.email) owners.add(ev.organizer.email.toLowerCase())
+  // Hardcoded fallbacks por si el OAuth quedó con google_email vacío.
+  owners.add('fer@chambas.ai')
+  owners.add('max@chambas.ai')
+  return owners
+}
+
 function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): ClientInfo {
-  const owner = (ownerEmail || '').toLowerCase()
+  const owners = getOwnerEmails(ev, ownerEmail)
   const desc = ev.description || ''
   const title = ev.summary || ''
 
-  // 1. Buscar "Booked by" section en la description
-  const bookedByMatch = desc.match(/Booked by\s*\n([^\n]+)\s*\n?([^\n]*)\s*\n?([^\n]*)/i)
   let nombre: string | null = null
   let email: string | null = null
   let telefono: string | null = null
 
+  // 1. Booked by section (Appointment Scheduler — más confiable)
+  const bookedByMatch = desc.match(/Booked by\s*\n([^\n]+)\s*\n?([^\n]*)\s*\n?([^\n]*)/i)
   if (bookedByMatch) {
-    // Las próximas 3 líneas después de "Booked by" usualmente son: nombre, email, teléfono
     const lines = [bookedByMatch[1], bookedByMatch[2], bookedByMatch[3]].filter(Boolean).map(s => s.trim())
     for (const line of lines) {
       if (!email && EMAIL_RE.test(line)) email = (line.match(EMAIL_RE) || [])[0] || null
@@ -329,41 +352,58 @@ function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): Clien
     }
   }
 
-  // 2. Nombre desde el título: "Llamada - Vendedor (NOMBRE)"
-  if (!nombre) {
-    const m = title.match(/\(([^)]+)\)\s*$/)
-    if (m) nombre = m[1].trim()
+  // 2. Teléfono del título (formato Vambe: "Nombre <> ... <> Nombre +5215...")
+  if (!telefono) {
+    const m = title.match(PHONE_RE)
+    if (m) telefono = m[0]
   }
 
-  // 3. Email del attendee (que no sea el dueño del calendar)
+  // 3. Nombre del título — múltiples patrones:
+  if (!nombre) {
+    //  3a. "Llamada - Vendedor (NOMBRE)" → captura entre paréntesis
+    const m1 = title.match(/\(([^)]+)\)\s*$/)
+    if (m1) nombre = m1[1].trim()
+    else {
+      //  3b. Vambe: "Nombre <> Llamada ChambasAI <> ..." → tomar primer segmento antes de <>
+      const m2 = title.match(/^([^<>]+?)\s*<>/)
+      if (m2) nombre = m2[1].trim()
+      else {
+        //  3c. "Llamada - Nombre 525543814663" → texto entre "Llamada -" y un teléfono
+        const m3 = title.match(/Llamada\s*[-—]\s*([^\d+]+?)(?:\s+\+?\d|$)/i)
+        if (m3) nombre = m3[1].trim()
+      }
+    }
+  }
+
+  // 4. Email del attendee — solo si NO es de un owner conocido
   if (!email) {
     for (const a of ev.attendees || []) {
-      if (a.email && a.email.toLowerCase() !== owner) {
+      if (a.email && !owners.has(a.email.toLowerCase())) {
         email = a.email
         break
       }
     }
   }
 
-  // 4. Fallback: cualquier email en title/description
+  // 5. Fallback: cualquier email en title/description (excluyendo owners)
   if (!email) {
     const text = `${title}\n${desc}`
     const matches = text.match(EMAIL_RE) || []
     for (const m of matches) {
-      if (m.toLowerCase() !== owner) { email = m; break }
+      if (!owners.has(m.toLowerCase())) { email = m; break }
     }
   }
 
-  // 5. Teléfono fallback desde description completa
+  // 6. Teléfono fallback desde description completa
   if (!telefono) {
     const m = desc.match(PHONE_RE)
-    if (m) telefono = m[0].replace(/[\s-]/g, '')
+    if (m) telefono = m[0]
   }
 
   return {
     email: email ? email.toLowerCase() : null,
     nombre,
-    telefono: telefono ? telefono.replace(/[\s-]/g, '') : null,
+    telefono: telefono ? telefono.replace(/[\s-+]/g, '') : null,
   }
 }
 
@@ -452,12 +492,17 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
     details: [],
   }
 
-  // Pre-fetch todos los leads para matching
+  // Pre-fetch todos los leads para matching por email Y por teléfono (last-10)
   const { data: allLeads } = await supabase
     .from('leads').select('id, email, nombre, telefono, status, llamada_at, google_calendar_event_id')
   const leadsByEmail = new Map<string, LeadMatch>()
+  const leadsByPhoneLast10 = new Map<string, LeadMatch>()
   for (const l of (allLeads || []) as LeadMatch[]) {
     if (l.email) leadsByEmail.set(l.email.toLowerCase(), l)
+    if (l.telefono) {
+      const last10 = l.telefono.replace(/\D/g, '').slice(-10)
+      if (last10.length === 10) leadsByPhoneLast10.set(last10, l)
+    }
   }
 
   const STAGES_TO_ADVANCE = new Set(['nuevo', 'contactado', 'no_show_llamada'])
@@ -466,8 +511,20 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
     const when = ev.start?.dateTime || ''
     const client = extractClientFromEvent(ev, auth.googleEmail)
 
-    // Si no encontramos email del cliente, no podemos hacer nada
-    if (!client.email) {
+    // Match en orden de confianza:
+    //   1. Por teléfono (last10) — el más confiable cuando viene del título Vambe.
+    //   2. Por email — cuando no hay teléfono o no matchea por teléfono.
+    let matchedLead: LeadMatch | undefined
+    if (client.telefono) {
+      const last10 = client.telefono.replace(/\D/g, '').slice(-10)
+      if (last10.length === 10) matchedLead = leadsByPhoneLast10.get(last10)
+    }
+    if (!matchedLead && client.email) {
+      matchedLead = leadsByEmail.get(client.email)
+    }
+
+    // Si no encontramos NI email NI lead por teléfono, no podemos hacer nada
+    if (!matchedLead && !client.email) {
       result.details.push({
         event_id: ev.id, title: ev.summary || '(sin título)', when,
         matched_email: null, lead_id: null, lead_name: client.nombre,
@@ -476,7 +533,8 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
       continue
     }
 
-    const matchedLead = leadsByEmail.get(client.email)
+    // Si no matcheamos por teléfono y tampoco encontramos lead por email,
+    // tendremos que crear uno nuevo abajo (rama else).
 
     if (matchedLead) {
       result.leads_matched += 1
