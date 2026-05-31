@@ -219,16 +219,49 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     await supabase.from('leads').update({ vambe_contact_id: aiContactId }).eq('id', lead.id)
   }
 
+  // Descripción super resumida — el detalle completo queda en metadata.
+  // El user pidió que se pueda leer todo super corto en la timeline.
   const desc = isInbound
-    ? `📥 Cliente: ${text.slice(0, 200)}`
-    : `📤 Vambe: ${text.slice(0, 200)}`
+    ? `📥 cliente respondió`
+    : `📨 Vambe envió mensaje`
 
-  await supabase.from('lead_actividad').insert({
-    lead_id: lead.id,
-    tipo: 'vambe_message',
-    descripcion: desc,
-    metadata: { source: 'vambe', type, ...data },
-  })
+  // Dedup: si la última actividad del mismo tipo y dirección fue hace < 3 min,
+  // NO creamos otra. Solo actualizamos su metadata con el mensaje más reciente
+  // y un contador. Así una conversación de 10 mensajes seguidos del cliente
+  // aparece como una sola entrada "📥 cliente respondió (×10)".
+  const { data: lastActivity } = await supabase
+    .from('lead_actividad')
+    .select('id, descripcion, metadata, created_at')
+    .eq('lead_id', lead.id)
+    .eq('tipo', 'vambe_message')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const THREE_MIN_MS = 3 * 60_000
+  const sameKind = lastActivity
+    && (lastActivity as { descripcion?: string }).descripcion?.startsWith(isInbound ? '📥' : '📨')
+  const recent = lastActivity
+    && Date.now() - new Date((lastActivity as { created_at: string }).created_at).getTime() < THREE_MIN_MS
+
+  if (sameKind && recent) {
+    const prevMeta = (lastActivity as { metadata: Record<string, unknown> }).metadata || {}
+    const count = ((prevMeta.count as number) || 1) + 1
+    const messages = Array.isArray(prevMeta.messages) ? prevMeta.messages : []
+    await supabase.from('lead_actividad').update({
+      descripcion: `${desc} (×${count})`,
+      metadata: { ...prevMeta, count, last_text: text.slice(0, 500), messages: [...messages, { text: text.slice(0, 500), at: new Date().toISOString() }].slice(-20), source: 'vambe' },
+    }).eq('id', (lastActivity as { id: string }).id)
+  } else {
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'vambe_message',
+      descripcion: desc,
+      // Metadata persiste para iteración del flujo Vambe — análisis de qué
+      // mensajes funcionan, en qué momento responden, etc.
+      metadata: { source: 'vambe', type, direction: isInbound ? 'inbound' : 'outbound', text: text.slice(0, 500), count: 1, raw: data },
+    })
+  }
 
   // Si era 'nuevo' y vino mensaje del cliente → 'contactado'
   if (isInbound && lead.status === 'nuevo') {

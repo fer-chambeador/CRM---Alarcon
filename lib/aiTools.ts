@@ -173,6 +173,28 @@ Después de llamar esta tool, el frontend muestra un botón "⇣ Descargar nombr
       required: ['filename', 'mime_type', 'content'],
     },
   },
+  {
+    name: 'list_leads_filtered',
+    description: `Devuelve una lista de leads que matchean los filtros, ordenados por score descendente (los hot primero). Úsalo cuando el user pregunta cosas como:
+- "¿qué leads calientes / hot debo contactar hoy?"
+- "¿qué leads warm tengo en nuevo sin contactar?"
+- "muéstrame los 10 mejores leads sin llamar"
+- "qué leads de Vambe llegaron hoy"
+
+Devuelve hasta 30 leads con nombre, empresa, teléfono, vacante, presupuesto, score, status y días desde creación. NO ejecuta acciones — solo lista para que el user decida.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        score_bucket: { type: 'string', enum: ['hot', 'warm', 'cold', 'any'], description: 'hot = score≥60 (alta calificación, manual). warm = 30-59. cold = <30. any = no filtrar.' },
+        status: { type: 'string', enum: [...STATUS_LIST, 'any'], description: 'Filtrar por status del lead. "any" para no filtrar.' },
+        canal: { type: 'string', description: 'Canal exacto (Vambe, Facebook, Calendar booking, etc) o substring' },
+        created_within_days: { type: 'number', description: 'Solo leads creados en los últimos N días' },
+        min_days_in_stage: { type: 'number', description: 'Días mínimos en el stage actual' },
+        max_days_in_stage: { type: 'number', description: 'Días máximos en el stage actual' },
+        limit: { type: 'number', description: 'Máximo de filas a devolver (default 20, máx 30)' },
+      },
+    },
+  },
 ] as const
 
 // ─── Result types ──────────────────────────────────────────────────────
@@ -445,6 +467,7 @@ export async function executeTool(name: string, input: unknown, supabase: Supaba
       case 'generate_file':           return await execGenerateFile(input as Parameters<typeof execGenerateFile>[0], supabase)
       case 'send_template_campaign':  return await execSendTemplateCampaign(input as Parameters<typeof execSendTemplateCampaign>[0], supabase)
       case 'query_campaigns':         return await execQueryCampaigns(input as Parameters<typeof execQueryCampaigns>[0], supabase)
+      case 'list_leads_filtered':     return await execListLeadsFiltered(input as Parameters<typeof execListLeadsFiltered>[0], supabase)
       default:                    return { ok: false, summary: `Tool desconocida: ${name}`, error: 'unknown_tool' }
     }
   } catch (e) {
@@ -570,5 +593,81 @@ async function execQueryCampaigns(input: QueryCampaignsInput, supabase: Supabase
     ok: true,
     summary: `${rows.length} campaña${rows.length === 1 ? '' : 's'} encontrada${rows.length === 1 ? '' : 's'}.`,
     data: { campaigns: enriched },
+  }
+}
+
+// ─── list_leads_filtered ────────────────────────────────────────────────
+// Lazy import del scoring para evitar circulars
+type ListLeadsFilteredInput = {
+  score_bucket?: 'hot' | 'warm' | 'cold' | 'any'
+  status?: Lead['status'] | 'any'
+  canal?: string
+  created_within_days?: number
+  min_days_in_stage?: number
+  max_days_in_stage?: number
+  limit?: number
+}
+
+async function execListLeadsFiltered(input: ListLeadsFilteredInput, supabase: Supabase): Promise<ToolResult> {
+  const { leadScore, scoreBucket } = await import('./scoring')
+  const lim = Math.min(input.limit || 20, 30)
+  let query = supabase.from('leads').select('*')
+  if (input.status && input.status !== 'any') query = query.eq('status', input.status)
+  if (input.canal) query = query.ilike('canal_adquisicion', `%${input.canal}%`)
+  if (input.created_within_days) {
+    const since = new Date(Date.now() - input.created_within_days * 86400_000).toISOString()
+    query = query.gte('created_at', since)
+  }
+  const { data, error } = await query.limit(500)
+  if (error) return { ok: false, summary: `Error: ${error.message}`, error: error.message }
+  let rows = (data || []) as Lead[]
+
+  // Filtros que no se pueden hacer en SQL directo
+  if (input.score_bucket && input.score_bucket !== 'any') {
+    rows = rows.filter(l => scoreBucket(leadScore(l)) === input.score_bucket)
+  }
+  if (input.min_days_in_stage !== undefined || input.max_days_in_stage !== undefined) {
+    rows = rows.filter(l => {
+      const since = l.status_changed_at ? new Date(l.status_changed_at).getTime() : new Date(l.created_at).getTime()
+      const days = (Date.now() - since) / 86400_000
+      if (input.min_days_in_stage !== undefined && days < input.min_days_in_stage) return false
+      if (input.max_days_in_stage !== undefined && days > input.max_days_in_stage) return false
+      return true
+    })
+  }
+
+  // Orden: score desc, después created desc
+  rows.sort((a, b) => {
+    const sa = leadScore(a)
+    const sb = leadScore(b)
+    if (sa !== sb) return sb - sa
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  })
+
+  const top = rows.slice(0, lim).map(l => {
+    const score = leadScore(l)
+    const since = l.status_changed_at ? new Date(l.status_changed_at).getTime() : new Date(l.created_at).getTime()
+    const daysInStage = Math.round((Date.now() - since) / 86400_000)
+    const daysSinceCreated = Math.round((Date.now() - new Date(l.created_at).getTime()) / 86400_000)
+    return {
+      id: l.id,
+      nombre: l.nombre,
+      empresa: l.empresa,
+      email: l.email,
+      telefono: l.telefono,
+      vacante: l.vacante,
+      presupuesto: l.presupuesto,
+      status: l.status,
+      canal: l.canal_adquisicion,
+      score,
+      bucket: scoreBucket(score),
+      days_in_stage: daysInStage,
+      days_since_created: daysSinceCreated,
+    }
+  })
+  return {
+    ok: true,
+    summary: `${rows.length} leads matchean los filtros; mostrando los ${top.length} de mayor score.`,
+    data: { leads: top, total_matching: rows.length, filters_applied: input },
   }
 }
