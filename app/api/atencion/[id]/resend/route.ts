@@ -30,15 +30,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!ticket) return NextResponse.json({ error: 'ticket no encontrado' }, { status: 404 })
 
-  const t = ticket as { id: string; lead_id: string; last_message: string | null; leads: Lead | null }
-  if (!t.leads) return NextResponse.json({ error: 'lead no encontrado' }, { status: 404 })
+  const t = ticket as unknown as { id: string; lead_id: string; last_message: string | null; leads: Lead | Lead[] | null }
+  // Supabase puede devolver el join como objeto OR array según versión de PostgREST
+  const lead = Array.isArray(t.leads) ? t.leads[0] : t.leads
+  if (!lead) return NextResponse.json({ error: 'lead no encontrado' }, { status: 404 })
 
   const result = await alertAtencionHumanaVambe({
     ticketId: t.id,
     lead: {
-      id: t.leads.id, nombre: t.leads.nombre, email: t.leads.email,
-      telefono: t.leads.telefono, empresa: t.leads.empresa,
-      vacante: t.leads.vacante, presupuesto: t.leads.presupuesto,
+      id: lead.id, nombre: lead.nombre, email: lead.email,
+      telefono: lead.telefono, empresa: lead.empresa,
+      vacante: lead.vacante, presupuesto: lead.presupuesto,
     },
     lastMessage: t.last_message,
   })
