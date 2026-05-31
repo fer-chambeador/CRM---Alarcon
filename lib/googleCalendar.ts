@@ -578,9 +578,22 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
         action: 'updated',
       })
     } else {
-      // No existe el lead — crearlo con los datos del evento
+      // No existe el lead — crearlo con los datos del evento.
+      // Necesitamos email obligatoriamente (es la PK lógica del lead). Si llegamos
+      // aquí sin email, ya pasó el check de arriba, pero por TS narrowing y
+      // defensa: re-validamos.
+      const clientEmail = client.email
+      if (!clientEmail) {
+        result.details.push({
+          event_id: ev.id, title: ev.summary || '(sin título)', when,
+          matched_email: null, lead_id: null, lead_name: client.nombre,
+          action: 'no_email_found',
+        })
+        continue
+      }
+
       const { data: newLead, error } = await supabase.from('leads').insert({
-        email: client.email,
+        email: clientEmail,
         nombre: client.nombre,
         telefono: client.telefono,
         canal_adquisicion: 'Calendar booking',
@@ -595,7 +608,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
         // Email puede ser duplicado por otro lead — log y continuar
         result.details.push({
           event_id: ev.id, title: ev.summary || '(sin título)', when,
-          matched_email: client.email, lead_id: null, lead_name: client.nombre,
+          matched_email: clientEmail, lead_id: null, lead_name: client.nombre,
           action: 'no_email_found',  // técnicamente fue error, pero usamos este flag
         })
         continue
@@ -609,15 +622,15 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
           metadata: { source: 'calendar_import', event_id: ev.id, when, created: true },
         })
         // Agregarlo al map por si otro evento del mismo email viene después
-        leadsByEmail.set(client.email, {
-          id: newLead.id, email: client.email, nombre: client.nombre,
+        leadsByEmail.set(clientEmail, {
+          id: newLead.id, email: clientEmail, nombre: client.nombre,
           telefono: client.telefono, status: 'llamada_agendada',
           llamada_at: when, google_calendar_event_id: ev.id,
         })
         result.leads_created += 1
         result.details.push({
           event_id: ev.id, title: ev.summary || '(sin título)', when,
-          matched_email: client.email, lead_id: newLead.id, lead_name: client.nombre,
+          matched_email: clientEmail, lead_id: newLead.id, lead_name: client.nombre,
           action: 'created',
         })
       }
