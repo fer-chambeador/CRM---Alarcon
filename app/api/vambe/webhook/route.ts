@@ -5,6 +5,7 @@ import { parseFormMessage, getMessages, type VambeWebhookEvent, type FormFields 
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
+import { alertAtencionHumanaVambe } from '@/lib/slackAlertVambe'
 
 // Stage UUIDs especiales para disparar alertas y triggers de negocio.
 // Si Vambe cambia los UUIDs, actualizar acá (o moverlo a env vars).
@@ -219,26 +220,93 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     await supabase.from('leads').update({ vambe_contact_id: aiContactId }).eq('id', lead.id)
   }
 
+  // Descripción super resumida — el detalle completo queda en metadata.
   const desc = isInbound
-    ? `📥 Cliente: ${text.slice(0, 200)}`
-    : `📤 Vambe: ${text.slice(0, 200)}`
+    ? `📥 cliente respondió`
+    : `📨 Vambe envió mensaje`
 
-  await supabase.from('lead_actividad').insert({
-    lead_id: lead.id,
-    tipo: 'vambe_message',
-    descripcion: desc,
-    metadata: { source: 'vambe', type, ...data },
-  })
+  // Dedup robusto contra race conditions y retries de Vambe:
+  //  1. Si Vambe nos da un message_id único, lo usamos como dedup_key.
+  //     Buscamos en metadata->>message_id; si ya existe, skip total.
+  //  2. Si no hay message_id, fallback al dedup por ventana de tiempo (3 min)
+  //     consolidando mensajes consecutivos del mismo direction en un solo row
+  //     con contador ×N.
+  const messageId = (data.message_id || data.id || data.messageId
+    || (data.payload as Record<string, unknown> | undefined)?.id
+    || (data.payload as Record<string, unknown> | undefined)?.message_id
+    || null) as string | null
 
-  // Si era 'nuevo' y vino mensaje del cliente → 'contactado'
-  if (isInbound && lead.status === 'nuevo') {
-    await supabase.from('leads').update({
-      status: 'contactado',
-      status_changed_at: new Date().toISOString(),
-      ultimo_contacto: new Date().toISOString(),
-      veces_contactado: (lead.veces_contactado || 0) + 1,
-    }).eq('id', lead.id)
+  if (messageId) {
+    // Ya existe activity con este mismo message_id? → skip (es retry)
+    const { data: dupe } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'vambe_message')
+      .filter('metadata->>message_id', 'eq', messageId)
+      .limit(1)
+      .maybeSingle()
+    if (dupe) {
+      // Es un retry de Vambe — skip silenciosamente
+      return
+    }
   }
+
+  // Dedup por ventana: buscar última activity del mismo direction
+  const { data: lastActivity } = await supabase
+    .from('lead_actividad')
+    .select('id, descripcion, metadata, created_at')
+    .eq('lead_id', lead.id)
+    .eq('tipo', 'vambe_message')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const THREE_MIN_MS = 3 * 60_000
+  const sameKind = lastActivity
+    && (lastActivity as { descripcion?: string }).descripcion?.startsWith(isInbound ? '📥' : '📨')
+  const recent = lastActivity
+    && Date.now() - new Date((lastActivity as { created_at: string }).created_at).getTime() < THREE_MIN_MS
+
+  if (sameKind && recent) {
+    const prevMeta = (lastActivity as { metadata: Record<string, unknown> }).metadata || {}
+    const count = ((prevMeta.count as number) || 1) + 1
+    const messages = Array.isArray(prevMeta.messages) ? prevMeta.messages : []
+    const messageIds = Array.isArray(prevMeta.message_ids) ? prevMeta.message_ids : []
+    await supabase.from('lead_actividad').update({
+      descripcion: `${desc} (×${count})`,
+      metadata: {
+        ...prevMeta, count,
+        last_text: text.slice(0, 500),
+        last_message_id: messageId,
+        message_ids: messageId ? [...messageIds, messageId].slice(-20) : messageIds,
+        messages: [...messages, { text: text.slice(0, 500), at: new Date().toISOString(), id: messageId }].slice(-20),
+        source: 'vambe',
+      },
+    }).eq('id', (lastActivity as { id: string }).id)
+  } else {
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'vambe_message',
+      descripcion: desc,
+      metadata: {
+        source: 'vambe', type,
+        direction: isInbound ? 'inbound' : 'outbound',
+        text: text.slice(0, 500),
+        message_id: messageId,
+        message_ids: messageId ? [messageId] : [],
+        count: 1,
+        raw: data,
+      },
+    })
+  }
+
+  // NOTA: REMOVIDO el auto-promote nuevo → contactado.
+  // Fer pidió que los leads de Vambe se queden en 'nuevo' hasta que él
+  // los mueva con una acción manual (Mensaje/Llamar) o el sistema lo haga
+  // por aprobación explícita en Outbound.
+  // Tracking 'ultimo_contacto' y 'veces_contactado' se mantiene si quieres
+  // reactivarlo más adelante — por ahora omitimos el update completo.
 
   // Marcar responded_at en campaign recipients si este inbound es la primera
   // respuesta del cliente a una campaña reciente.
@@ -354,11 +422,22 @@ async function promotePendingLead(
       await supabase.from('leads').update(updates).eq('id', lead.id)
       resultLead = { ...lead, ...updates } as Lead
     }
-  } else if (form.email) {
-    // Crear nuevo lead — el form tiene que tener al menos email
+  } else {
+    // Crear nuevo lead. Si no hay email pero sí teléfono, generamos un email
+    // placeholder vambe-{telefono}@chambas.ai para no perder el lead.
+    let email = form.email
+    if (!email) {
+      const tel = form.telefono || fields.telefono
+      if (!tel) {
+        // No hay ni email ni teléfono — no podemos crear nada útil
+        return { lead: null, created: false, form }
+      }
+      const digits = String(tel).replace(/\D/g, '').slice(-10)
+      email = `vambe-${digits}@chambas.ai`
+    }
     const insert: Record<string, unknown> = {
       ...fields,
-      email: form.email,
+      email,
       status: 'nuevo',
       tipo_evento: 'vambe_form',
       monto: 1160,
@@ -373,9 +452,6 @@ async function promotePendingLead(
     }
     resultLead = data as Lead
     created = true
-  } else {
-    // No hay email — no podemos crear
-    return { lead: null, created: false, form }
   }
 
   // 4) Limpiar el pending
@@ -395,12 +471,9 @@ async function handleTicket(supabase: Supabase, type: string, aiContactId: strin
     metadata: { source: 'vambe', type, ...data },
   })
 
-  if (type === 'ticket.created' && lead.status === 'nuevo') {
-    await supabase.from('leads').update({
-      status: 'contactado',
-      status_changed_at: new Date().toISOString(),
-    }).eq('id', lead.id)
-  }
+  // NOTA: REMOVIDO el auto-promote nuevo→contactado en ticket.created.
+  // Mismo principio que message.received — el lead debe quedarse en 'nuevo'
+  // hasta que Fer haga una acción manual (Mensaje/Llamar) o apruebe en /outbound.
 }
 
 async function handleTicketClosed(supabase: Supabase, aiContactId: string | undefined, data: Record<string, unknown>) {
@@ -733,14 +806,68 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 /** Dispara alertas a Slack según la stage que llegó. No-op si no hay webhook configurado. */
 async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean) {
   if (newStageId === STAGE_ATENCION_HUMANA) {
-    await alertAtencionHumana({
-      leadId: lead.id,
-      nombre: lead.nombre,
-      email: lead.email,
-      telefono: lead.telefono,
-      vacante: lead.vacante,
-      empresa: lead.empresa,
-      inboxUrl: null,
+    // Crear ticket de atención humana + alerta a #alertas-vambe con resumen
+    // del último mensaje y botones Atendido/Dismiss.
+    const supabase = createServiceClient()
+
+    // Buscar último mensaje inbound del cliente (lo que provocó la escalación)
+    const { data: lastMsg } = await supabase
+      .from('lead_actividad')
+      .select('metadata, descripcion')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'vambe_message')
+      .like('descripcion', '📥%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lastMessage = lastMsg
+      ? (((lastMsg as { metadata?: { text?: string; last_text?: string } }).metadata?.text)
+        || ((lastMsg as { metadata?: { text?: string; last_text?: string } }).metadata?.last_text)
+        || null)
+      : null
+
+    // Idempotente: si ya hay un ticket pending para este lead, no creamos otro
+    const { data: existingTicket } = await supabase
+      .from('vambe_atencion_tickets')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('status', 'pending')
+      .maybeSingle()
+    if (existingTicket) {
+      console.log('Asistencia Humana: ticket pending ya existe para lead', lead.id, '— skip Slack')
+      return
+    }
+
+    // Crear ticket
+    const { data: ticket, error: ticketErr } = await supabase
+      .from('vambe_atencion_tickets')
+      .insert({
+        lead_id: lead.id,
+        status: 'pending',
+        last_message: lastMessage,
+        vambe_stage_id: newStageId,
+      })
+      .select('id')
+      .single()
+    if (ticketErr || !ticket) {
+      console.error('Error creando atencion ticket:', ticketErr)
+      // Fallback al alert legacy si no se puede crear ticket
+      await alertAtencionHumana({
+        leadId: lead.id, nombre: lead.nombre, email: lead.email,
+        telefono: lead.telefono, vacante: lead.vacante, empresa: lead.empresa,
+        inboxUrl: null,
+      })
+      return
+    }
+
+    await alertAtencionHumanaVambe({
+      ticketId: (ticket as { id: string }).id,
+      lead: {
+        id: lead.id, nombre: lead.nombre, email: lead.email,
+        telefono: lead.telefono, empresa: lead.empresa,
+        vacante: lead.vacante, presupuesto: lead.presupuesto,
+      },
+      lastMessage,
     })
   } else if (newStageId === STAGE_GANADOS) {
     await alertVentaCerrada({

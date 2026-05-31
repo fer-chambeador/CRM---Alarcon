@@ -22,8 +22,8 @@ export async function GET(req: NextRequest) {
     .select(`
       id, lead_id, dapta_call_id, agent_name, status, outcome,
       to_number, from_number, duration_seconds, recording_url,
-      summary, sentimiento, interes_real,
-      pidio_link_pago, pidio_presentacion, agendar_seguimiento,
+      summary, custom_analysis, sentimiento, interes_real,
+      pidio_link_pago, pidio_presentacion, agendar_seguimiento, scheduled_at,
       triggered_by, trigger_reason, error_message,
       started_at, ended_at, created_at, updated_at,
       leads:lead_id ( id, nombre, email, empresa, telefono, status, presupuesto, vacante )

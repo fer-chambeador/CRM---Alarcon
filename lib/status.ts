@@ -3,6 +3,7 @@ import type { Lead } from './supabase'
 export const STATUS_LABELS: Record<Lead['status'], string> = {
   nuevo: 'Nuevo',
   contactado: 'Contactado',
+  llamada_con_dapta: 'Llamada con Dapta',
   llamada_agendada: 'Llamada agendada',
   no_show_llamada: 'No show llamada',
   presentacion_enviada: 'Propuesta enviada',
@@ -15,6 +16,7 @@ export const STATUS_LABELS: Record<Lead['status'], string> = {
 export const STATUS_ORDER: Lead['status'][] = [
   'nuevo',
   'contactado',
+  'llamada_con_dapta',
   'llamada_agendada',
   'no_show_llamada',
   'presentacion_enviada',
@@ -24,7 +26,7 @@ export const STATUS_ORDER: Lead['status'][] = [
   'descartado',
 ]
 
-export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada']
+export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_con_dapta', 'llamada_agendada', 'no_show_llamada']
 export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
@@ -39,6 +41,7 @@ export const STATUS_PROJECTION_ORDER: Lead['status'][] = [
   'espera_aprobacion',
   'presentacion_enviada',
   'llamada_agendada',
+  'llamada_con_dapta',
   'contactado',
   'no_show_llamada',
   'nuevo',
@@ -51,6 +54,7 @@ export function statusColor(s: Lead['status']): string {
   return ({
     nuevo: '#4ea8f5',
     contactado: '#f5c842',
+    llamada_con_dapta: '#7c54e8',
     llamada_agendada: '#f5914e',
     no_show_llamada: '#f05a5a',
     presentacion_enviada: '#a594ff',

@@ -260,7 +260,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' | 'aprobaciones' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -276,17 +276,20 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
     </Link>
   )
   const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
+  const onSettings = active === 'settings' || active === 'templates'
   return (
     <>
       <nav className={styles.sidebarNav}>
         {link('/leads', 'leads', 'Leads', '📋')}
+        {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
         {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
         {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
         {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
         {link('/asistente', 'asistente', 'Asistente', '🧠')}
-        {link('/templates', 'templates', 'Templates', '✉️')}
         {link('/settings', 'settings', 'Settings', '⚙️')}
+        {onSettings && subLink('/settings', 'settings', 'General')}
+        {onSettings && subLink('/templates', 'templates', 'Templates')}
       </nav>
       <MobileTabBar active={active} />
     </>
@@ -306,13 +309,17 @@ export function MobileTabBar({ active }: { active: string }) {
   const [moreOpen, setMoreOpen] = useState(false)
   // recurrentes sub-page should keep the Recurrentes tab lit
   const norm = active === 'recurrentes-analitica' ? 'recurrentes' : active
-  const moreActive = norm === 'templates' || norm === 'settings'
+  const moreActive = norm === 'templates' || norm === 'settings' || norm === 'aprobaciones'
   return (
     <>
       {moreOpen && (
         <div className={styles.mobileSheetOverlay} onClick={() => setMoreOpen(false)}>
           <div className={styles.mobileSheet} onClick={e => e.stopPropagation()}>
             <div className={styles.mobileSheetHandle} />
+            <Link href="/outbound" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'aprobaciones' && styles.mobileSheetItemActive)}>
+              📨 Outbound
+            </Link>
             <Link href="/templates" onClick={() => setMoreOpen(false)}
               className={clsx(styles.mobileSheetItem, norm === 'templates' && styles.mobileSheetItemActive)}>
               ✉️ Templates

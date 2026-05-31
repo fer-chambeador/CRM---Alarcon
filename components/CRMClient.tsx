@@ -270,7 +270,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ marginLeft: 10, fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}
-                title="Ver detalle completo con timeline"
+                title="Ver detalle completo con timeline + botón 'Ir al chat' Vambe"
               >
                 Ver detalle ↗
               </a>
@@ -711,11 +711,12 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 <SortableHeader label="Presupuesto" sortKey="presupuesto" current={sort} onSort={onSort} />
                 <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
                 <SortableHeader label="Fecha" sortKey="fecha" current={sort} onSort={onSort} />
+                <th style={{ width: 180 }}>Acciones</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {sorted.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
+              {sorted.length === 0 && <tr><td colSpan={12} style={{ textAlign: 'center', color: 'var(--text3)', padding: '40px 0' }}>No hay leads que coincidan</td></tr>}
               {visibleSorted.map(lead => {
                 const isNew = newLeadFlash === lead.email
                 const contactoLabel = CONTACTO_LABELS[Math.min(lead.veces_contactado || 0, CONTACTO_LABELS.length - 1)]
@@ -798,6 +799,52 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         : <span className={styles.empty}>—</span>}
                     </td>
                     <td data-label="Fecha" className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
+                    <td data-label="Acciones" onClick={e => e.stopPropagation()}>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          title={lead.telefono ? `Mandar mensaje Vambe a ${lead.telefono}` : 'lead sin teléfono'}
+                          disabled={!lead.telefono}
+                          onClick={async () => {
+                            if (!confirm(`¿Mandar mensaje Vambe a ${lead.nombre || lead.email}?`)) return
+                            const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
+                              method: 'POST',
+                              headers: { 'content-type': 'application/json' },
+                              body: JSON.stringify({ action: 'message' }),
+                            })
+                            const data = await res.json()
+                            if (!data.ok) alert('Falló: ' + (data.error || res.status))
+                            else alert('✅ Mensaje enviado')
+                          }}
+                          style={{
+                            background: 'linear-gradient(135deg, #22d68a, #1ab574)',
+                            color: 'white', border: 'none',
+                            padding: '4px 10px', borderRadius: 6,
+                            fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                            opacity: lead.telefono ? 1 : 0.4,
+                          }}>📨 Mensaje</button>
+                        <button
+                          title={lead.telefono ? `Disparar llamada Daniela a ${lead.telefono}` : 'lead sin teléfono'}
+                          disabled={!lead.telefono}
+                          onClick={async () => {
+                            if (!confirm(`¿Disparar llamada de Daniela (Dapta) a ${lead.nombre || lead.email}?`)) return
+                            const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
+                              method: 'POST',
+                              headers: { 'content-type': 'application/json' },
+                              body: JSON.stringify({ action: 'call' }),
+                            })
+                            const data = await res.json()
+                            if (!data.ok) alert('Falló: ' + (data.error || res.status))
+                            else alert('✅ Llamada disparada')
+                          }}
+                          style={{
+                            background: 'linear-gradient(135deg, #7c54e8, #5a8af0)',
+                            color: 'white', border: 'none',
+                            padding: '4px 10px', borderRadius: 6,
+                            fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                            opacity: lead.telefono ? 1 : 0.4,
+                          }}>📞 Llamar</button>
+                      </div>
+                    </td>
                     <td className={styles.rowDeleteCell} onClick={e => e.stopPropagation()}>
                       <button className={styles.rowDeleteBtn} onClick={async () => {
                         if (!confirm(`¿Eliminar ${lead.email}?`)) return
