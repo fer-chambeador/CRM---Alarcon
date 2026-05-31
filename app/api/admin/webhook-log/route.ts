@@ -24,16 +24,22 @@ export async function GET(req: NextRequest) {
   const byType: Record<string, number> = {}
   for (const r of rows) byType[r.event_type] = (byType[r.event_type] || 0) + 1
 
+  const wantRaw = url.searchParams.get('raw') === 'true'
   return NextResponse.json({
     hours_window: hours,
     total: rows.length,
     by_type: byType,
-    rows: rows.slice(0, 20).map(r => ({
+    rows: rows.slice(0, wantRaw ? 3 : 20).map(r => wantRaw ? {
+      event_type: r.event_type,
+      ai_contact_id: r.ai_contact_id,
+      received_at: r.received_at,
+      payload: r.payload,
+    } : {
       event_type: r.event_type,
       ai_contact_id: r.ai_contact_id,
       received_at: r.received_at,
       payload_keys: Object.keys(r.payload || {}),
       stage_new: ((r.payload as Record<string, unknown>)?.data as Record<string, unknown>)?.new_stage_id || ((r.payload as Record<string, unknown>)?.data as Record<string, unknown>)?.newStageId || null,
-    })),
+    }),
   }, { headers: { 'Cache-Control': 'no-store' } })
 }
