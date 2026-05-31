@@ -125,21 +125,23 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Expirar aprobaciones cuyo expires_at ya pasó
+  // Expirar aprobaciones cuyo expires_at ya pasó. El chain update().select()
+  // devuelve los rows actualizados; contamos la longitud para el reporte.
   const now = new Date().toISOString()
-  const { count: expiredCount } = await supabase
+  const { data: expiredRows } = await supabase
     .from('aprobaciones')
     .update({ status: 'expired', decided_at: now })
     .eq('status', 'pending')
     .lt('expires_at', now)
-    .select('id', { count: 'exact', head: true })
+    .select('id')
+  const expiredCount = (expiredRows || []).length
 
   return NextResponse.json({
     ok: true,
     timestamp: now,
     leads_scanned: (leads || []).length,
     created: created.length,
-    expired: expiredCount || 0,
+    expired: expiredCount,
     details: { created, skipped: skipped.slice(0, 50) },
   })
 }
