@@ -34,6 +34,7 @@ type Llamada = {
   pidio_link_pago: boolean
   pidio_presentacion: boolean
   agendar_seguimiento: string | null
+  scheduled_at: string | null
   triggered_by: string | null
   trigger_reason: string | null
   error_message: string | null
@@ -107,6 +108,20 @@ function fmtDate(s: string | null): string {
   return d.toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+function fmtRelative(s: string | null): string {
+  if (!s) return '—'
+  const d = new Date(s).getTime()
+  if (isNaN(d)) return '—'
+  const diffMs = d - Date.now()
+  const abs = Math.abs(diffMs)
+  const mins = Math.round(abs / 60000)
+  if (mins < 60) return `${mins} min`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs} h`
+  const days = Math.round(hrs / 24)
+  return `${days} día${days === 1 ? '' : 's'}`
+}
+
 export default function LlamadasClient() {
   const router = useRouter()
   const [llamadas, setLlamadas] = useState<Llamada[]>([])
@@ -139,6 +154,31 @@ export default function LlamadasClient() {
     return { total: llamadas.length, completed, ligaPago, presentacion, noAnswer }
   }, [llamadas])
 
+  const { agendadas, historico } = useMemo(() => {
+    const now = Date.now()
+    const ag: Llamada[] = []
+    const hist: Llamada[] = []
+    for (const l of llamadas) {
+      const isFutureScheduled =
+        l.status === 'queued' &&
+        !l.dapta_call_id &&
+        l.scheduled_at &&
+        new Date(l.scheduled_at).getTime() > now
+      if (isFutureScheduled) ag.push(l)
+      else hist.push(l)
+    }
+    ag.sort((a, b) => new Date(a.scheduled_at!).getTime() - new Date(b.scheduled_at!).getTime())
+    return { agendadas: ag, historico: hist }
+  }, [llamadas])
+
+  async function cancelScheduled(id: string) {
+    if (!confirm('¿Cancelar esta llamada agendada?')) return
+    try {
+      await fetch(`/api/llamadas/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'canceled' }) })
+      load()
+    } catch (e) { console.error(e) }
+  }
+
   return (
     <div className={styles.root}>
       <aside className={styles.sidebar}>
@@ -165,6 +205,47 @@ export default function LlamadasClient() {
             <Card label="💰 Pidió pago" value={summary.ligaPago.toLocaleString('es-MX')} sub="cierres en caliente" />
             <Card label="📋 Pidió pres." value={summary.presentacion.toLocaleString('es-MX')} sub="follow-up con propuesta" />
           </div>
+
+          {agendadas.length > 0 && (
+            <div className={styles.tableWrap} style={{ border: '1px solid rgba(124,84,232,0.35)' }}>
+              <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#b8a3ff' }}>📅 Agendadas</span>
+                <span className={styles.muted} style={{ fontSize: 12 }}>{agendadas.length} {agendadas.length === 1 ? 'llamada' : 'llamadas'} programadas para el futuro</span>
+              </div>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Cuándo</th>
+                    <th>Lead</th>
+                    <th>Teléfono</th>
+                    <th>Agendada por</th>
+                    <th style={{ width: 80 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agendadas.map(l => (
+                    <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/llamadas/${l.id}`)}>
+                      <td>
+                        <div style={{ fontWeight: 600, color: '#b8a3ff' }}>{fmtDate(l.scheduled_at)}</div>
+                        <div className={styles.muted} style={{ fontSize: 11 }}>en {fmtRelative(l.scheduled_at)}</div>
+                      </td>
+                      <td>
+                        <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
+                        {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
+                      </td>
+                      <td className={styles.mono}>{l.to_number}</td>
+                      <td className={styles.muted}>{l.triggered_by || '—'}</td>
+                      <td onClick={e => e.stopPropagation()}>
+                        <button className={styles.btnSecondary} style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => cancelScheduled(l.id)}>
+                          Cancelar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           <div className={styles.filterBar}>
             <FilterChip label="Todos los status" active={filterStatus === 'todos'} onClick={() => setFilterStatus('todos')} />
@@ -195,12 +276,12 @@ export default function LlamadasClient() {
                 </tr>
               </thead>
               <tbody>
-                {llamadas.length === 0 ? (
+                {historico.length === 0 ? (
                   <tr><td colSpan={9} className={styles.empty}>
-                    {loading ? 'Cargando llamadas…' : 'Sin llamadas todavía. Dispará la primera con el botón de arriba.'}
+                    {loading ? 'Cargando llamadas…' : (agendadas.length > 0 ? 'Sin llamadas pasadas todavía — solo las agendadas arriba.' : 'Sin llamadas todavía. Dispará la primera con el botón de arriba.')}
                   </td></tr>
                 ) : (
-                  llamadas.map(l => <Row key={l.id} l={l} onClick={() => router.push(`/llamadas/${l.id}`)} />)
+                  historico.map(l => <Row key={l.id} l={l} onClick={() => router.push(`/llamadas/${l.id}`)} />)
                 )}
               </tbody>
             </table>
@@ -262,6 +343,14 @@ function TriggerCallModal({ onClose, onTriggered }: { onClose: () => void; onTri
   const [selected, setSelected] = useState<LeadOption | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Modo: 'now' = inmediata, 'scheduled' = agendada
+  const [mode, setMode] = useState<'now' | 'scheduled'>('now')
+  // datetime-local input value (yyyy-MM-ddThh:mm)
+  const [scheduledLocal, setScheduledLocal] = useState<string>(() => {
+    const d = new Date(Date.now() + 60 * 60 * 1000) // default: +1h
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  })
 
   useEffect(() => {
     let cancel = false
@@ -284,10 +373,19 @@ function TriggerCallModal({ onClose, onTriggered }: { onClose: () => void; onTri
     setSubmitting(true)
     setError(null)
     try {
+      const payload: Record<string, unknown> = { lead_id: selected.id, trigger_reason: mode === 'scheduled' ? 'scheduled' : 'manual' }
+      if (mode === 'scheduled') {
+        const d = new Date(scheduledLocal)
+        if (isNaN(d.getTime()) || d.getTime() < Date.now() + 30_000) {
+          setError('La fecha agendada debe ser al menos 30 segundos en el futuro.')
+          setSubmitting(false); return
+        }
+        payload.scheduled_at = d.toISOString()
+      }
       const res = await fetch('/api/dapta/trigger', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lead_id: selected.id, trigger_reason: 'manual' }),
+        body: JSON.stringify(payload),
       })
       const j = await res.json()
       if (!res.ok || !j.ok) {
@@ -343,10 +441,36 @@ function TriggerCallModal({ onClose, onTriggered }: { onClose: () => void; onTri
           </div>
         )}
 
+        {selected && (
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>¿Cuándo?</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <button
+                className={clsx(styles.filterChip, mode === 'now' && styles.filterChipActive)}
+                onClick={() => setMode('now')}
+                type="button"
+              >📞 Ahora</button>
+              <button
+                className={clsx(styles.filterChip, mode === 'scheduled' && styles.filterChipActive)}
+                onClick={() => setMode('scheduled')}
+                type="button"
+              >📅 Agendar</button>
+            </div>
+            {mode === 'scheduled' && (
+              <input
+                className={styles.formInput}
+                type="datetime-local"
+                value={scheduledLocal}
+                onChange={e => setScheduledLocal(e.target.value)}
+              />
+            )}
+          </div>
+        )}
+
         <div className={styles.modalActions}>
           <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>Cancelar</button>
           <button className={styles.primaryBtn} onClick={trigger} disabled={!selected || !selected.telefono || submitting}>
-            {submitting ? 'Disparando…' : '📞 Llamar ahora'}
+            {submitting ? (mode === 'scheduled' ? 'Agendando…' : 'Disparando…') : (mode === 'scheduled' ? '📅 Agendar llamada' : '📞 Llamar ahora')}
           </button>
         </div>
       </div>

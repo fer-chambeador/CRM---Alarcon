@@ -36,6 +36,7 @@ export type SlackAlertParams = {
   fields?: SlackAlertField[]
   url?: string                   // ej deep link al CRM /leads/[id]
   url_label?: string
+  webhookUrl?: string            // override del default (e.g. canal #llamadas-dapta)
 }
 
 /**
@@ -43,9 +44,9 @@ export type SlackAlertParams = {
  * Best-effort — si falla solo loguea, no rompe el caller.
  */
 export async function sendSlackAlert(params: SlackAlertParams): Promise<{ ok: boolean; error?: string }> {
-  const webhookUrl = process.env.SLACK_ALERT_WEBHOOK_URL
+  const webhookUrl = params.webhookUrl || process.env.SLACK_ALERT_WEBHOOK_URL
   if (!webhookUrl) {
-    console.warn('SLACK_ALERT_WEBHOOK_URL no configurada — skip alert:', params.title)
+    console.warn('Slack webhook no configurado — skip alert:', params.title)
     return { ok: false, error: 'no-webhook' }
   }
 

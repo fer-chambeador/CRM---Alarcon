@@ -9,18 +9,25 @@ export const maxDuration = 30
 /**
  * POST /api/dapta/trigger
  *
- * Body: { lead_id: string, trigger_reason?: string, triggered_by?: string }
+ * Body: {
+ *   lead_id: string
+ *   trigger_reason?: string
+ *   triggered_by?: string
+ *   scheduled_at?: string   // ISO timestamp — si está en el futuro, NO llama ahora,
+ *                           // solo crea la row queued y la dispara el cron
+ * }
  *
- * 1. Lee el lead.
- * 2. Hace POST al Flow A de Dapta con el contexto del lead.
- * 3. Crea una fila en `llamadas` (status='queued') con los datos iniciales.
- *    El dapta_call_id se completa cuando llega el webhook post-call.
+ * Comportamiento:
+ *  - scheduled_at futuro: crea fila status='queued' con scheduled_at; NO llama Dapta;
+ *    NO mueve el lead a llamada_con_dapta (todavía no se llamó).
+ *  - scheduled_at null o pasado: dispara la llamada YA + mueve lead a llamada_con_dapta.
  */
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as {
     lead_id?: string
     trigger_reason?: string
     triggered_by?: string
+    scheduled_at?: string | null
   } | null
 
   if (!body?.lead_id) {
@@ -40,10 +47,42 @@ export async function POST(req: NextRequest) {
   if (!l.telefono) {
     return NextResponse.json({ error: 'el lead no tiene teléfono' }, { status: 400 })
   }
-  if (l.email?.endsWith('@chambas.placeholder')) {
-    // permitimos pero advertimos — la AI no podrá referenciar email
+
+  // Validar scheduled_at: si es string parseable a fecha futura, agendamos
+  const scheduledMs = body.scheduled_at ? new Date(body.scheduled_at).getTime() : NaN
+  const isScheduled = !isNaN(scheduledMs) && scheduledMs > Date.now() + 30_000 // > 30s en futuro
+
+  // ── Caso scheduled (futuro) — solo crear la row ───────────────────────────
+  if (isScheduled) {
+    const { data: created, error: insErr } = await supabase
+      .from('llamadas')
+      .insert({
+        lead_id: l.id,
+        to_number: l.telefono,
+        from_number: process.env.DAPTA_FROM_NUMBER || null,
+        agent_name: process.env.DAPTA_AGENT_NAME_DEFAULT || 'Daniela',
+        status: 'queued',
+        scheduled_at: new Date(scheduledMs).toISOString(),
+        triggered_by: body.triggered_by || null,
+        trigger_reason: body.trigger_reason || 'scheduled',
+      })
+      .select('id')
+      .maybeSingle()
+    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 })
+    const llamadaId = (created as { id?: string } | null)?.id
+
+    if (llamadaId) {
+      await supabase.from('lead_actividad').insert({
+        lead_id: l.id,
+        tipo: 'dapta_call_scheduled',
+        descripcion: `📅 Llamada Dapta agendada para ${new Date(scheduledMs).toLocaleString('es-MX')}`,
+        metadata: { source: 'dapta', llamada_id: llamadaId, scheduled_at: new Date(scheduledMs).toISOString() },
+      })
+    }
+    return NextResponse.json({ ok: true, scheduled: true, llamada_id: llamadaId, scheduled_at: new Date(scheduledMs).toISOString() })
   }
 
+  // ── Caso inmediato — disparar ahora ───────────────────────────────────────
   const triggerResult = await triggerDaptaCall({
     lead_id: l.id,
     to_number: l.telefono,
@@ -55,7 +94,6 @@ export async function POST(req: NextRequest) {
     notas: l.notas,
   })
 
-  // Crear row en llamadas con estado inicial
   const insert: Record<string, unknown> = {
     lead_id: l.id,
     to_number: l.telefono,
@@ -84,7 +122,18 @@ export async function POST(req: NextRequest) {
 
   const llamadaId = (created as { id?: string } | null)?.id
 
-  // Loguear actividad en el timeline del lead
+  // ── Mover el lead al bucket "llamada_con_dapta" ──
+  // Solo si la llamada se disparó OK Y el lead no está ya en una etapa más avanzada.
+  if (triggerResult.ok) {
+    const ADVANCED_STATUSES = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+    if (!ADVANCED_STATUSES.has(l.status)) {
+      await supabase
+        .from('leads')
+        .update({ status: 'llamada_con_dapta', status_changed_at: new Date().toISOString() })
+        .eq('id', l.id)
+    }
+  }
+
   if (llamadaId) {
     await supabase.from('lead_actividad').insert({
       lead_id: l.id,

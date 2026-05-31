@@ -65,6 +65,15 @@ function formatDuration(seconds: number): string {
 }
 
 /**
+ * Webhook específico para llamadas. Si `SLACK_LLAMADAS_WEBHOOK_URL` está
+ * configurado, las alertas Dapta van al canal #llamadas-dapta; sino, caen
+ * al webhook por default.
+ */
+function llamadasWebhook(): string | undefined {
+  return process.env.SLACK_LLAMADAS_WEBHOOK_URL || process.env.SLACK_ALERT_WEBHOOK_URL
+}
+
+/**
  * 💰 Lead aceptó comprar — pidió link de pago o transferencia.
  * Acción urgente: mandar liga por WhatsApp YA.
  */
@@ -79,6 +88,7 @@ export async function alertLlamadaPidioLinkPago(params: { lead: LeadSnapshot; ca
     fields,
     url: `${baseUrl()}/llamadas/${params.call.id}`,
     url_label: 'Ver llamada completa',
+    webhookUrl: llamadasWebhook(),
   })
 }
 
@@ -97,5 +107,6 @@ export async function alertLlamadaPidioPresentacion(params: { lead: LeadSnapshot
     fields,
     url: `${baseUrl()}/llamadas/${params.call.id}`,
     url_label: 'Ver llamada completa',
+    webhookUrl: llamadasWebhook(),
   })
 }

@@ -86,6 +86,7 @@ function median(xs: number[]): number {
 const FUNNEL_RANK: Record<Lead['status'], number> = {
   nuevo: 0,
   contactado: 1,
+  llamada_con_dapta: 1.5,
   llamada_agendada: 2,
   no_show_llamada: 2,
   presentacion_enviada: 3,

@@ -13,6 +13,7 @@ import { DEFAULT_MONTO, PIPELINE_CLOSED, STATUS_PROJECTION_ORDER } from './statu
 export const STATUS_WIN_PROBABILITY: Record<Lead['status'], number> = {
   nuevo: 0.05,
   contactado: 0.10,
+  llamada_con_dapta: 0.20,
   llamada_agendada: 0.25,
   no_show_llamada: 0.05,
   presentacion_enviada: 0.50,
