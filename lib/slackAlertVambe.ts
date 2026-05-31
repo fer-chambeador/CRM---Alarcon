@@ -13,8 +13,17 @@
 
 import type { Lead } from '@/lib/supabase'
 
+/**
+ * Webhook resolution con fallback chain:
+ *  1. SLACK_ALERTAS_VAMBE_WEBHOOK_URL  (recomendado — canal #alertas-vambe)
+ *  2. SLACK_ALERT_WEBHOOK_URL          (canal default)
+ *  3. SLACK_LLAMADAS_WEBHOOK_URL       (último resort — usa el canal de llamadas
+ *                                        para que la alerta NO se pierda silente)
+ */
 function alertasVambeWebhook(): string | undefined {
-  return process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL || process.env.SLACK_ALERT_WEBHOOK_URL
+  return process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL
+    || process.env.SLACK_ALERT_WEBHOOK_URL
+    || process.env.SLACK_LLAMADAS_WEBHOOK_URL
 }
 
 function crmBaseUrl(): string {
