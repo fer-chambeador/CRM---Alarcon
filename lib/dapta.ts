@@ -75,36 +75,63 @@ export async function triggerDaptaCall(payload: DaptaTriggerPayload): Promise<Da
 
 // ─── Post-call payload shape ─────────────────────────────────────────────────
 //
-// Dapta envía POST a nuestro webhook con esta forma (basado en el docs HubSpot
-// y el patrón {{trigger.body.call}}):
+// IMPORTANTE: Daniela (Dapta, RetellAI-backed) envía TODO bajo `call.*`. Es decir
+// `call_analysis`, `dynamic_variables` (con nuestro lead_id), `to_number`, etc.
+// NO viene `event` ni `data` en raíz — eso era un mito de la doc HubSpot.
+//
+// Shape real observado en run de Flow B "Post-Call to CRM" (31/05/2026):
 //
 // {
-//   "event": "call.completed" | "call.failed" | etc.,
 //   "call": {
-//     "call_id": "...",
-//     "agent_id": "...",
-//     "agent_name": "Daniela",
-//     "to_number": "+52...",
-//     "from_number": "+52...",
-//     "status": "completed" | "no_answer" | "voicemail" | "failed",
-//     "duration": 240,                              // segundos
-//     "started_at": "2026-05-31T10:30:00Z",
-//     "ended_at":   "2026-05-31T10:34:00Z",
+//     "call_id": "call_4604731cb42540...",
+//     "call_type": "phone_call",
+//     "agent_id": "agent_7c6563f4520cd...",
+//     "agent_version": 0,
+//     "agent_name": "Daniela - Sales AI",
+//     "call_status": "ended",                          // ended | no_answer | voicemail | ...
+//     "start_timestamp": 1780207957513,                // epoch MS, no ISO
+//     "end_timestamp":   1780208128854,
+//     "duration_ms": 171341,
+//     "total_duration_seconds": 171.3,
+//     "transcript": "Agent: Hola...\nUser: Hola...\n", // texto plano
+//     "transcript_object": [{ role, content, words: [...] }],
 //     "recording_url": "https://...",
-//     "transcript": [{ "speaker": "agent", "text": "Hola Lic..." }, ...]
-//   },
-//   "call_analysis": {
-//     "call_summary": "...",
-//     "custom_analysis_data": {
-//       "outcome": "pidio_link_pago",
-//       "puesto_buscado": "meseros",
-//       "zona_ubicacion": "Roma Norte",
-//       ...
-//     }
-//   },
-//   "data": {
-//     // payload original que mandamos al trigger (Dapta lo reenvía)
-//     "lead_id": "uuid-del-lead-en-CRM"
+//     "from_number": "+525543604918",
+//     "to_number":   "+525517282187",
+//     "direction": "outbound",
+//     "twilio_call_sid": "...",
+//     "disconnection_reason": "User Hangup",
+//     "user_sentiment": "Positive",
+//     "call_successful": true,
+//     "call_analysis": {
+//       "call_summary": "...",
+//       "user_sentiment": "Positive",
+//       "call_successful": true,
+//       "in_voicemail": false,
+//       "custom_analysis_data": {
+//         "outcome": "pidio_link_pago",
+//         "interes_real": "alto",
+//         "proximo_paso": "...",
+//         "puesto_buscado": "...",
+//         "zona_ubicacion": "...",
+//         "presupuesto_paquete": "una_publicacion",
+//         "usa_otra_plataforma": "...",
+//         "objeciones": "...",
+//         "agendar_seguimiento": "...",
+//         "sentimiento": "positivo"
+//       }
+//     },
+//     "dynamic_variables": {                           // ← nuestros params del trigger
+//       "lead_id": "uuid-del-lead",
+//       "nombre": "...",
+//       "empresa": "...",
+//       "vacante": "...",
+//       "presupuesto": "...",
+//       "puesto": "...",
+//       "notas": "..."
+//     },
+//     "cost": { ... },
+//     "credits_consumed": 999
 //   }
 // }
 
@@ -127,33 +154,146 @@ export type DaptaCustomAnalysis = {
   [k: string]: unknown
 }
 
-export type DaptaPostCallPayload = {
-  event?: string
-  call?: {
-    call_id?: string
-    agent_id?: string
-    agent_name?: string
-    to_number?: string
-    from_number?: string
-    status?: string
-    duration?: number
-    duration_seconds?: number
-    started_at?: string
-    ended_at?: string
-    recording_url?: string
-    transcript?: Array<{ speaker?: string; text?: string; timestamp?: string }>
-    [k: string]: unknown
-  }
+export type DaptaCallObject = {
+  call_id?: string
+  call_type?: string
+  agent_id?: string
+  agent_version?: number
+  agent_name?: string
+  call_status?: string                  // 'ended' | 'no_answer' | 'voicemail' | 'failed' | ...
+  status?: string                       // backup, por si Dapta cambia el nombre
+  to_number?: string
+  from_number?: string
+  direction?: string
+  start_timestamp?: number              // epoch MS
+  end_timestamp?: number                // epoch MS
+  started_at?: string                   // ISO (fallback)
+  ended_at?: string                     // ISO (fallback)
+  duration_ms?: number
+  total_duration_seconds?: number
+  duration_seconds?: number             // backup
+  duration?: number                     // backup
+  recording_url?: string
+  transcript?: string | Array<{ role?: string; speaker?: string; content?: string; text?: string }>
+  transcript_object?: Array<{ role?: string; content?: string; words?: unknown[] }>
+  disconnection_reason?: string
+  user_sentiment?: string
+  call_successful?: boolean
   call_analysis?: {
     call_summary?: string
+    user_sentiment?: string
+    call_successful?: boolean
+    in_voicemail?: boolean
     custom_analysis_data?: DaptaCustomAnalysis
     [k: string]: unknown
   }
-  data?: {
+  dynamic_variables?: {
     lead_id?: string
+    nombre?: string
+    empresa?: string
+    vacante?: string
+    presupuesto?: string
+    puesto?: string
+    notas?: string
     [k: string]: unknown
   }
+  cost?: unknown
+  credits_consumed?: number
   [k: string]: unknown
+}
+
+export type DaptaPostCallPayload = {
+  // El shape REAL es { call: {...todo...} }, pero aceptamos los legados por si
+  // algún día Dapta o un proxy nos manda con estructura distinta.
+  call?: DaptaCallObject
+  event?: string
+  call_analysis?: DaptaCallObject['call_analysis']  // legacy, si viene en raíz
+  data?: { lead_id?: string; [k: string]: unknown } // legacy
+  // Acepta también shape "flat" — todo en raíz (algunos webhooks lo hacen)
+  call_id?: string
+  to_number?: string
+  from_number?: string
+  duration_ms?: number
+  total_duration_seconds?: number
+  [k: string]: unknown
+}
+
+/**
+ * Normaliza un payload Dapta a una forma estándar consumible por el handler.
+ *
+ * Acepta tres variantes:
+ *   - Shape oficial Daniela: `{ call: {...todo, call_analysis, dynamic_variables} }`
+ *   - Shape legado HubSpot:  `{ event, call, call_analysis, data: { lead_id } }`
+ *   - Shape flat:            `{ call_id, to_number, ... }` (raíz)
+ *
+ * Devuelve los campos ya extraídos — el handler los consume sin lógica condicional.
+ */
+export function extractPostCallFields(payload: DaptaPostCallPayload): {
+  callId: string | null
+  agentId: string | null
+  agentName: string | null
+  toNumber: string | null
+  fromNumber: string | null
+  rawStatus: string | null
+  durationSeconds: number | null
+  startedAtIso: string | null
+  endedAtIso: string | null
+  recordingUrl: string | null
+  transcript: unknown
+  summary: string | null
+  customAnalysis: DaptaCustomAnalysis
+  leadIdFromPayload: string | null
+  userSentiment: string | null
+} {
+  // Si viene wrapped en `call`, usamos eso; sino el payload mismo es el call.
+  const c: DaptaCallObject = (payload.call as DaptaCallObject) || (payload as DaptaCallObject)
+
+  // Status: puede venir como call_status (Daniela) o status (legado)
+  const rawStatus = c.call_status || c.status || (payload as { status?: string }).status || null
+
+  // Duración: priorizar duration_ms (ms) → segundos. Si no, total_duration_seconds.
+  let durationSeconds: number | null = null
+  if (typeof c.duration_ms === 'number') durationSeconds = Math.round(c.duration_ms / 1000)
+  else if (typeof c.total_duration_seconds === 'number') durationSeconds = Math.round(c.total_duration_seconds)
+  else if (typeof c.duration_seconds === 'number') durationSeconds = c.duration_seconds
+  else if (typeof c.duration === 'number') durationSeconds = c.duration
+
+  // Started/Ended: epoch MS → ISO si están como number, sino usar ISO directo.
+  const startedAtIso: string | null = typeof c.start_timestamp === 'number'
+    ? new Date(c.start_timestamp).toISOString()
+    : (c.started_at || null)
+  const endedAtIso: string | null = typeof c.end_timestamp === 'number'
+    ? new Date(c.end_timestamp).toISOString()
+    : (c.ended_at || null)
+
+  // call_analysis puede venir DENTRO de call (Daniela) o en raíz (legado)
+  const analysis = c.call_analysis || payload.call_analysis || {}
+  const customAnalysis = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
+  const summary = analysis.call_summary || customAnalysis.resumen_detallado || null
+
+  // lead_id: prioridad — dynamic_variables (real Daniela) > data.lead_id (legado)
+  const leadIdFromPayload =
+    (c.dynamic_variables?.lead_id as string | undefined) ||
+    (payload.data?.lead_id as string | undefined) ||
+    null
+
+  return {
+    callId: c.call_id || (payload as { call_id?: string }).call_id || null,
+    agentId: c.agent_id || null,
+    agentName: c.agent_name || null,
+    toNumber: c.to_number || (payload as { to_number?: string }).to_number || null,
+    fromNumber: c.from_number || (payload as { from_number?: string }).from_number || null,
+    rawStatus,
+    durationSeconds,
+    startedAtIso,
+    endedAtIso,
+    recordingUrl: c.recording_url || null,
+    transcript: c.transcript_object || c.transcript || null,
+    summary,
+    customAnalysis,
+    leadIdFromPayload,
+    userSentiment: c.user_sentiment || analysis.user_sentiment || null,
+  }
 }
 
 /**

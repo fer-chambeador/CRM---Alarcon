@@ -99,7 +99,9 @@ export async function POST(req: NextRequest) {
     to_number: l.telefono,
     from_number: process.env.DAPTA_FROM_NUMBER || null,
     agent_name: process.env.DAPTA_AGENT_NAME_DEFAULT || 'Daniela',
-    status: triggerResult.ok ? 'queued' : 'failed',
+    // 'dialing' = se mandó el trigger a Dapta, esperamos el post-call que la mueva a completed/failed.
+    // 'queued' se reserva para llamadas agendadas que aún no se disparan.
+    status: triggerResult.ok ? 'dialing' : 'failed',
     triggered_by: body.triggered_by || null,
     trigger_reason: body.trigger_reason || 'manual',
     error_message: triggerResult.ok ? null : (triggerResult.error || 'unknown'),

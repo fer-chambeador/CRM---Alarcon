@@ -6,6 +6,7 @@ import {
   type DaptaCustomAnalysis,
   normalizeDaptaStatus,
   deriveAccionables,
+  extractPostCallFields,
 } from '@/lib/dapta'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertLlamadaPidioLinkPago, alertLlamadaPidioPresentacion } from '@/lib/slackAlertDapta'
@@ -16,11 +17,13 @@ export const maxDuration = 30
 /**
  * POST /api/dapta/post-call?secret=<DAPTA_POST_CALL_SECRET>
  *
- * Recibe el webhook post-call de Dapta. Forma esperada (ver lib/dapta.ts):
- *   { event, call: {...}, call_analysis: { call_summary, custom_analysis_data }, data: { lead_id? } }
+ * Recibe el webhook post-call de Dapta/Daniela. El payload REAL tiene TODO bajo
+ * `call.*` (call_analysis, dynamic_variables.lead_id, to_number, etc.). Para
+ * resiliencia, también aceptamos shape legado HubSpot (`event, call, call_analysis, data`).
+ * Ver `extractPostCallFields` en `lib/dapta.ts` que centraliza la extracción.
  *
  * Estrategia de matching:
- *   1. data.lead_id (lo mandamos nosotros en el trigger — más confiable)
+ *   1. dynamic_variables.lead_id (lo mandamos nosotros en el trigger — más confiable)
  *   2. call.call_id existente en `llamadas`
  *   3. fallback: lead por teléfono (to_number)
  *
@@ -39,15 +42,16 @@ export async function POST(req: NextRequest) {
   const payload = await req.json().catch(() => null) as DaptaPostCallPayload | null
   if (!payload) return NextResponse.json({ error: 'invalid payload' }, { status: 400 })
 
-  const supabase = createServiceClient()
-  const call = payload.call || {}
-  const analysis = payload.call_analysis || {}
-  const customData = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
-  const data = payload.data || {}
+  // Log defensivo: si algo falla, queremos ver el shape exacto que recibimos
+  console.log('Dapta post-call payload keys:', Object.keys(payload), payload.call ? `call.keys=${Object.keys(payload.call).slice(0, 20).join(',')}` : '(no call)')
 
-  const daptaCallId = call.call_id || null
-  const leadIdFromData = (data.lead_id as string | undefined) || null
-  const toNumber = call.to_number ? (normalizeMexicanPhone(call.to_number) || call.to_number) : null
+  const supabase = createServiceClient()
+  const f = extractPostCallFields(payload)
+
+  const daptaCallId = f.callId
+  const toNumber = f.toNumber ? (normalizeMexicanPhone(f.toNumber) || f.toNumber) : null
+  const fromNumber = f.fromNumber ? (normalizeMexicanPhone(f.fromNumber) || f.fromNumber) : null
+  const customData = f.customAnalysis
 
   // ── 1) Resolver lead + llamada existente ──
   let llamadaId: string | null = null
@@ -66,13 +70,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (b) Si tenemos lead_id de nuestro trigger, agarrar la llamada queued más reciente sin call_id
-  if (!llamadaId && leadIdFromData) {
-    leadId = leadIdFromData
+  // (b) Si tenemos lead_id de dynamic_variables, agarrar la llamada queued más reciente sin call_id
+  if (!llamadaId && f.leadIdFromPayload) {
+    leadId = f.leadIdFromPayload
     const { data: latestQueued } = await supabase
       .from('llamadas')
       .select('id')
-      .eq('lead_id', leadIdFromData)
+      .eq('lead_id', f.leadIdFromPayload)
       .is('dapta_call_id', null)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -95,33 +99,33 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2) Build update/insert payload ──
-  const status = normalizeDaptaStatus(call.status)
-  const duration = (call.duration_seconds || call.duration || null) as number | null
+  const status = normalizeDaptaStatus(f.rawStatus)
   const accionables = deriveAccionables(customData)
 
   const fields: Record<string, unknown> = {
     dapta_call_id: daptaCallId,
     lead_id: leadId,
-    agent_id: call.agent_id || null,
-    agent_name: call.agent_name || process.env.DAPTA_AGENT_NAME_DEFAULT || 'Daniela',
+    agent_id: f.agentId,
+    agent_name: f.agentName || process.env.DAPTA_AGENT_NAME_DEFAULT || 'Daniela',
     status,
     to_number: toNumber,
-    from_number: call.from_number ? (normalizeMexicanPhone(call.from_number) || call.from_number) : null,
-    duration_seconds: duration,
-    recording_url: call.recording_url || null,
-    transcript: call.transcript || null,
-    summary: analysis.call_summary || customData.resumen_detallado || null,
+    from_number: fromNumber,
+    duration_seconds: f.durationSeconds,
+    recording_url: f.recordingUrl,
+    transcript: f.transcript,
+    summary: f.summary,
     custom_analysis: customData,
     outcome: customData.outcome || null,
-    sentimiento: customData.sentimiento || null,
+    sentimiento: customData.sentimiento || (f.userSentiment ? f.userSentiment.toLowerCase() : null),
     interes_real: customData.interes_real || null,
     pidio_link_pago: accionables.pidio_link_pago,
     pidio_presentacion: accionables.pidio_presentacion,
     agendar_seguimiento: accionables.agendar_seguimiento,
-    started_at: call.started_at || null,
-    ended_at: call.ended_at || null,
+    started_at: f.startedAtIso,
+    ended_at: f.endedAtIso,
   }
-  // Limpiar undefined
+  // Limpiar undefined y null en columnas que tienen defaults (mantenemos null
+  // explícito solo para campos que aceptan null, p.ej. recording_url)
   for (const k of Object.keys(fields)) {
     if (fields[k] === undefined) delete fields[k]
   }
@@ -160,7 +164,7 @@ export async function POST(req: NextRequest) {
     await supabase.from('lead_actividad').insert({
       lead_id: leadId,
       tipo: 'dapta_call_completed',
-      descripcion: buildActivityDescription(status, duration, customData),
+      descripcion: buildActivityDescription(status, f.durationSeconds, customData),
       metadata: {
         source: 'dapta',
         llamada_id: llamadaId,
@@ -185,9 +189,9 @@ export async function POST(req: NextRequest) {
         const callSnapshot = {
           id: llamadaId,
           dapta_call_id: daptaCallId,
-          duration_seconds: duration,
-          summary: (fields.summary as string | null) || null,
-          recording_url: call.recording_url || null,
+          duration_seconds: f.durationSeconds,
+          summary: f.summary,
+          recording_url: f.recordingUrl,
           custom_analysis: customData,
         }
         if (accionables.pidio_link_pago) {

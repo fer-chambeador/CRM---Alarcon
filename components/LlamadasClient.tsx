@@ -249,7 +249,7 @@ export default function LlamadasClient() {
 
           <div className={styles.filterBar}>
             <FilterChip label="Todos los status" active={filterStatus === 'todos'} onClick={() => setFilterStatus('todos')} />
-            {(['completed', 'connected', 'queued', 'no_answer', 'voicemail', 'failed'] as const).map(s => (
+            {(['completed', 'connected', 'dialing', 'queued', 'no_answer', 'voicemail', 'failed'] as const).map(s => (
               <FilterChip key={s} label={STATUS_LABEL[s]} active={filterStatus === s} onClick={() => setFilterStatus(s)} />
             ))}
             <span style={{ width: 12 }} />
