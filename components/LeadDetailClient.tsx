@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Sidebar } from './CommandCenter'
+import styles from './LeadDetailClient.module.css'
 import { STATUS_LABELS, statusColor, fmtMoney } from '@/lib/status'
 import type { Lead } from '@/lib/supabase'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -58,24 +59,24 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', height: '100vh' }}>
-        <aside style={{ width: 248, padding: 26, background: 'var(--glass)', borderRight: '1px solid var(--border)' }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 30 }}>⚡ Chambas CRM</div>
+      <div className={styles.root}>
+        <aside className={styles.sidebar}>
+          <div className={styles.logo}>⚡ Chambas CRM</div>
           <Sidebar active="leads" />
         </aside>
-        <main style={{ flex: 1, padding: 40, color: 'var(--text3)' }}>Cargando…</main>
+        <main className={styles.main} style={{ color: 'var(--text3)' }}>Cargando…</main>
       </div>
     )
   }
 
   if (!lead) {
     return (
-      <div style={{ display: 'flex', height: '100vh' }}>
-        <aside style={{ width: 248, padding: 26, background: 'var(--glass)', borderRight: '1px solid var(--border)' }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 30 }}>⚡ Chambas CRM</div>
+      <div className={styles.root}>
+        <aside className={styles.sidebar}>
+          <div className={styles.logo}>⚡ Chambas CRM</div>
           <Sidebar active="leads" />
         </aside>
-        <main style={{ flex: 1, padding: 40, color: 'var(--text3)' }}>
+        <main className={styles.main} style={{ color: 'var(--text3)' }}>
           Lead no encontrado.{' '}
           <Link href="/leads" style={{ color: 'var(--accent)' }}>← Volver a leads</Link>
         </main>
@@ -84,20 +85,13 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <aside style={{
-        width: 248, flexShrink: 0,
-        background: 'var(--glass)', backdropFilter: 'blur(20px)',
-        borderRight: '1px solid var(--border)',
-        padding: '26px 18px 22px', display: 'flex', flexDirection: 'column', gap: 6,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px 22px', fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 800, borderBottom: '1px solid var(--border)', marginBottom: 10 }}>
-          ⚡ Chambas CRM
-        </div>
+    <div className={styles.root}>
+      <aside className={styles.sidebar}>
+        <div className={styles.logo}>⚡ Chambas CRM</div>
         <Sidebar active="leads" />
       </aside>
 
-      <main style={{ flex: 1, overflow: 'auto', padding: '30px 40px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <main className={styles.main}>
         <div>
           <Link href="/leads" style={{ color: 'var(--text3)', fontSize: 13, textDecoration: 'none' }}>
             ← Volver a Leads
@@ -107,7 +101,7 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
         {/* Header del lead */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20 }}>
           <div>
-            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 800, letterSpacing: '-0.025em', color: 'var(--text)', margin: 0 }}>
+            <h1 className={styles.pageTitle}>
               {lead.nombre || lead.email}
             </h1>
             <div style={{ marginTop: 6, fontSize: 14, color: 'var(--text2)' }}>
@@ -132,11 +126,7 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
         </header>
 
         {/* Grid de datos */}
-        <section style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 14,
-        }}>
+        <section className={styles.dataGrid}>
           <DataCard label="Email"     value={lead.email} />
           <DataCard label="Teléfono"  value={lead.telefono} />
           <DataCard label="Canal"     value={lead.canal_adquisicion} />

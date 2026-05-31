@@ -429,7 +429,7 @@ function CampaignDetailModal({ campaign, onClose }: { campaign: Campaign; onClos
         {!detail && <div className={styles.help}>Cargando recipients…</div>}
         {detail && (
           <div style={{ maxHeight: 400, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 12 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table className={styles.recipientsTable} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: 'var(--glass-strong)', textAlign: 'left' }}>
                   <th style={{ padding: '8px 12px' }}>Nombre</th>
@@ -442,11 +442,11 @@ function CampaignDetailModal({ campaign, onClose }: { campaign: Campaign; onClos
                 {detail.recipients.map(r => {
                   const outcome = r.paid_at ? '💰 Pagó' : r.scheduled_call_at ? '📅 Agendó' : r.responded_at ? '💬 Respondió' : r.send_error ? '⚠️ Falló' : r.sent_at ? '✓ Enviado' : 'pendiente'
                   return (
-                    <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                    <tr key={r.id} className={styles.recipientRow} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '8px 12px' }}>{r.nombre || r.leads?.nombre || '—'}</td>
-                      <td style={{ padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11 }}>{r.phone}</td>
-                      <td style={{ padding: '8px 12px' }}>{r.leads?.status || '—'}</td>
-                      <td style={{ padding: '8px 12px' }}>{outcome}</td>
+                      <td data-label="Teléfono" style={{ padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11 }}>{r.phone}</td>
+                      <td data-label="Status CRM" style={{ padding: '8px 12px' }}>{r.leads?.status || '—'}</td>
+                      <td data-label="Outcome" style={{ padding: '8px 12px' }}>{outcome}</td>
                     </tr>
                   )
                 })}

@@ -76,7 +76,7 @@ export default function SettingsClient() {
         <div className={styles.topBar}>
           <h1 className={styles.pageTitle}>⚙ Settings</h1>
         </div>
-        <div style={{ padding: '0 32px 32px', display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 720 }}>
+        <div style={{ padding: '0 clamp(14px, 4vw, 32px) 32px', display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 720 }}>
           {flash && (
             <div style={{
               background: flash.startsWith('✓') ? 'rgba(34,214,138,0.1)' : 'rgba(240,90,90,0.1)',

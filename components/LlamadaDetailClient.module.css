@@ -165,3 +165,45 @@
 }
 .empty { color: var(--text3); font-size: 13px; padding: 16px 0; text-align: center; }
 .muted { color: var(--text3); }
+
+@media (max-width: 768px) {
+  .root {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .sidebar {
+    width: 100%;
+    flex-direction: column;
+    padding: 14px 14px 12px;
+    gap: 6px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+  .logo {
+    padding: 0 4px 12px;
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .main {
+    overflow: visible;
+  }
+  .topBar {
+    padding: 16px 16px 12px;
+    flex-wrap: wrap;
+  }
+  .title {
+    font-size: 22px;
+  }
+  .body {
+    overflow: visible;
+    padding: 8px 14px 32px;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .transcript {
+    max-height: none;
+  }
+}

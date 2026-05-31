@@ -1165,6 +1165,7 @@
   .logo { padding: 0 4px 12px; font-size: 18px; margin-bottom: 6px; }
   .sidebarNav { flex-direction: row; padding: 0; overflow-x: auto; gap: 4px; }
   .navLink { padding: 8px 10px; font-size: 12.5px; white-space: nowrap; }
+  .main { overflow: visible; }
   .filterSection { padding: 6px 4px; }
   .stats, .statsGrid { padding: 8px 4px; grid-template-columns: 1fr 1fr; }
   .topBar { padding: 14px 16px 8px; flex-wrap: wrap; }

@@ -271,7 +271,7 @@ export default function RecurrentesAnalyticsClient() {
 
               {/* Distribución por contrato */}
               <Card title="Tipo de contrato" subtitle="Calculado a partir de la mediana de gaps entre pagos">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14 }}>
                   {(['mensual', 'semestral', 'anual'] as TipoContrato[]).map(c => (
                     <div key={c} style={{
                       background: 'var(--glass)', border: '1px solid var(--border)',
