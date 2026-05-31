@@ -152,7 +152,6 @@ export default function OutboundClient() {
             <Card label="Total pendiente" value={summary.total.toLocaleString('es-MX')} sub="aprobaciones esperando tu OK" />
             <Card label="📨 Mensajes Vambe" value={summary.vambe.toLocaleString('es-MX')} sub="leads warm/cold sin contactar" />
             <Card label="📞 Llamadas Dapta" value={summary.dapta.toLocaleString('es-MX')} sub="warm/cold con llamada agendada" />
-            <Card label="🔥 Hot leads" value="manual" sub="los apretados los llamas tú" />
           </div>
 
           {/* Tab bar */}
@@ -178,9 +177,9 @@ export default function OutboundClient() {
                     <th>Lead</th>
                     <th>Vacante / Empresa</th>
                     <th>Teléfono</th>
-                    <th>Score</th>
-                    <th>{tab === 'mensajes' ? 'Edad' : 'Cuándo'}</th>
-                    <th style={{ width: 360 }}>Acciones</th>
+                    <th style={{ textAlign: 'center' }}>Score</th>
+                    <th>{tab === 'mensajes' ? 'Fecha registro' : 'Cuándo'}</th>
+                    <th style={{ width: 280 }}>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -196,9 +195,10 @@ export default function OutboundClient() {
                         {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
                       </td>
                       <td className={styles.mono}>{a.leads?.telefono || '—'}</td>
-                      <td>
+                      <td style={{ textAlign: 'center' }}>
                         <span style={{
-                          display: 'inline-block', padding: '2px 8px', borderRadius: 999,
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          padding: '4px 10px', borderRadius: 999, minWidth: 56,
                           fontSize: 11, fontWeight: 600,
                           background: scoreBg(a.score_snapshot),
                           color: scoreFg(a.score_snapshot),
@@ -207,7 +207,10 @@ export default function OutboundClient() {
                       </td>
                       <td className={styles.muted} style={{ fontSize: 12 }}>
                         {tab === 'mensajes'
-                          ? fmtRelative(a.leads?.created_at || null)
+                          ? <>
+                            <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
+                            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtRelative(a.leads?.created_at || null)}</div>
+                          </>
                           : <>
                             <div style={{ color: '#b8a3ff', fontWeight: 600 }}>{fmtDate(a.scheduled_at)}</div>
                             <div className={styles.muted} style={{ fontSize: 11 }}>{fmtFuture(a.scheduled_at)}</div>

@@ -354,11 +354,22 @@ async function promotePendingLead(
       await supabase.from('leads').update(updates).eq('id', lead.id)
       resultLead = { ...lead, ...updates } as Lead
     }
-  } else if (form.email) {
-    // Crear nuevo lead — el form tiene que tener al menos email
+  } else {
+    // Crear nuevo lead. Si no hay email pero sí teléfono, generamos un email
+    // placeholder vambe-{telefono}@chambas.ai para no perder el lead.
+    let email = form.email
+    if (!email) {
+      const tel = form.telefono || fields.telefono
+      if (!tel) {
+        // No hay ni email ni teléfono — no podemos crear nada útil
+        return { lead: null, created: false, form }
+      }
+      const digits = String(tel).replace(/\D/g, '').slice(-10)
+      email = `vambe-${digits}@chambas.ai`
+    }
     const insert: Record<string, unknown> = {
       ...fields,
-      email: form.email,
+      email,
       status: 'nuevo',
       tipo_evento: 'vambe_form',
       monto: 1160,
@@ -373,9 +384,6 @@ async function promotePendingLead(
     }
     resultLead = data as Lead
     created = true
-  } else {
-    // No hay email — no podemos crear
-    return { lead: null, created: false, form }
   }
 
   // 4) Limpiar el pending
