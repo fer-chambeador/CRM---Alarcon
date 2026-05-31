@@ -280,7 +280,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   return (
     <nav className={styles.sidebarNav}>
       {link('/leads', 'leads', 'Leads', '📋')}
-      {link('/aprobaciones', 'aprobaciones', 'Aprobaciones', '✋')}
+      {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
       {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
       {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
       {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}

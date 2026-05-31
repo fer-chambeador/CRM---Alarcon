@@ -1,7 +1,7 @@
-import AprobacionesClient from '@/components/AprobacionesClient'
+import { redirect } from 'next/navigation'
 
-export const dynamic = 'force-dynamic'
-
-export default function AprobacionesPage() {
-  return <AprobacionesClient />
+// Redirect del URL viejo al nuevo. Mantenemos para que cualquier bookmark
+// o link interno siga funcionando.
+export default function AprobacionesRedirect() {
+  redirect('/outbound')
 }

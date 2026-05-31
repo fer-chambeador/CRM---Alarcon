@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { sendTemplate } from '@/lib/vambe'
 import { triggerDaptaCall } from '@/lib/dapta'
+import { getOutboundTemplate } from '@/lib/systemSettings'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -63,14 +64,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // 2. Ejecutar según tipo
   try {
     if (a.tipo === 'vambe_template') {
-      const templateId = a.template_id || process.env.VAMBE_AGENDA_TEMPLATE_ID
+      // Resolver template: DB setting > env var > fila a.template_id (legacy).
+      // Si el user cambia el template en Settings, las nuevas aprobaciones usan el nuevo.
+      const dbTemplate = await getOutboundTemplate(supabase)
+      const templateId = dbTemplate?.template_id || a.template_id || process.env.VAMBE_AGENDA_TEMPLATE_ID
+      const templateName = dbTemplate?.template_name || a.template_name || 'outbound_primer_mensaje_sales'
       if (!templateId) {
         await supabase.from('aprobaciones').update({
           status: 'failed',
-          error_message: 'VAMBE_AGENDA_TEMPLATE_ID no configurado',
+          error_message: 'Template Vambe no configurado. Ve a Settings → Templates outbound.',
           decided_at: new Date().toISOString(),
         }).eq('id', a.id)
-        return NextResponse.json({ ok: false, error: 'template_id no configurado' }, { status: 500 })
+        return NextResponse.json({ ok: false, error: 'template no configurado' }, { status: 500 })
       }
 
       const result = await sendTemplate({
@@ -96,8 +101,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'template_sent',
-        descripcion: `📨 Mensaje Vambe enviado: ${a.template_name || templateId}`,
-        metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, template_name: a.template_name },
+        descripcion: `📨 Mensaje Vambe enviado: ${templateName}`,
+        metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, template_name: templateName },
       })
 
       return NextResponse.json({ ok: true, tipo: 'vambe_template', result })
