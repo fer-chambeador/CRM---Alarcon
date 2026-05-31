@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase, type Lead } from '@/lib/supabase'
@@ -307,10 +308,16 @@ const MOBILE_TABS = [
 
 export function MobileTabBar({ active }: { active: string }) {
   const [moreOpen, setMoreOpen] = useState(false)
+  // Portal to <body> so the fixed bar escapes ancestors with backdrop-filter
+  // (the .sidebar uses backdrop-filter, which would otherwise become the
+  // containing block for position:fixed and pin the bar to the top block).
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
   // recurrentes sub-page should keep the Recurrentes tab lit
   const norm = active === 'recurrentes-analitica' ? 'recurrentes' : active
   const moreActive = norm === 'templates' || norm === 'settings' || norm === 'aprobaciones'
-  return (
+  if (!mounted) return null
+  return createPortal(
     <>
       {moreOpen && (
         <div className={styles.mobileSheetOverlay} onClick={() => setMoreOpen(false)}>
@@ -345,7 +352,8 @@ export function MobileTabBar({ active }: { active: string }) {
           <span className={styles.mobileTabLabel}>Más</span>
         </button>
       </nav>
-    </>
+    </>,
+    document.body
   )
 }
 
