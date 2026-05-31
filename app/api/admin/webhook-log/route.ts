@@ -13,14 +13,14 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
 
-  let q = supabase.from('vambe_webhook_log').select('id, event_type, ai_contact_id, created_at, payload').gte('created_at', since).order('created_at', { ascending: false }).limit(limit)
+  let q = supabase.from('vambe_webhook_log').select('id, event_type, ai_contact_id, received_at, payload').gte('received_at', since).order('received_at', { ascending: false }).limit(limit)
   if (typeFilter) q = q.eq('event_type', typeFilter)
   if (contactId) q = q.eq('ai_contact_id', contactId)
 
   const { data, error } = await q
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const rows = (data || []) as Array<{ id: string; event_type: string; ai_contact_id: string | null; created_at: string; payload: Record<string, unknown> }>
+  const rows = (data || []) as Array<{ id: string; event_type: string; ai_contact_id: string | null; received_at: string; payload: Record<string, unknown> }>
   const byType: Record<string, number> = {}
   for (const r of rows) byType[r.event_type] = (byType[r.event_type] || 0) + 1
 
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     rows: rows.slice(0, 20).map(r => ({
       event_type: r.event_type,
       ai_contact_id: r.ai_contact_id,
-      created_at: r.created_at,
+      received_at: r.received_at,
       payload_keys: Object.keys(r.payload || {}),
       stage_new: ((r.payload as Record<string, unknown>)?.data as Record<string, unknown>)?.new_stage_id || ((r.payload as Record<string, unknown>)?.data as Record<string, unknown>)?.newStageId || null,
     })),
