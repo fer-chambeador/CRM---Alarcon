@@ -387,21 +387,52 @@ type LeadMatch = { id: string; email: string; nombre: string | null; telefono: s
 
 /**
  * Decide si un evento del Calendar es relevante para importar al CRM.
- * Filtro conservador para evitar que reuniones personales / 1:1s caigan al CRM.
  *
- * Considera relevante un evento si:
- *  - El título contiene "Llamada" o "Vendedor" o "Chambas" (case insensitive)
- *  - O la descripción tiene "Booked by" (formato del Google Appointment Scheduler / onboarding)
- *  - O la descripción menciona "Chambas Ay"
- *  - O fue creado por el Appointment Scheduler (organizer típico viene de calendars del scheduler)
+ * Reglas:
+ *  - EXCLUSIONES (gana sobre includes): eventos internos del equipo
+ *    como "ChambasAI Ops & Growth", "Planning", "Review", "Standup",
+ *    "1:1", "team", "sync interno", "reunión interna".
+ *  - INCLUSIONES — un evento es relevante si:
+ *      · Title incluye "llamada" (cubre "Llamada - Vendedor (X)",
+ *        "Nombre <> Llamada ChambasAI <> Nombre +52...")
+ *      · OR title incluye "vendedor"
+ *      · OR description tiene "Booked by" (Google Appointment Scheduler / onboarding)
+ *
+ * NOTA: "Chambas" sin "Llamada" ya no es suficiente — eventos internos
+ * como "ChambasAI Ops & Growth" lo contienen. Solo entran si el title
+ * tiene "Llamada" explícitamente.
  */
+const INTERNAL_KEYWORDS = [
+  'ops & growth',
+  'ops growth',
+  'planning',
+  'review',
+  'standup',
+  'stand-up',
+  '1:1',
+  '1 a 1',
+  'team sync',
+  'sync interno',
+  'reunión interna',
+  'reunion interna',
+  'retro',
+  'roadmap',
+  'all hands',
+  'all-hands',
+]
+
 export function isRelevantCalendarEvent(ev: GCalEvent): boolean {
   if (ev.status === 'cancelled') return false
   if (!ev.start?.dateTime) return false  // skip all-day events
   const title = (ev.summary || '').toLowerCase()
   const desc = (ev.description || '').toLowerCase()
-  if (title.includes('llamada') || title.includes('vendedor') || title.includes('chambas')) return true
-  if (desc.includes('booked by') || desc.includes('chambas ay') || desc.includes('chambas')) return true
+
+  // Exclude internal team events first
+  if (INTERNAL_KEYWORDS.some(k => title.includes(k))) return false
+
+  // Includes — solo si hay señal clara de que es una llamada comercial
+  if (title.includes('llamada') || title.includes('vendedor')) return true
+  if (desc.includes('booked by')) return true
   return false
 }
 
