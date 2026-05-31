@@ -385,13 +385,13 @@ export default function RecurrentesClient() {
                           {c.email && <div className={styles.mono} style={{ marginTop: 2 }}>{c.email}</div>}
                           {c.notas && <div className={styles.notas} title={c.notas}>📝 {c.notas.slice(0, 60)}{c.notas.length > 60 ? '…' : ''}</div>}
                         </td>
-                        <td>
+                        <td data-label="Estatus">
                           <span className={styles.statusChip} style={{ '--ec': ESTATUS_COLOR[c.estatus] } as React.CSSProperties}>
                             {ESTATUS_LABEL[c.estatus]}
                           </span>
                         </td>
-                        <td><span className={styles.tipoChip}>{TIPO_CLIENTE_LABEL[c.tipo_cliente]}</span></td>
-                        <td>
+                        <td data-label="Tipo"><span className={styles.tipoChip}>{TIPO_CLIENTE_LABEL[c.tipo_cliente]}</span></td>
+                        <td data-label="Contrato">
                           <span className={styles.contratoChip}>{CONTRATO_LABEL[c.tipo_contrato]}</span>
                           {c.mes_renovacion && (
                             <div className={styles.renovacionHint} title="Mes estimado de próxima renovación">
@@ -399,12 +399,12 @@ export default function RecurrentesClient() {
                             </div>
                           )}
                         </td>
-                        <td>{fmtDate(c.fecha_inicio)}</td>
-                        <td>{fmtDate(c.ultima_aparicion)}</td>
-                        <td className={styles.right}>{c.meses_renovando}</td>
-                        <td className={styles.right + ' ' + styles.mono}>{fmtMoney(avgTicket(c))}</td>
-                        <td className={styles.right + ' ' + styles.money}>{fmtMoney(c.total_pagado)}</td>
-                        <td>
+                        <td data-label="Inicio">{fmtDate(c.fecha_inicio)}</td>
+                        <td data-label="Último pago">{fmtDate(c.ultima_aparicion)}</td>
+                        <td data-label="Meses renov." className={styles.right}>{c.meses_renovando}</td>
+                        <td data-label="Ticket prom." className={styles.right + ' ' + styles.mono}>{fmtMoney(avgTicket(c))}</td>
+                        <td data-label="Total" className={styles.right + ' ' + styles.money}>{fmtMoney(c.total_pagado)}</td>
+                        <td data-label="Método de pago">
                           {c.canales.length === 0
                             ? <span className={styles.empty}>—</span>
                             : c.canales.map((ch, i) => <span key={i} className={styles.canalChip}>{ch}</span>)}

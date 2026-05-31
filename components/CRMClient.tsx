@@ -741,25 +741,25 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         </div>
                       </div>
                     </td>
-                    <td className={styles.empresaCell} onClick={e => e.stopPropagation()}>
+                    <td data-label="Empresa" className={styles.empresaCell} onClick={e => e.stopPropagation()}>
                       {lead.empresa
                         ? <span className={styles.empresaCopy} onClick={() => navigator.clipboard.writeText(lead.empresa!)} title="Click para copiar">
                             {lead.empresa} <span className={styles.copyIcon}>📋</span>
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td data-label="Teléfono" onClick={e => e.stopPropagation()}>
                       {lead.telefono
                         ? <span className={styles.telefonoCell} onClick={() => navigator.clipboard.writeText(lead.telefono!)} title="Click para copiar">
                             {lead.telefono} <span className={styles.copyIcon}>📋</span>
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td>{(lead.estado || phoneToState(lead.telefono))
+                    <td data-label="Ubicación">{(lead.estado || phoneToState(lead.telefono))
                       ? <span className={styles.ubicacionTag} title={lead.estado ? 'manual' : 'auto desde LADA'}>{lead.estado || phoneToState(lead.telefono)}</span>
                       : <span className={styles.empty}>—</span>}</td>
-                    <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td data-label="Canal">{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
+                    <td data-label="Status" onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         <button className={styles.statusInlineBtn}
                           title="Click para cambiar status"
@@ -783,8 +783,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         })()}
                       </div>
                     </td>
-                    <td className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
-                    <td>
+                    <td data-label="Monto" className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
+                    <td data-label="Presupuesto">
                       {lead.presupuesto
                         ? <span className={styles.presupuestoTag}
                             style={{ '--pc': PRESUPUESTO_COLORS[lead.presupuesto as Presupuesto] } as React.CSSProperties}>
@@ -792,13 +792,13 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           </span>
                         : <span className={styles.empty}>No registrado</span>}
                     </td>
-                    <td>
+                    <td data-label="Contacto">
                       {lead.veces_contactado > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td data-label="Fecha" className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
+                    <td className={styles.rowDeleteCell} onClick={e => e.stopPropagation()}>
                       <button className={styles.rowDeleteBtn} onClick={async () => {
                         if (!confirm(`¿Eliminar ${lead.email}?`)) return
                         await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
