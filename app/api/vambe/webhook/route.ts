@@ -399,16 +399,19 @@ async function handleTicketClosed(supabase: Supabase, aiContactId: string | unde
 /**
  * Mapeo de stages de Vambe → status del CRM.
  *
- * Default hardcoded (los UUIDs reales del pipeline en uso). Si querés overrideartlo
+ * Default hardcoded (los UUIDs reales del pipeline en uso). Si querés overridear
  * a nivel ambiente, configurá `VAMBE_STAGE_MAP` con JSON; mergea encima del default.
  *
- * Stages no mapeados (Lanzamiento, Asistencia Humana, Contactados WhatsApp) NO se
- * convierten a status del CRM — solo se guarda el `vambe_stage_id` y se mantiene
- * el status actual del lead. Esto es intencional: esos stages son cold outreach
- * o escalaciones, no avances del funnel.
+ * REGLA: cualquier contacto que la AI tocó (sea cual sea su stage) entra al CRM
+ * como `nuevo`. Solo "Ganados" / "Perdidos" son terminales. La idea es que el
+ * vendedor humano vea TODO lo que pasó por Vambe — Lanzamiento incluido — y
+ * decida si vale la pena re-engaging un lead que el bot dejó atrás.
  */
 const DEFAULT_STAGE_MAP: Record<string, Lead['status']> = {
   '96c42cda-2828-45db-973c-3bc63a8141fd': 'nuevo',              // Interesado
+  '05b9af0a-9bcb-4faf-a114-bdd47517a97a': 'nuevo',              // Lanzamiento (engagement inicial)
+  'dd41a38e-3b22-42f3-a6d3-b130b9ca449f': 'nuevo',              // Asistencia Humana
+  '5847352c-f983-4e8b-b635-b19797d031a8': 'nuevo',              // Contactados via WhatsApp
   '971fe009-72d1-44fb-932b-aa94adcec4db': 'llamada_agendada',   // Agendados Consultoría
   '2fc44415-960f-4dbd-b65b-1500636fc41a': 'llamada_agendada',   // Confirmados
   'cd0ab574-c844-4346-bea3-4ddd084fcb92': 'llamada_agendada',   // Llamadas
@@ -567,12 +570,15 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
   const map = getStageMap()
   const mappedStatus = map[newStageId]
 
-  // CASO ESPECIAL: stage avanza a "Interesado" (mappedStatus === 'nuevo').
-  // Si el lead aún no existe en el CRM, lo creamos a partir del pending form.
+  // Si el lead aún no existe en el CRM, intentar promoverlo desde el pending
+  // EN CUALQUIER stage change (no solo cuando target=='nuevo'). Razón: el lead
+  // puede haber completado el form en Lanzamiento o cualquier otra etapa antes
+  // de que la AI lo mueva a Interesado. Si esperamos a Interesado para
+  // promoverlo, leads que se quedan en Lanzamiento nunca entran al CRM.
   let lead = await findLead(supabase, aiContactId, data)
   let promoted = false
 
-  if (!lead && mappedStatus === 'nuevo' && aiContactId) {
+  if (!lead && aiContactId) {
     const promotion = await promotePendingLead(supabase, aiContactId)
     if (promotion.lead) {
       lead = promotion.lead
