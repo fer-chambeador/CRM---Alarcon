@@ -270,22 +270,10 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ marginLeft: 10, fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}
-                title="Ver detalle completo con timeline"
+                title="Ver detalle completo con timeline + botón 'Ir al chat' Vambe"
               >
                 Ver detalle ↗
               </a>
-              {/* Botón 'Ir al chat' — solo si el lead vino por Vambe y tenemos su contact_id */}
-              {(lead.canal_adquisicion || '').toLowerCase().includes('vambe') && (lead as { vambe_contact_id?: string }).vambe_contact_id && (
-                <a
-                  href={`https://app.vambe.me/inbox?contact_id=${(lead as { vambe_contact_id?: string }).vambe_contact_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ marginLeft: 10, fontSize: 11, color: '#22d68a', textDecoration: 'none', fontWeight: 600 }}
-                  title="Abrir chat de este lead en Vambe"
-                >
-                  💬 Ir al chat ↗
-                </a>
-              )}
             </div>
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}

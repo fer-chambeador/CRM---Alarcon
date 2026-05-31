@@ -116,19 +116,40 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
               {lead.vacante ? `Reclutando: ${lead.vacante}` : null}
             </div>
           </div>
-          <span style={{
-            background: `${statusColor(lead.status)}22`,
-            color: statusColor(lead.status),
-            padding: '6px 14px',
-            borderRadius: 20,
-            fontSize: 13,
-            fontWeight: 700,
-            border: `1px solid ${statusColor(lead.status)}44`,
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-          }}>
-            {STATUS_LABELS[lead.status]}
-          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+            <span style={{
+              background: `${statusColor(lead.status)}22`,
+              color: statusColor(lead.status),
+              padding: '6px 14px',
+              borderRadius: 20,
+              fontSize: 13,
+              fontWeight: 700,
+              border: `1px solid ${statusColor(lead.status)}44`,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}>
+              {STATUS_LABELS[lead.status]}
+            </span>
+            {/* Botón 'Ir al chat' — solo si lead vino de Vambe y tenemos vambe_contact_id */}
+            {(lead.canal_adquisicion || '').toLowerCase().includes('vambe') && (lead as { vambe_contact_id?: string }).vambe_contact_id && (() => {
+              const pipelineId = '66b6ff34-3ec3-4972-8b90-33a3dc4e45fd'  // Pipeline de ventas Vambe
+              const contactId = (lead as { vambe_contact_id?: string }).vambe_contact_id
+              const today = new Date().toISOString().slice(0, 10)
+              const url = `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&chatContactId=${contactId}`
+              return (
+                <a href={url} target="_blank" rel="noopener noreferrer"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    background: 'linear-gradient(135deg, #22d68a, #1ab574)',
+                    color: 'white', textDecoration: 'none',
+                    padding: '8px 16px', borderRadius: 8,
+                    fontSize: 13, fontWeight: 700,
+                  }}>
+                  💬 Ir al chat ↗
+                </a>
+              )
+            })()}
+          </div>
         </header>
 
         {/* Grid de datos */}

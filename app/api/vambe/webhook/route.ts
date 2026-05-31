@@ -220,15 +220,38 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
   }
 
   // Descripción super resumida — el detalle completo queda en metadata.
-  // El user pidió que se pueda leer todo super corto en la timeline.
   const desc = isInbound
     ? `📥 cliente respondió`
     : `📨 Vambe envió mensaje`
 
-  // Dedup: si la última actividad del mismo tipo y dirección fue hace < 3 min,
-  // NO creamos otra. Solo actualizamos su metadata con el mensaje más reciente
-  // y un contador. Así una conversación de 10 mensajes seguidos del cliente
-  // aparece como una sola entrada "📥 cliente respondió (×10)".
+  // Dedup robusto contra race conditions y retries de Vambe:
+  //  1. Si Vambe nos da un message_id único, lo usamos como dedup_key.
+  //     Buscamos en metadata->>message_id; si ya existe, skip total.
+  //  2. Si no hay message_id, fallback al dedup por ventana de tiempo (3 min)
+  //     consolidando mensajes consecutivos del mismo direction en un solo row
+  //     con contador ×N.
+  const messageId = (data.message_id || data.id || data.messageId
+    || (data.payload as Record<string, unknown> | undefined)?.id
+    || (data.payload as Record<string, unknown> | undefined)?.message_id
+    || null) as string | null
+
+  if (messageId) {
+    // Ya existe activity con este mismo message_id? → skip (es retry)
+    const { data: dupe } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'vambe_message')
+      .filter('metadata->>message_id', 'eq', messageId)
+      .limit(1)
+      .maybeSingle()
+    if (dupe) {
+      // Es un retry de Vambe — skip silenciosamente
+      return
+    }
+  }
+
+  // Dedup por ventana: buscar última activity del mismo direction
   const { data: lastActivity } = await supabase
     .from('lead_actividad')
     .select('id, descripcion, metadata, created_at')
@@ -248,30 +271,41 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     const prevMeta = (lastActivity as { metadata: Record<string, unknown> }).metadata || {}
     const count = ((prevMeta.count as number) || 1) + 1
     const messages = Array.isArray(prevMeta.messages) ? prevMeta.messages : []
+    const messageIds = Array.isArray(prevMeta.message_ids) ? prevMeta.message_ids : []
     await supabase.from('lead_actividad').update({
       descripcion: `${desc} (×${count})`,
-      metadata: { ...prevMeta, count, last_text: text.slice(0, 500), messages: [...messages, { text: text.slice(0, 500), at: new Date().toISOString() }].slice(-20), source: 'vambe' },
+      metadata: {
+        ...prevMeta, count,
+        last_text: text.slice(0, 500),
+        last_message_id: messageId,
+        message_ids: messageId ? [...messageIds, messageId].slice(-20) : messageIds,
+        messages: [...messages, { text: text.slice(0, 500), at: new Date().toISOString(), id: messageId }].slice(-20),
+        source: 'vambe',
+      },
     }).eq('id', (lastActivity as { id: string }).id)
   } else {
     await supabase.from('lead_actividad').insert({
       lead_id: lead.id,
       tipo: 'vambe_message',
       descripcion: desc,
-      // Metadata persiste para iteración del flujo Vambe — análisis de qué
-      // mensajes funcionan, en qué momento responden, etc.
-      metadata: { source: 'vambe', type, direction: isInbound ? 'inbound' : 'outbound', text: text.slice(0, 500), count: 1, raw: data },
+      metadata: {
+        source: 'vambe', type,
+        direction: isInbound ? 'inbound' : 'outbound',
+        text: text.slice(0, 500),
+        message_id: messageId,
+        message_ids: messageId ? [messageId] : [],
+        count: 1,
+        raw: data,
+      },
     })
   }
 
-  // Si era 'nuevo' y vino mensaje del cliente → 'contactado'
-  if (isInbound && lead.status === 'nuevo') {
-    await supabase.from('leads').update({
-      status: 'contactado',
-      status_changed_at: new Date().toISOString(),
-      ultimo_contacto: new Date().toISOString(),
-      veces_contactado: (lead.veces_contactado || 0) + 1,
-    }).eq('id', lead.id)
-  }
+  // NOTA: REMOVIDO el auto-promote nuevo → contactado.
+  // Fer pidió que los leads de Vambe se queden en 'nuevo' hasta que él
+  // los mueva con una acción manual (Mensaje/Llamar) o el sistema lo haga
+  // por aprobación explícita en Outbound.
+  // Tracking 'ultimo_contacto' y 'veces_contactado' se mantiene si quieres
+  // reactivarlo más adelante — por ahora omitimos el update completo.
 
   // Marcar responded_at en campaign recipients si este inbound es la primera
   // respuesta del cliente a una campaña reciente.
@@ -436,12 +470,9 @@ async function handleTicket(supabase: Supabase, type: string, aiContactId: strin
     metadata: { source: 'vambe', type, ...data },
   })
 
-  if (type === 'ticket.created' && lead.status === 'nuevo') {
-    await supabase.from('leads').update({
-      status: 'contactado',
-      status_changed_at: new Date().toISOString(),
-    }).eq('id', lead.id)
-  }
+  // NOTA: REMOVIDO el auto-promote nuevo→contactado en ticket.created.
+  // Mismo principio que message.received — el lead debe quedarse en 'nuevo'
+  // hasta que Fer haga una acción manual (Mensaje/Llamar) o apruebe en /outbound.
 }
 
 async function handleTicketClosed(supabase: Supabase, aiContactId: string | undefined, data: Record<string, unknown>) {
