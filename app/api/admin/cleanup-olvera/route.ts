@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic'
 const SECRET = 'admin_cleanup_olvera_2026'
 
 const LEAD_ID = '3d1cf3e4-2a51-497c-b3d4-9de6a99ba6d0'
-const REAL_CALL_ID = '082acb75-4382-4c64-a47b-604442fb320a'  // tiene call_analysis
-const DUP_CALL_ID = 'cc577381-9aaf-4841-9d7d-6b2840608c06'   // restored, vacía
+const REAL_CALL_ID = '4a0e4753-6791-453f-a59d-0041e5a90687'  // tiene call_analysis completo
+const DUP_CALL_IDS = ['082acb75-4382-4c64-a47b-604442fb320a', 'cc577381-9aaf-4841-9d7d-6b2840608c06'] // vacías
 
 export async function POST(req: NextRequest) {
   const url = new URL(req.url)
@@ -35,9 +35,9 @@ export async function POST(req: NextRequest) {
     .eq('id', REAL_CALL_ID)
   steps.push({ step: 'link-real-call', result: linkErr ? linkErr.message : 'ok' })
 
-  // 3) Delete the dup (restored) row
-  const { error: delErr } = await supabase.from('llamadas').delete().eq('id', DUP_CALL_ID)
-  steps.push({ step: 'delete-dup', result: delErr ? delErr.message : 'ok' })
+  // 3) Delete the dup (restored) rows
+  const { error: delErr } = await supabase.from('llamadas').delete().in('id', DUP_CALL_IDS)
+  steps.push({ step: 'delete-dups', result: delErr ? delErr.message : 'ok' })
 
   // 4) Insert lead_actividad para la llamada real (si no existe ya)
   const { data: existing } = await supabase
