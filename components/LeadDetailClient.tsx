@@ -47,8 +47,8 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
     let cancelled = false
     setLoading(true)
     Promise.all([
-      fetch(`/api/leads/${leadId}`).then(r => r.json()).catch(() => null),
-      fetch(`/api/leads/${leadId}/actividad`).then(r => r.json()).catch(() => []),
+      fetch(`/api/leads/${leadId}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`/api/leads/${leadId}/actividad`).then(r => r.ok ? r.json() : []).catch(() => []),
     ]).then(([l, a]) => {
       if (cancelled) return
       setLead(l && l.id ? l : null)
@@ -124,12 +124,22 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
             }}>
               {STATUS_LABELS[lead.status]}
             </span>
-            {/* Botón 'Ir al chat' — solo si lead vino de Vambe y tenemos vambe_contact_id */}
-            {(lead.canal_adquisicion || '').toLowerCase().includes('vambe') && (lead as { vambe_contact_id?: string }).vambe_contact_id && (() => {
+            {/* Botón 'Ir al chat' — se muestra siempre que el lead tenga teléfono
+                (cualquier mensaje outbound crea el contacto en Vambe automáticamente).
+                Si tenemos vambe_contact_id, abrimos el chat directo. Si no, abrimos
+                el pipeline filtrado por el teléfono (Vambe busca el contacto por número).
+                Antes solo se mostraba si canal_adquisicion incluía 'vambe' Y había
+                vambe_contact_id — eso dejaba fuera los leads outbound a empresas que
+                no habían interactuado con Vambe (que es el caso de uso principal). */}
+            {lead.telefono && (() => {
               const pipelineId = '66b6ff34-3ec3-4972-8b90-33a3dc4e45fd'  // Pipeline de ventas Vambe
               const contactId = (lead as { vambe_contact_id?: string }).vambe_contact_id
               const today = new Date().toISOString().slice(0, 10)
-              const url = `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&chatContactId=${contactId}`
+              // Si tenemos contact_id, usamos chatContactId (abre el chat directo).
+              // Si no, usamos query=phone (Vambe filtra el pipeline por teléfono).
+              const url = contactId
+                ? `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&chatContactId=${contactId}`
+                : `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&query=${encodeURIComponent(lead.telefono.replace(/\D/g, '').slice(-10))}`
               return (
                 <a href={url} target="_blank" rel="noopener noreferrer"
                   style={{
@@ -138,7 +148,8 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
                     color: 'white', textDecoration: 'none',
                     padding: '8px 16px', borderRadius: 8,
                     fontSize: 13, fontWeight: 700,
-                  }}>
+                  }}
+                  title={contactId ? 'Abre el chat en Vambe' : 'Abre el pipeline de Vambe filtrado por el teléfono'}>
                   💬 Ir al chat ↗
                 </a>
               )

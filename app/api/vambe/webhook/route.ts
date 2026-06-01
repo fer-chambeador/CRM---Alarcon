@@ -187,6 +187,9 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
   for (const phone of candidatePhones) {
     // Match parcial — el sheet/CRM puede no tener prefijo +52
     const last10 = phone.slice(-10)
+    // SAFETY: si last10 < 10 dígitos, el LIKE %X% matchearía CUALQUIER lead.
+    // Mejor saltarse este número que riesgo de contaminar la BD.
+    if (last10.length < 10) continue
     const { data: byPhone } = await supabase.from('leads').select('*').like('telefono', `%${last10}`).maybeSingle()
     if (byPhone) return byPhone as Lead
   }
@@ -690,6 +693,12 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   const map = getStageMap()
   const mappedStatus = map[newStageId]
+  // Si el stage no está en el map (stage nuevo en Vambe), loguear para que
+  // podamos agregarlo al map. Antes era silent skip y stages nuevos quedaban
+  // sin avanzar al lead.
+  if (!mappedStatus && newStageId) {
+    console.warn(`[vambe] Stage no mapeado: "${newStageId}" — agregar a DEFAULT_STAGE_MAP o VAMBE_STAGE_MAP env var. Lead queda en estado actual.`)
+  }
 
   // Si el lead aún no existe en el CRM, intentar promoverlo desde el pending
   // EN CUALQUIER stage change (no solo cuando target=='nuevo'). Razón: el lead

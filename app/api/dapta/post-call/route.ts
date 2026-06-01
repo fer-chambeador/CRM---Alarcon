@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (b) Si tenemos lead_id de dynamic_variables, agarrar la llamada queued más reciente sin call_id
+  // (b) Si tenemos lead_id de dynamic_variables, agarrar la llamada dialing/queued más reciente sin call_id
   if (!llamadaId && f.leadIdFromPayload) {
     leadId = f.leadIdFromPayload
     const { data: latestQueued } = await supabase
@@ -78,6 +78,7 @@ export async function POST(req: NextRequest) {
       .select('id')
       .eq('lead_id', f.leadIdFromPayload)
       .is('dapta_call_id', null)
+      .in('status', ['dialing', 'queued'])
       .order('created_at', { ascending: false })
       .limit(1)
     if (latestQueued && latestQueued.length > 0) {
@@ -85,22 +86,84 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (c) Fallback: por teléfono buscar lead
+  // (c) Fallback: por teléfono buscar lead Y llamada dialing/queued sin dapta_call_id
   if (!leadId && toNumber) {
     const last10 = toNumber.replace(/\D/g, '').slice(-10)
-    const { data: leadByPhone } = await supabase
-      .from('leads')
+    if (last10.length === 10) {
+      const { data: leadByPhone } = await supabase
+        .from('leads')
+        .select('id')
+        .like('telefono', `%${last10}`)
+        .limit(1)
+      if (leadByPhone && leadByPhone.length > 0) {
+        leadId = (leadByPhone[0] as { id: string }).id
+      }
+    }
+  }
+
+  // (d) Si tenemos leadId pero NO llamadaId, intentar matchear dialing/queued sin dapta_call_id por leadId
+  if (leadId && !llamadaId) {
+    const { data: existingByLead } = await supabase
+      .from('llamadas')
       .select('id')
-      .like('telefono', `%${last10}`)
+      .eq('lead_id', leadId)
+      .is('dapta_call_id', null)
+      .in('status', ['dialing', 'queued'])
+      .order('created_at', { ascending: false })
       .limit(1)
-    if (leadByPhone && leadByPhone.length > 0) {
-      leadId = (leadByPhone[0] as { id: string }).id
+    if (existingByLead && existingByLead.length > 0) {
+      llamadaId = (existingByLead[0] as { id: string }).id
+    }
+  }
+
+  // (e) último fallback: matchear por to_number en dialing/queued (caso sin lead, ej. inbound o lead borrado)
+  if (!llamadaId && toNumber) {
+    const last10 = toNumber.replace(/\D/g, '').slice(-10)
+    if (last10.length === 10) {
+      const { data: existingByPhone } = await supabase
+        .from('llamadas')
+        .select('id, lead_id')
+        .like('to_number', `%${last10}`)
+        .is('dapta_call_id', null)
+        .in('status', ['dialing', 'queued'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (existingByPhone && existingByPhone.length > 0) {
+        const r = existingByPhone[0] as { id: string; lead_id: string | null }
+        llamadaId = r.id
+        if (!leadId && r.lead_id) leadId = r.lead_id
+      }
     }
   }
 
   // ── 2) Build update/insert payload ──
-  const status = normalizeDaptaStatus(f.rawStatus)
+  // Pasamos disconnection_reason para que el normalizer mapee bien dial_no_answer,
+  // voicemail, etc. — antes solo veía call_status='ended' y todo era 'completed'.
+  const disconnectionReason = (payload.call?.disconnection_reason as string | undefined) || null
+  const status = normalizeDaptaStatus(f.rawStatus, disconnectionReason, f.durationSeconds)
   const accionables = deriveAccionables(customData)
+
+  // Next steps fallback: si Daniela no llenó proximo_paso o lo dejó vacío/null,
+  // generamos uno automático según el outcome real para no dejar "—" en la UI.
+  let proximoPasoFinal: string | null = null
+  const rawProximo = (customData.proximo_paso || '') as string
+  if (rawProximo && rawProximo.trim() && rawProximo.toLowerCase() !== 'null') {
+    proximoPasoFinal = rawProximo
+  } else {
+    // Fallback según outcome + status
+    if (status === 'no_answer') proximoPasoFinal = 'Cliente no contestó — reintentar en 24h o escribir por WhatsApp.'
+    else if (status === 'voicemail') proximoPasoFinal = 'Llamada fue a buzón — escribir por WhatsApp con resumen del pitch.'
+    else if (status === 'failed') proximoPasoFinal = 'La llamada falló — revisar número y volver a intentar.'
+    else if (customData.outcome === 'pidio_link_pago') proximoPasoFinal = 'Enviar liga de pago por WhatsApp.'
+    else if (customData.outcome === 'pidio_presentacion') proximoPasoFinal = 'Enviar presentación por WhatsApp con propuesta.'
+    else if (customData.outcome === 'callback') proximoPasoFinal = 'Cliente pidió callback — agendar en calendario.'
+    else if (customData.outcome === 'no_interesado') proximoPasoFinal = 'Cliente no interesado — mover a descartado o follow-up en 30 días.'
+    else if (customData.outcome === 'otro' || !customData.outcome) {
+      // outcome='otro' usualmente es llamada cortada antes de definir el paso.
+      // Genera mensaje práctico para que Fer sepa qué hacer.
+      proximoPasoFinal = 'Llamada terminó sin cierre claro — escribir por WhatsApp para retomar y agendar.'
+    }
+  }
 
   const fields: Record<string, unknown> = {
     dapta_call_id: daptaCallId,
@@ -116,8 +179,10 @@ export async function POST(req: NextRequest) {
     summary: f.summary,
     custom_analysis: customData,
     outcome: customData.outcome || null,
+    proximo_paso: proximoPasoFinal,
     sentimiento: customData.sentimiento || (f.userSentiment ? f.userSentiment.toLowerCase() : null),
     interes_real: customData.interes_real || null,
+    error_message: status === 'no_answer' ? `disconnection_reason: ${disconnectionReason}` : null,
     pidio_link_pago: accionables.pidio_link_pago,
     pidio_presentacion: accionables.pidio_presentacion,
     agendar_seguimiento: accionables.agendar_seguimiento,
@@ -159,7 +224,38 @@ export async function POST(req: NextRequest) {
     llamadaId = (savedLlamada as { id?: string } | null)?.id || null
   }
 
-  // ── 4) Lead activity log ──
+  // ── 4) Si no contestaron, mover lead a 'no_show_llamada' + append nota ──
+  // Regla del user (1 jun 2026): si Dapta llamó y el cliente no respondió,
+  // el lead debe quedar en 'no_show_llamada' con una nota explícita en su card.
+  // Antes el lead se quedaba en 'llamada_con_dapta' y no había forma fácil de
+  // saber que la llamada no se concretó.
+  if (leadId && status === 'no_answer') {
+    const { data: leadCurrent } = await supabase
+      .from('leads')
+      .select('status, notas')
+      .eq('id', leadId)
+      .maybeSingle()
+    const lc = leadCurrent as { status: string; notas: string | null } | null
+    if (lc) {
+      // No tumbamos status si ya está en una etapa MÁS avanzada (convertido, etc.)
+      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      const newStatus = ADVANCED.has(lc.status) ? lc.status : 'no_show_llamada'
+      const noteLine = `[${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}] Vambe llamó pero lead no respondió`
+      const newNotas = lc.notas && lc.notas.trim().length > 0
+        ? `${lc.notas}\n${noteLine}`
+        : noteLine
+      await supabase
+        .from('leads')
+        .update({
+          status: newStatus,
+          notas: newNotas,
+          status_changed_at: new Date().toISOString(),
+        })
+        .eq('id', leadId)
+    }
+  }
+
+  // ── 5) Lead activity log ──
   if (leadId && llamadaId) {
     await supabase.from('lead_actividad').insert({
       lead_id: leadId,

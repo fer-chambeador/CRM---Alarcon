@@ -48,6 +48,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'el lead no tiene teléfono' }, { status: 400 })
   }
 
+  // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+  // Nunca debemos volver a marcarle a un cliente al que ya intentamos contactar.
+  // Si hay CUALQUIER llamada previa (queued, dialing, completed, failed, no_answer,
+  // voicemail, canceled) — rechazamos. La única forma de "rebrincarse" esta regla
+  // es marcando la llamada anterior como 'canceled' o pasándole ?force=1.
+  //
+  // Para casos legítimos donde quieras llamar de nuevo (ej. una semana después),
+  // cancela la anterior primero y vuelve a disparar. Es deliberadamente fricción
+  // para evitar bucles de cron y spam al cliente.
+  const url = new URL(req.url)
+  const force = url.searchParams.get('force') === '1'
+  if (!force) {
+    const { data: prev } = await supabase
+      .from('llamadas')
+      .select('id, status, created_at')
+      .eq('lead_id', l.id)
+      .not('status', 'in', '(canceled)')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (prev && prev.length > 0) {
+      const p = prev[0] as { id: string; status: string; created_at: string }
+      return NextResponse.json({
+        error: 'lead-already-called',
+        detail: `Este lead ya tiene una llamada previa (status=${p.status}, creada ${p.created_at}). Cancélala primero o pasa ?force=1.`,
+        previous_llamada_id: p.id,
+        previous_status: p.status,
+      }, { status: 409 })
+    }
+  }
+
   // Validar scheduled_at: si es string parseable a fecha futura, agendamos
   const scheduledMs = body.scheduled_at ? new Date(body.scheduled_at).getTime() : NaN
   const isScheduled = !isNaN(scheduledMs) && scheduledMs > Date.now() + 30_000 // > 30s en futuro

@@ -12,24 +12,29 @@ export const MONTHLY_GOAL = 200_000
  */
 const BUSINESS_DAYS_PER_MONTH = 22
 
+export type GoalPeriod = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado' | 'custom'
+
 /** Meta para un periodo dado del filtro de tiempo. */
-export function goalForPeriod(period: 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'): number {
+export function goalForPeriod(period: GoalPeriod): number {
   switch (period) {
     case 'todo':       return MONTHLY_GOAL   // referencia: mes en curso
     case 'hoy':        return Math.round(WEEKLY_GOAL / 5)   // 50k/5 días hábiles = 10k
     case 'semana':     return WEEKLY_GOAL
     case 'mes':        return MONTHLY_GOAL
     case 'mes-pasado': return MONTHLY_GOAL
+    // Rango custom: sin meta predefinida — la card muestra el valor sin progress bar.
+    case 'custom':     return 0
   }
 }
 
 /** Label de la meta para mostrar en la card ("meta semanal", etc.). */
-export function goalLabel(period: 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'): string {
+export function goalLabel(period: GoalPeriod): string {
   switch (period) {
     case 'todo':       return 'meta mensual'
     case 'hoy':        return 'meta diaria'
     case 'semana':     return 'meta semanal'
     case 'mes':        return 'meta mensual'
     case 'mes-pasado': return 'meta mensual'
+    case 'custom':     return 'rango personalizado'
   }
 }

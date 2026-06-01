@@ -252,11 +252,13 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
   const rawStatus = c.call_status || c.status || (payload as { status?: string }).status || null
 
   // Duración: priorizar duration_ms (ms) → segundos. Si no, total_duration_seconds.
+  // Validamos >= 0 — si Dapta manda un valor negativo (raro pero posible),
+  // lo tratamos como ausente para evitar persistir basura en DB.
   let durationSeconds: number | null = null
-  if (typeof c.duration_ms === 'number') durationSeconds = Math.round(c.duration_ms / 1000)
-  else if (typeof c.total_duration_seconds === 'number') durationSeconds = Math.round(c.total_duration_seconds)
-  else if (typeof c.duration_seconds === 'number') durationSeconds = c.duration_seconds
-  else if (typeof c.duration === 'number') durationSeconds = c.duration
+  if (typeof c.duration_ms === 'number' && c.duration_ms >= 0) durationSeconds = Math.round(c.duration_ms / 1000)
+  else if (typeof c.total_duration_seconds === 'number' && c.total_duration_seconds >= 0) durationSeconds = Math.round(c.total_duration_seconds)
+  else if (typeof c.duration_seconds === 'number' && c.duration_seconds >= 0) durationSeconds = c.duration_seconds
+  else if (typeof c.duration === 'number' && c.duration >= 0) durationSeconds = c.duration
 
   // Started/Ended: epoch MS → ISO si están como number, sino usar ISO directo.
   const startedAtIso: string | null = typeof c.start_timestamp === 'number'
@@ -268,8 +270,20 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
 
   // call_analysis puede venir DENTRO de call (Daniela) o en raíz (legado)
   const analysis = c.call_analysis || payload.call_analysis || {}
-  const customAnalysis = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
-  const summary = analysis.call_summary || customAnalysis.resumen_detallado || null
+  const rawCustom = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
+  // Daniela mete strings "null"/"undefined" en campos opcionales que rompen
+  // queries downstream y renders en UI. Limpiamos TODO el objeto antes de persist.
+  const customAnalysis: DaptaCustomAnalysis = {}
+  for (const k of Object.keys(rawCustom)) {
+    const v = rawCustom[k]
+    if (typeof v === 'string') {
+      const cleaned = cleanNullString(v)
+      if (cleaned !== null) customAnalysis[k] = cleaned
+    } else if (v !== null && v !== undefined) {
+      customAnalysis[k] = v
+    }
+  }
+  const summary = cleanNullString(analysis.call_summary) || cleanNullString(customAnalysis.resumen_detallado as string) || null
 
   // lead_id: prioridad — dynamic_variables (real Daniela) > data.lead_id (legado)
   const leadIdFromPayload =
@@ -288,7 +302,18 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
     startedAtIso,
     endedAtIso,
     recordingUrl: c.recording_url || null,
-    transcript: c.transcript_object || c.transcript || null,
+    // Limitar transcript a 200KB para evitar romper la columna en DB con calls
+    // muy largas (Daniela puede generar transcripts de >1MB en calls de 30min).
+    transcript: (() => {
+      const t = c.transcript_object || c.transcript || null
+      if (!t) return null
+      const serialized = typeof t === 'string' ? t : JSON.stringify(t)
+      if (serialized.length > 200_000) {
+        console.warn(`[dapta] transcript truncado de ${serialized.length} a 200KB para call ${c.call_id}`)
+        return serialized.slice(0, 200_000) + '...[truncado]'
+      }
+      return t
+    })(),
     summary,
     customAnalysis,
     leadIdFromPayload,
@@ -298,9 +323,33 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
 
 /**
  * Normaliza el status Dapta a nuestro enum interno.
+ *
+ * IMPORTANTE: Daniela siempre manda call_status='ended' (todas las llamadas
+ * "terminan" desde su perspectiva). El status real (no contestó, buzón, etc.)
+ * vive en `disconnection_reason`. Por eso aceptamos ambos: si el primero es
+ * genérico ("ended"), nos basamos en el segundo.
  */
-export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallStatus {
+export function normalizeDaptaStatus(raw: string | undefined | null, disconnectionReason?: string | null, durationSeconds?: number | null): DaptaCallStatus {
   const s = (raw || '').toLowerCase().trim()
+  const d = (disconnectionReason || '').toLowerCase().trim()
+
+  // Disconnection reason tiene prioridad cuando el status base es genérico ("ended")
+  // y disconnection_reason nos dice qué realmente pasó.
+  if (d) {
+    // dial_no_answer / no_answer / dial_busy / busy → cliente no contestó
+    if (d.includes('no_answer') || d.includes('no answer') || d.includes('busy') || d === 'dial_failed') return 'no_answer'
+    // voicemail_no_answer, voicemail_reached → fue a buzón
+    if (d.includes('voicemail') || d.includes('buzon')) return 'voicemail'
+    // inactivity → el agente se calló muchos segundos, cuenta como completada pero con flag
+    // (lo dejamos como completed; el resumen lo marcará igualmente)
+    if (d === 'inactivity') return 'completed'
+    // user_hangup / agent_hangup → conversación normal, completada
+    if (d.includes('hangup')) return 'completed'
+    // dial_failed sin no_answer puede ser número invalido
+    if (d.includes('fail') || d.includes('error') || d.includes('invalid')) return 'failed'
+  }
+
+  // Fallback al call_status si disconnection_reason no aplica
   if (!s) return 'completed'
   if (s.includes('voicemail') || s.includes('buzon')) return 'voicemail'
   if (s.includes('no_answer') || s.includes('no answer') || s.includes('no-answer') || s.includes('busy')) return 'no_answer'
@@ -309,7 +358,11 @@ export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallS
   if (s.includes('queue')) return 'queued'
   if (s.includes('dial') || s.includes('ringing')) return 'dialing'
   if (s.includes('connect') || s.includes('in-progress') || s.includes('ongoing')) return 'connected'
-  if (s.includes('complete') || s.includes('ended') || s.includes('finish')) return 'completed'
+  if (s.includes('complete') || s.includes('ended') || s.includes('finish')) {
+    // "ended" + duración <8s = el cliente colgó antes de contestar bien → no_answer
+    if (typeof durationSeconds === 'number' && durationSeconds < 8) return 'no_answer'
+    return 'completed'
+  }
   return 'completed'
 }
 
@@ -318,15 +371,34 @@ export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallS
  * Si el agente respondió `outcome: 'pidio_link_pago'`, marcamos el flag aunque
  * el campo dedicado no esté presente — la UI y las alertas Slack leen estos flags.
  */
+/**
+ * Daniela mete strings "null" en campos que deberían ser null real cuando no
+ * extrae info útil (ej. agendar_seguimiento: "null" como string). Esto rompe
+ * inserts en columnas timestamp/date. Limpiamos aquí.
+ */
+function cleanNullString(v: unknown): string | null {
+  if (v == null) return null
+  const s = String(v).trim()
+  if (!s || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined' || s === 'n/a') return null
+  return s
+}
+
 export function deriveAccionables(custom: DaptaCustomAnalysis | null | undefined): {
   pidio_link_pago: boolean
   pidio_presentacion: boolean
   agendar_seguimiento: string | null
 } {
   const out = (custom?.outcome || '').toLowerCase()
+  const raw = cleanNullString(custom?.agendar_seguimiento)
+  // Validar que sea una fecha parseable; si no, devolver null para no romper DB
+  let agendar: string | null = null
+  if (raw) {
+    const d = new Date(raw)
+    if (!isNaN(d.getTime())) agendar = d.toISOString()
+  }
   return {
     pidio_link_pago: out === 'pidio_link_pago',
     pidio_presentacion: out === 'pidio_presentacion',
-    agendar_seguimiento: custom?.agendar_seguimiento || null,
+    agendar_seguimiento: agendar,
   }
 }

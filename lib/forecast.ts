@@ -31,11 +31,15 @@ export function leadMonto(l: Lead): number {
 /**
  * Forecast total ponderado sobre un conjunto de leads.
  * Suma monto × probabilidad por cada lead.
+ *
+ * DEFENSIVO: si un lead tiene status no mapeado (migración legacy o typo),
+ * usamos prob = 0 para evitar NaN que rompería toda la sumatoria.
  */
 export function forecastLeads(leads: Lead[]): number {
   let total = 0
   for (const l of leads) {
-    total += leadMonto(l) * STATUS_WIN_PROBABILITY[l.status]
+    const prob = STATUS_WIN_PROBABILITY[l.status] ?? 0
+    total += leadMonto(l) * prob
   }
   return total
 }
@@ -56,7 +60,7 @@ export function forecastByStage(leads: Lead[]): ForecastBucket[] {
   const map = new Map<Lead['status'], ForecastBucket>()
   for (const l of leads) {
     const monto = leadMonto(l)
-    const prob = STATUS_WIN_PROBABILITY[l.status]
+    const prob = STATUS_WIN_PROBABILITY[l.status] ?? 0
     const existing = map.get(l.status)
     if (existing) {
       existing.count += 1

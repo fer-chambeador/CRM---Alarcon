@@ -51,6 +51,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!a.leads) {
     return NextResponse.json({ error: 'lead asociado no encontrado' }, { status: 404 })
   }
+
+  // LOCK OPTIMISTA: marcar como 'approved' atomically con condición
+  // `status='pending'` en el WHERE. Si dos requests llegan en paralelo,
+  // solo el primero gana el UPDATE (rows=1); el segundo recibe rows=0
+  // y aborta sin disparar Vambe/Dapta de nuevo.
+  const { data: lockRows } = await supabase
+    .from('aprobaciones')
+    .update({
+      status: 'approved',
+      decided_at: new Date().toISOString(),
+    })
+    .eq('id', a.id)
+    .eq('status', 'pending')
+    .select('id')
+  if (!lockRows || lockRows.length === 0) {
+    return NextResponse.json({ ok: false, error: 'aprobación ya fue procesada (race condition)' }, { status: 409 })
+  }
+
   const lead = a.leads
   if (!lead.telefono) {
     await supabase.from('aprobaciones').update({
@@ -109,6 +127,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     if (a.tipo === 'dapta_call') {
+      // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+      // Aplica también al flujo de aprobaciones: si el lead ya tiene cualquier
+      // otra llamada (no canceled), rechazamos para no marcar 2 veces. Esto
+      // protege el caso donde Fer aprueba 2 items del mismo lead por error.
+      const { data: prevCall } = await supabase
+        .from('llamadas')
+        .select('id, status, created_at')
+        .eq('lead_id', lead.id)
+        .not('status', 'in', '(canceled)')
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (prevCall && prevCall.length > 0) {
+        const p = prevCall[0] as { id: string; status: string; created_at: string }
+        // Revertir el lock optimista — volver el aprobación a pending para que el
+        // user pueda decidir (rechazar manualmente o cancelar la llamada previa).
+        await supabase.from('aprobaciones').update({
+          status: 'pending',
+          decided_at: null,
+        }).eq('id', a.id)
+        return NextResponse.json({
+          ok: false,
+          error: 'lead-already-called',
+          detail: `Este lead ya tiene una llamada previa (status=${p.status}, llamada_id=${p.id}). Cancélala primero o rechaza esta aprobación.`,
+          previous_llamada_id: p.id,
+          previous_status: p.status,
+        }, { status: 409 })
+      }
+
       // Si dapta_immediate=true → llamar ya. Si no, agendar a lead.llamada_at - 5min.
       const llamadaAt = lead.llamada_at ? new Date(lead.llamada_at).getTime() : null
       const scheduleMs = llamadaAt

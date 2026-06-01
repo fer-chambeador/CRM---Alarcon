@@ -53,10 +53,10 @@ type LeadLite = {
 }
 
 function buildSummary(leads: LeadLite[], ctx: ReturnType<typeof buildDateContext>) {
-  const countByCanal = (rows: LeadLite[]) => {
+  const countBy = <K extends keyof LeadLite>(rows: LeadLite[], key: K, defaultLabel = '(sin valor)') => {
     const m: Record<string, number> = {}
     for (const l of rows) {
-      const k = l.canal_adquisicion || '(sin canal)'
+      const k = (l[key] as string) || defaultLabel
       m[k] = (m[k] || 0) + 1
     }
     return m
@@ -70,12 +70,27 @@ function buildSummary(leads: LeadLite[], ctx: ReturnType<typeof buildDateContext
   const thisMonth  = inRange(ctx.month_ms)
   const lastMonth  = inRange(ctx.last_month_start_ms, ctx.last_month_end_ms)
   const cerrados   = leads.filter(l => l.status === 'convertido' || l.status === 'cliente_recurrente')
+
+  // Counts por mes (últimos 6 meses) — para preguntas "cuántos leads en X mes"
+  const byMonth: Record<string, number> = {}
+  for (const l of leads) {
+    const ym = (l.created_at || '').slice(0, 7) // YYYY-MM
+    if (ym) byMonth[ym] = (byMonth[ym] || 0) + 1
+  }
+  const recentMonths = Object.entries(byMonth)
+    .sort(([a], [b]) => b.localeCompare(a))
+    .slice(0, 6)
+    .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {} as Record<string, number>)
+
   return {
     total_leads_in_db: leads.length,
-    today:      { count: today.length,     by_canal: countByCanal(today) },
-    this_week:  { count: thisWeek.length,  by_canal: countByCanal(thisWeek) },
-    this_month: { count: thisMonth.length, by_canal: countByCanal(thisMonth) },
-    last_month: { count: lastMonth.length, by_canal: countByCanal(lastMonth) },
+    by_status: countBy(leads, 'status'),
+    by_canal_global: countBy(leads, 'canal_adquisicion', '(sin canal)'),
+    by_month_last6: recentMonths,
+    today:      { count: today.length,     by_canal: countBy(today, 'canal_adquisicion', '(sin canal)') },
+    this_week:  { count: thisWeek.length,  by_canal: countBy(thisWeek, 'canal_adquisicion', '(sin canal)') },
+    this_month: { count: thisMonth.length, by_canal: countBy(thisMonth, 'canal_adquisicion', '(sin canal)'), by_status: countBy(thisMonth, 'status') },
+    last_month: { count: lastMonth.length, by_canal: countBy(lastMonth, 'canal_adquisicion', '(sin canal)'), by_status: countBy(lastMonth, 'status') },
     total_cerrados: cerrados.length,
     pipeline_cerrado_mxn: cerrados.reduce((s, l) => s + (l.monto || 0), 0),
   }
@@ -94,15 +109,18 @@ FECHAS (USÁ ESTAS BOUNDS EXACTOS, NO INFIERAS):
 - Mes pasado: desde ${ctx.last_month_start} hasta ${ctx.last_month_end}
 
 REGLA CRÍTICA: cuando el user diga "este mes" se refiere al MES CALENDARIO COMPLETO, no a "hoy".
-Si pregunta "cuántos leads cayeron este mes", contestá con el count de TODO el mes, no del día.
-Te paso un objeto SUMMARY pre-calculado con los counts de today/this_week/this_month/last_month
-para que NO los re-calcules desde el JSON.
+
+CÓMO USAR EL CONTEXTO:
+- Te paso un SUMMARY pre-calculado con counts globales (by_status, by_canal_global, by_month_last6) y
+  por periodos (today, this_week, this_month, last_month). USÁ ESTOS NÚMEROS — no los recalcules.
+- NO te paso la lista completa de leads (son demasiados, excede el rate limit). Si el user pide DETALLES
+  de leads específicos (nombres, emails, etc.), usá la tool \`list_leads_filtered\` para traerlos.
 
 ESQUEMA DE LEADS:
 - email, nombre, empresa, telefono
 - puesto = decision maker (rol del contacto en su empresa)
 - vacante = el rol que ESE cliente quiere reclutar
-- canal_adquisicion (Instagram, TikTok, Facebook, Inbound, Google, Recomendación, etc.)
+- canal_adquisicion (Instagram, TikTok, Facebook, Inbound, Google, Recomendación, Canirac, etc.)
 - status: nuevo | contactado | llamada_agendada | no_show_llamada | presentacion_enviada | espera_aprobacion | convertido | cliente_recurrente | descartado
 - monto (MXN, default 1160)
 - presupuesto: none / 100_to_1000 / 2000_to_5000 / 10000_plus / null
@@ -110,26 +128,24 @@ ESQUEMA DE LEADS:
 - veces_contactado (0..4)
 
 CUÁNDO USAR TOOLS:
-- "actualiza/cambia X a Y" → usá update_lead_status o bulk_update_status
+- "actualiza/cambia X a Y" → update_lead_status o bulk_update_status
 - "agregá nota a X" → add_note_to_lead
+- "muéstrame leads X / dame los leads que..." → list_leads_filtered (devuelve hasta 30 leads con detalle)
 - Acciones masivas: SIEMPRE primero con confirm=false (dry-run) para mostrar al user qué se va a cambiar,
   y solo aplicá confirm=true después de que el user confirme.
-- "llamá por AI a X" → queue_vambe_calls (placeholder, avisá que no está implementado todavía).
 - "dame CSV", "exporta a archivo", "descárgame X", "pasame en archivo" → SIEMPRE usá generate_file
   EN EL MISMO TURNO. No digas "voy a generar..." sin llamar la tool — eso no produce nada.
-  Tenés que invocar la tool generate_file con el contenido completo del CSV YA. Después de invocarla,
-  el frontend muestra automáticamente el botón de descarga. NO listes el CSV inline en la respuesta.
-  Para CSVs: headers en primera línea, separar con coma, escapar con comillas valores que tengan coma
-  o salto de línea. Una sola llamada a generate_file por archivo.
+  Para CSVs grandes: primero usá list_leads_filtered para traer los leads relevantes, luego generate_file
+  con el contenido. NO listes el CSV inline.
 
 CUÁNDO NO USAR TOOLS:
-- Preguntas de análisis ("cuántos", "qué canal", "promedio") → respondé directo desde el JSON/summary, sin tools.
+- Preguntas de análisis con counts ("cuántos", "qué canal tiene más", "porcentaje conversión") →
+  respondé DIRECTO desde el SUMMARY. No llames tools innecesarias.
 
 ESTILO DE RESPUESTA:
 - Conciso, español de México.
 - Números concretos: counts, montos en MXN ($ con comas), %.
 - Markdown ok. Tablas markdown si ayudan.
-- Si la respuesta involucra >5 leads, agrupá.
 - Al ejecutar acciones, confirmá qué se hizo y cuántos leads se afectaron.
 `
 
@@ -166,37 +182,19 @@ export async function POST(req: NextRequest) {
   const ctx = buildDateContext()
   const summary = buildSummary(enriched, ctx)
 
-  // Para evitar el rate limit de Anthropic (10k tokens/min) cuando hay cientos
-  // de leads, comprimimos el payload: aliases cortos + sin nulls/empty.
-  // El asistente sigue viendo TODOS los leads, solo más compacto.
-  const compact = enriched.map(l => {
-    const o: Record<string, unknown> = {}
-    if (l.email) o.e = l.email
-    if (l.nombre) o.n = l.nombre
-    if (l.empresa) o.emp = l.empresa
-    if (l.telefono) o.t = l.telefono
-    if (l.puesto) o.p = l.puesto
-    if (l.vacante) o.v = l.vacante
-    if (l.canal_adquisicion) o.c = l.canal_adquisicion
-    if (l.status) o.s = l.status
-    if (l.monto) o.m = l.monto
-    if (l.estado) o.est = l.estado
-    if (l.presupuesto) o.pres = l.presupuesto
-    if (l.veces_contactado) o.vc = l.veces_contactado
-    if (l.created_at) o.ca = l.created_at.slice(0, 10)
-    if (l.status_changed_at) o.sca = l.status_changed_at.slice(0, 10)
-    return o
-  })
-
-  const userMsg = `SUMMARY pre-calculado (usá ESTOS números cuando preguntan por counts):
+  // ESTRATEGIA DE TOKENS (fix Phase 104):
+  // Antes mandábamos los 555 leads en cada request → ~59K input tokens, excede
+  // el rate limit Haiku de 10K tokens/min. Ahora mandamos SOLO el SUMMARY
+  // pre-calculado (~1K tokens) y si el modelo necesita leads específicos,
+  // los pide vía `list_leads_filtered` tool. Reduce 95% el costo y elimina 429.
+  const userMsg = `SUMMARY pre-calculado de la base (usá ESTOS números para counts; NO recalcules):
 \`\`\`json
 ${JSON.stringify(summary, null, 2)}
 \`\`\`
 
-LEADS (JSON compacto — aliases: e=email, n=nombre, emp=empresa, t=telefono, p=puesto, v=vacante, c=canal_adquisicion, s=status, m=monto, est=estado, pres=presupuesto, vc=veces_contactado, ca=created_at(date), sca=status_changed_at(date)):
-\`\`\`json
-${JSON.stringify(compact)}
-\`\`\`
+Total leads en DB: ${enriched.length}
+
+Si necesitás detalles de leads específicos (nombres, emails, teléfonos), usá la tool \`list_leads_filtered\`.
 
 Pregunta del user:
 ${question}`
@@ -213,24 +211,54 @@ ${question}`
   let finalAnswer = ''
   let totalUsage = { input_tokens: 0, output_tokens: 0 }
 
+  // Helper: fetch con retry exponencial en 429 (rate limit). Anthropic sugiere
+  // mirar retry-after header pero por simplicidad esperamos 2s/5s/10s.
+  async function anthropicCall(payload: unknown): Promise<Response> {
+    const delays = [2000, 5000, 10000]
+    let lastRes: Response | null = null
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      const r = await fetch(ANTHROPIC_API, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey!,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'prompt-caching-2024-07-31',
+        },
+        body: JSON.stringify(payload),
+      })
+      if (r.status !== 429 && r.status !== 529) return r
+      lastRes = r
+      // Respetar retry-after del server si viene
+      const retryAfter = parseInt(r.headers.get('retry-after') || '0', 10)
+      const wait = retryAfter > 0 ? retryAfter * 1000 : (delays[attempt] || 10000)
+      console.warn(`[ai/query] Anthropic ${r.status} — retry ${attempt + 1} in ${wait}ms`)
+      await new Promise(resolve => setTimeout(resolve, wait))
+    }
+    return lastRes!
+  }
+
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const res = await fetch(ANTHROPIC_API, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 8000,  // Suficiente para generar CSVs grandes en una sola llamada
-        system: SYSTEM(ctx),
-        messages,
-        tools: TOOL_DEFINITIONS,
-      }),
+    // System prompt cacheado — Anthropic cobra menos por tokens cached (90% off
+    // después del primer hit). El system es estable entre requests del mismo día.
+    const systemBlocks = [
+      { type: 'text', text: SYSTEM(ctx), cache_control: { type: 'ephemeral' } },
+    ]
+    const res = await anthropicCall({
+      model: MODEL,
+      max_tokens: 8000,  // Suficiente para generar CSVs grandes en una sola llamada
+      system: systemBlocks,
+      messages,
+      tools: TOOL_DEFINITIONS,
     })
     if (!res.ok) {
       const text = await res.text()
+      // Mensaje amigable para 429
+      if (res.status === 429) {
+        return NextResponse.json({
+          error: `Anthropic rate limit excedido después de varios retries. Esperá un minuto e intentá de nuevo.`,
+        }, { status: 429 })
+      }
       return NextResponse.json({ error: `API Anthropic ${res.status}: ${text.slice(0, 400)}` }, { status: 502 })
     }
     const data = await res.json()

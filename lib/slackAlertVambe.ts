@@ -95,19 +95,28 @@ async function generateBriefingWithLLM(
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 80,
-        system: `Eres un asistente comercial de Chambas Ay (plataforma de reclutamiento por WhatsApp). Un lead acaba de pasar al stage "Asistencia Humana" en Vambe, lo que significa que la AI no pudo seguir atendiéndolo y necesita intervención de Fer. Tu tarea: en UNA sola oración (max 25 palabras), describí EXACTAMENTE QUÉ NECESITA EL LEAD basándote en la conversación. Sé concreto y accionable. NO uses formato, solo la oración. Ejemplos buenos:
-- "Pide hablar con un humano para confirmar el precio del paquete grande."
-- "Tiene dudas sobre cómo se cobra el servicio y quiere agendar llamada."
-- "Lleva 3 mensajes pidiendo callback urgente, no responde a horarios sugeridos."
-- "Pregunta si pueden facturar y necesita un asesor que confirme detalles fiscales."`,
+        system: `Eres un asistente comercial de Chambas Ay (plataforma de reclutamiento por WhatsApp). Un lead acaba de pasar al stage "Asistencia Humana" en Vambe — la AI no pudo seguir y necesita que Fer intervenga MANUALMENTE.
+
+Tu tarea: en UNA sola oración (max 25 palabras), explica EL MOTIVO REAL por el que se necesita asistencia humana. NO listes lo que vende el lead (eso ya se sabe). Enfócate en QUÉ FRICCIÓN o INTENT específica hizo que la AI escalara:
+
+- "Quiere pagar pero no entiende cómo hacer la transferencia."
+- "Pide factura con datos fiscales — la AI no puede manejar facturación."
+- "El chatbot se trabó en bucle de despedidas y el cliente sigue esperando respuesta."
+- "Tiene objeción de precio y pide hablar con un humano para negociar descuento."
+- "No puede ingresar al sistema / no le llega link de pago."
+- "Pide callback urgente, dice que es importante."
+
+Si no se puede inferir con claridad, usa "AI no pudo continuar el flujo: revisa el chat para más contexto."
+
+NO uses formato, solo la oración. NO menciones la vacante ni el presupuesto.`,
         messages: [{
           role: 'user',
-          content: `Lead: ${lead.nombre || '(sin nombre)'} de ${lead.empresa || 'empresa desconocida'}, busca cubrir vacante de ${lead.vacante || 'no especificada'}.
+          content: `Lead: ${lead.nombre || '(sin nombre)'} de ${lead.empresa || 'empresa desconocida'}.
 
 Conversación reciente con la AI (Vambe):
 ${transcript}
 
-¿Qué necesita?`,
+¿POR QUÉ se necesita asistencia humana?`,
         }],
       }),
     })
@@ -183,7 +192,7 @@ export async function alertAtencionHumanaVambe(params: {
     },
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `*¿Qué necesita?*\n${resumen}` },
+      text: { type: 'mrkdwn', text: `*Motivo de escalación:*\n${resumen}` },
     },
     {
       type: 'context',

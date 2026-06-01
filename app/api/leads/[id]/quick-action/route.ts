@@ -43,6 +43,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!tpl?.template_id) {
       return NextResponse.json({ error: 'Template Vambe no configurado. Ve a Settings.' }, { status: 500 })
     }
+    // Anti-doble-click: si ya hay un template_sent en los últimos 2 min,
+    // este es probablemente un doble click. Abort para no duplicar.
+    // Ventana ampliada del original 30s — 2 min cubre red lenta + retry humano.
+    const since = new Date(Date.now() - 120_000).toISOString()
+    const { data: recentSends } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'template_sent')
+      .gte('created_at', since)
+      .limit(1)
+    if (recentSends && recentSends.length > 0) {
+      return NextResponse.json({ ok: false, error: 'mensaje ya enviado recientemente (anti doble-click)' }, { status: 409 })
+    }
     try {
       const result = await sendTemplate({
         phone: lead.telefono,
@@ -69,6 +83,46 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // action === 'call'
+  // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+  // Si el lead ya tiene CUALQUIER llamada previa (queued, dialing, completed,
+  // failed, no_answer, voicemail) en cualquier momento, rechazamos. Solo si la
+  // anterior está 'canceled' permitimos volver a llamar. Esto es la misma
+  // regla que aplica /api/dapta/trigger — para no haber loops y respetar al
+  // cliente. Bypass: ?force=1 (admin path).
+  const url = new URL(req.url)
+  const force = url.searchParams.get('force') === '1'
+  if (!force) {
+    const { data: prevAny } = await supabase
+      .from('llamadas')
+      .select('id, status, created_at')
+      .eq('lead_id', lead.id)
+      .not('status', 'in', '(canceled)')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (prevAny && prevAny.length > 0) {
+      const p = prevAny[0] as { id: string; status: string; created_at: string }
+      return NextResponse.json({
+        ok: false,
+        error: 'lead-already-called',
+        detail: `Este lead ya tiene una llamada previa (status=${p.status}). Cancélala primero o pasa ?force=1.`,
+        previous_llamada_id: p.id,
+        previous_status: p.status,
+      }, { status: 409 })
+    }
+  }
+  // Anti-doble-click adicional: si hay llamada dialing/queued en los últimos
+  // 2 minutos (ventana ampliada del original 60s), abort silencioso.
+  const since120 = new Date(Date.now() - 120_000).toISOString()
+  const { data: recentCalls } = await supabase
+    .from('llamadas')
+    .select('id')
+    .eq('lead_id', lead.id)
+    .in('status', ['dialing', 'queued', 'ringing', 'connected'])
+    .gte('created_at', since120)
+    .limit(1)
+  if (recentCalls && recentCalls.length > 0) {
+    return NextResponse.json({ ok: false, error: 'llamada ya disparada recientemente (anti doble-click)' }, { status: 409 })
+  }
   const tr = await triggerDaptaCall({
     lead_id: lead.id,
     to_number: lead.telefono,
