@@ -320,15 +320,34 @@ export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallS
  * Si el agente respondió `outcome: 'pidio_link_pago'`, marcamos el flag aunque
  * el campo dedicado no esté presente — la UI y las alertas Slack leen estos flags.
  */
+/**
+ * Daniela mete strings "null" en campos que deberían ser null real cuando no
+ * extrae info útil (ej. agendar_seguimiento: "null" como string). Esto rompe
+ * inserts en columnas timestamp/date. Limpiamos aquí.
+ */
+function cleanNullString(v: unknown): string | null {
+  if (v == null) return null
+  const s = String(v).trim()
+  if (!s || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined' || s === 'n/a') return null
+  return s
+}
+
 export function deriveAccionables(custom: DaptaCustomAnalysis | null | undefined): {
   pidio_link_pago: boolean
   pidio_presentacion: boolean
   agendar_seguimiento: string | null
 } {
   const out = (custom?.outcome || '').toLowerCase()
+  const raw = cleanNullString(custom?.agendar_seguimiento)
+  // Validar que sea una fecha parseable; si no, devolver null para no romper DB
+  let agendar: string | null = null
+  if (raw) {
+    const d = new Date(raw)
+    if (!isNaN(d.getTime())) agendar = d.toISOString()
+  }
   return {
     pidio_link_pago: out === 'pidio_link_pago',
     pidio_presentacion: out === 'pidio_presentacion',
-    agendar_seguimiento: custom?.agendar_seguimiento || null,
+    agendar_seguimiento: agendar,
   }
 }
