@@ -139,11 +139,18 @@ export default function LlamadaDetailClient({ id }: { id: string }) {
             {llamada.transcript && llamada.transcript.length > 0 ? (
               <div className={styles.transcript}>
                 {llamada.transcript.map((t, i) => {
-                  const isAgent = (t.speaker || '').toLowerCase().includes('agent') || (t.speaker || '').toLowerCase().includes('daniela') || (t.speaker || '').toLowerCase().includes('ai')
+                  // Dapta/Daniela usa { role: 'agent'|'user', content: '...' }
+                  // pero el typedef antiguo asumía { speaker, text }. Soportamos AMBOS
+                  // para no perder render con la estructura real que llega.
+                  const tt = t as { role?: string; speaker?: string; content?: string; text?: string }
+                  const rawSpeaker = (tt.speaker || tt.role || '').toLowerCase()
+                  const text = tt.text || tt.content || ''
+                  const isAgent = rawSpeaker.includes('agent') || rawSpeaker.includes('daniela') || rawSpeaker.includes('ai') || rawSpeaker === 'assistant'
+                  const displaySpeaker = tt.speaker || (isAgent ? 'Daniela' : 'Cliente')
                   return (
                     <div key={i} className={`${styles.turn} ${isAgent ? styles.turnAgent : styles.turnUser}`}>
-                      <div className={styles.turnSpeaker}>{t.speaker || (isAgent ? 'Agente' : 'Cliente')}</div>
-                      <div>{t.text}</div>
+                      <div className={styles.turnSpeaker}>{displaySpeaker}</div>
+                      <div>{text || <span style={{ opacity: 0.5, fontStyle: 'italic' }}>(sin texto)</span>}</div>
                     </div>
                   )
                 })}

@@ -137,8 +137,33 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2) Build update/insert payload ──
-  const status = normalizeDaptaStatus(f.rawStatus)
+  // Pasamos disconnection_reason para que el normalizer mapee bien dial_no_answer,
+  // voicemail, etc. — antes solo veía call_status='ended' y todo era 'completed'.
+  const disconnectionReason = (payload.call?.disconnection_reason as string | undefined) || null
+  const status = normalizeDaptaStatus(f.rawStatus, disconnectionReason, f.durationSeconds)
   const accionables = deriveAccionables(customData)
+
+  // Next steps fallback: si Daniela no llenó proximo_paso o lo dejó vacío/null,
+  // generamos uno automático según el outcome real para no dejar "—" en la UI.
+  let proximoPasoFinal: string | null = null
+  const rawProximo = (customData.proximo_paso || '') as string
+  if (rawProximo && rawProximo.trim() && rawProximo.toLowerCase() !== 'null') {
+    proximoPasoFinal = rawProximo
+  } else {
+    // Fallback según outcome + status
+    if (status === 'no_answer') proximoPasoFinal = 'Cliente no contestó — reintentar en 24h o escribir por WhatsApp.'
+    else if (status === 'voicemail') proximoPasoFinal = 'Llamada fue a buzón — escribir por WhatsApp con resumen del pitch.'
+    else if (status === 'failed') proximoPasoFinal = 'La llamada falló — revisar número y volver a intentar.'
+    else if (customData.outcome === 'pidio_link_pago') proximoPasoFinal = 'Enviar liga de pago por WhatsApp.'
+    else if (customData.outcome === 'pidio_presentacion') proximoPasoFinal = 'Enviar presentación por WhatsApp con propuesta.'
+    else if (customData.outcome === 'callback') proximoPasoFinal = 'Cliente pidió callback — agendar en calendario.'
+    else if (customData.outcome === 'no_interesado') proximoPasoFinal = 'Cliente no interesado — mover a descartado o follow-up en 30 días.'
+    else if (customData.outcome === 'otro' || !customData.outcome) {
+      // outcome='otro' usualmente es llamada cortada antes de definir el paso.
+      // Genera mensaje práctico para que Fer sepa qué hacer.
+      proximoPasoFinal = 'Llamada terminó sin cierre claro — escribir por WhatsApp para retomar y agendar.'
+    }
+  }
 
   const fields: Record<string, unknown> = {
     dapta_call_id: daptaCallId,
@@ -154,8 +179,10 @@ export async function POST(req: NextRequest) {
     summary: f.summary,
     custom_analysis: customData,
     outcome: customData.outcome || null,
+    proximo_paso: proximoPasoFinal,
     sentimiento: customData.sentimiento || (f.userSentiment ? f.userSentiment.toLowerCase() : null),
     interes_real: customData.interes_real || null,
+    error_message: status === 'no_answer' ? `disconnection_reason: ${disconnectionReason}` : null,
     pidio_link_pago: accionables.pidio_link_pago,
     pidio_presentacion: accionables.pidio_presentacion,
     agendar_seguimiento: accionables.agendar_seguimiento,

@@ -323,9 +323,33 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
 
 /**
  * Normaliza el status Dapta a nuestro enum interno.
+ *
+ * IMPORTANTE: Daniela siempre manda call_status='ended' (todas las llamadas
+ * "terminan" desde su perspectiva). El status real (no contestó, buzón, etc.)
+ * vive en `disconnection_reason`. Por eso aceptamos ambos: si el primero es
+ * genérico ("ended"), nos basamos en el segundo.
  */
-export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallStatus {
+export function normalizeDaptaStatus(raw: string | undefined | null, disconnectionReason?: string | null, durationSeconds?: number | null): DaptaCallStatus {
   const s = (raw || '').toLowerCase().trim()
+  const d = (disconnectionReason || '').toLowerCase().trim()
+
+  // Disconnection reason tiene prioridad cuando el status base es genérico ("ended")
+  // y disconnection_reason nos dice qué realmente pasó.
+  if (d) {
+    // dial_no_answer / no_answer / dial_busy / busy → cliente no contestó
+    if (d.includes('no_answer') || d.includes('no answer') || d.includes('busy') || d === 'dial_failed') return 'no_answer'
+    // voicemail_no_answer, voicemail_reached → fue a buzón
+    if (d.includes('voicemail') || d.includes('buzon')) return 'voicemail'
+    // inactivity → el agente se calló muchos segundos, cuenta como completada pero con flag
+    // (lo dejamos como completed; el resumen lo marcará igualmente)
+    if (d === 'inactivity') return 'completed'
+    // user_hangup / agent_hangup → conversación normal, completada
+    if (d.includes('hangup')) return 'completed'
+    // dial_failed sin no_answer puede ser número invalido
+    if (d.includes('fail') || d.includes('error') || d.includes('invalid')) return 'failed'
+  }
+
+  // Fallback al call_status si disconnection_reason no aplica
   if (!s) return 'completed'
   if (s.includes('voicemail') || s.includes('buzon')) return 'voicemail'
   if (s.includes('no_answer') || s.includes('no answer') || s.includes('no-answer') || s.includes('busy')) return 'no_answer'
@@ -334,7 +358,11 @@ export function normalizeDaptaStatus(raw: string | undefined | null): DaptaCallS
   if (s.includes('queue')) return 'queued'
   if (s.includes('dial') || s.includes('ringing')) return 'dialing'
   if (s.includes('connect') || s.includes('in-progress') || s.includes('ongoing')) return 'connected'
-  if (s.includes('complete') || s.includes('ended') || s.includes('finish')) return 'completed'
+  if (s.includes('complete') || s.includes('ended') || s.includes('finish')) {
+    // "ended" + duración <8s = el cliente colgó antes de contestar bien → no_answer
+    if (typeof durationSeconds === 'number' && durationSeconds < 8) return 'no_answer'
+    return 'completed'
+  }
   return 'completed'
 }
 
