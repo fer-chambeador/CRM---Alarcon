@@ -567,3 +567,128 @@
   color: var(--text3);
   margin-top: 4px;
 }
+
+@media (max-width: 768px) {
+  .root {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .sidebar {
+    width: 100%;
+    flex-direction: column;
+    padding: 14px 14px 12px;
+    gap: 6px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+  .logo {
+    padding: 0 4px 12px;
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .main {
+    overflow: visible;
+  }
+  .topBar {
+    padding: 16px 16px 12px;
+    flex-wrap: wrap;
+  }
+  .topBar h1 {
+    font-size: 22px;
+  }
+  .infoBanner {
+    margin: 0 14px 12px;
+  }
+  .filters {
+    padding: 6px 14px 16px;
+  }
+  .search {
+    min-width: 0;
+    width: 100%;
+  }
+  .tabs {
+    padding: 0 14px;
+  }
+  .body {
+    overflow: visible;
+    padding: 4px 14px 24px;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .campaignsGrid {
+    grid-template-columns: 1fr;
+  }
+  .metricsRow {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Modal full-screen en móvil */
+  .modalOverlay {
+    align-items: flex-start;
+    padding: 0;
+  }
+  .modal {
+    max-width: 100%;
+    min-height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+  .sectionRow {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .sectionRow > div {
+    min-width: 0;
+  }
+
+  /* Tabla de recipients → tarjetas apiladas */
+  .recipientsTable, .recipientsTable tbody {
+    display: block;
+    width: 100%;
+  }
+  .recipientsTable thead {
+    display: none;
+  }
+  .recipientRow {
+    display: block;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px 8px;
+    margin-bottom: 10px;
+  }
+  .recipientsTable tbody td {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 6px 0 !important;
+    border: none !important;
+    text-align: right;
+  }
+  .recipientsTable tbody td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    text-align: left;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    color: var(--text3);
+  }
+  .recipientsTable tbody td:first-child {
+    display: block;
+    text-align: left;
+    padding: 0 0 8px !important;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--border) !important;
+  }
+  .recipientsTable tbody td:first-child::before {
+    display: none;
+  }
+}

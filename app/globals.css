@@ -145,3 +145,15 @@ button {
   cursor: pointer;
   font-weight: 500;
 }
+
+/* ── Mobile baseline ─────────────────────────────────────────────
+   Reserve space for the fixed bottom tab bar and stop iOS from
+   auto-inflating text. Per-screen layouts switch to natural scroll
+   at this breakpoint so this padding actually takes effect. */
+@media (max-width: 768px) {
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body { padding-bottom: calc(62px + env(safe-area-inset-bottom)); }
+  /* Shrink the aurora blobs so they don't dominate small screens */
+  body::before { width: 420px; height: 320px; }
+  body::after { width: 320px; height: 240px; }
+}

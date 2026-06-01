@@ -1,0 +1,67 @@
+.root {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+.sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 26px 18px 22px;
+  overflow-y: auto;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 22px;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.main {
+  flex: 1;
+  overflow: auto;
+  padding: 30px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.pageTitle {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  margin: 0;
+}
+.dataGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+/* ── Mobile pass ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .root { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
+  .sidebar {
+    width: 100%; flex-direction: column; padding: 14px 14px 12px; gap: 6px;
+    border-right: none; border-bottom: 1px solid var(--border); overflow: visible;
+  }
+  .logo { padding: 0 4px 12px; font-size: 18px; margin-bottom: 4px; }
+  .main { overflow: visible; padding: 18px 16px; gap: 18px; }
+  .pageTitle { font-size: 24px; }
+  .dataGrid { grid-template-columns: 1fr 1fr; gap: 10px; }
+}

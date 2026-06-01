@@ -312,6 +312,7 @@
   .logo { padding: 0 4px 10px; font-size: 18px; margin-bottom: 4px; }
   .sidebarNav { flex-direction: row; padding: 0; overflow-x: auto; gap: 4px; }
   .navLink { padding: 7px 10px; font-size: 12.5px; white-space: nowrap; }
+  .main { overflow: visible; }
   .dateBlock { padding: 10px 4px 6px; }
   .kpiList { padding: 8px 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .kpi, .kpiMoney { padding: 8px 12px; }

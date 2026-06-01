@@ -268,11 +268,23 @@
   .logo { padding: 0 4px 10px; font-size: 18px; margin-bottom: 4px; }
   .sidebarNav { flex-direction: row; padding: 0; overflow-x: auto; gap: 4px; }
   .navLink { padding: 7px 10px; font-size: 12.5px; white-space: nowrap; }
+  .main { overflow: visible; }
   .topBar { padding: 14px 16px; }
   .topBar h1 { font-size: 22px; }
   .body { padding: 12px 14px 16px; gap: 16px; }
+  .suggestions { grid-template-columns: 1fr; }
   .userBubble, .assistantBubble { max-width: 100%; padding: 12px 14px; }
-  .composer { padding: 10px 14px 16px; }
+  /* keep the composer reachable above the fixed bottom tab bar */
+  .composer {
+    position: sticky;
+    bottom: calc(58px + env(safe-area-inset-bottom));
+    padding: 10px 14px 12px;
+    background: rgba(14,14,26,0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    z-index: 50;
+  }
   .input { font-size: 13.5px !important; padding: 10px 14px !important; }
   .sendBtn { padding: 0 16px; }
 }

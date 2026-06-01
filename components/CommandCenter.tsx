@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase, type Lead } from '@/lib/supabase'
@@ -278,18 +279,81 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
   const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   const onSettings = active === 'settings' || active === 'templates'
   return (
-    <nav className={styles.sidebarNav}>
-      {link('/leads', 'leads', 'Leads', '📋')}
-      {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
-      {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
-      {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
-      {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
-      {link('/analytics', 'analytics', 'Analítica', '📊')}
-      {link('/asistente', 'asistente', 'Asistente', '🧠')}
-      {link('/settings', 'settings', 'Settings', '⚙️')}
-      {onSettings && subLink('/settings', 'settings', 'General')}
-      {onSettings && subLink('/templates', 'templates', 'Templates')}
-    </nav>
+    <>
+      <nav className={styles.sidebarNav}>
+        {link('/leads', 'leads', 'Leads', '📋')}
+        {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
+        {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
+        {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
+        {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
+        {link('/analytics', 'analytics', 'Analítica', '📊')}
+        {link('/asistente', 'asistente', 'Asistente', '🧠')}
+        {link('/settings', 'settings', 'Settings', '⚙️')}
+        {onSettings && subLink('/settings', 'settings', 'General')}
+        {onSettings && subLink('/templates', 'templates', 'Templates')}
+      </nav>
+      <MobileTabBar active={active} />
+    </>
+  )
+}
+
+// ─── Mobile bottom tab bar ───────────────────────────────────────────────────
+const MOBILE_TABS = [
+  { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
+  { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
+  { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
+  { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
+  { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
+] as const
+
+export function MobileTabBar({ active }: { active: string }) {
+  const [moreOpen, setMoreOpen] = useState(false)
+  // Portal to <body> so the fixed bar escapes ancestors with backdrop-filter
+  // (the .sidebar uses backdrop-filter, which would otherwise become the
+  // containing block for position:fixed and pin the bar to the top block).
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+  // recurrentes sub-page should keep the Recurrentes tab lit
+  const norm = active === 'recurrentes-analitica' ? 'recurrentes' : active
+  const moreActive = norm === 'templates' || norm === 'settings' || norm === 'aprobaciones'
+  if (!mounted) return null
+  return createPortal(
+    <>
+      {moreOpen && (
+        <div className={styles.mobileSheetOverlay} onClick={() => setMoreOpen(false)}>
+          <div className={styles.mobileSheet} onClick={e => e.stopPropagation()}>
+            <div className={styles.mobileSheetHandle} />
+            <Link href="/outbound" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'aprobaciones' && styles.mobileSheetItemActive)}>
+              📨 Outbound
+            </Link>
+            <Link href="/templates" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'templates' && styles.mobileSheetItemActive)}>
+              ✉️ Templates
+            </Link>
+            <Link href="/settings" onClick={() => setMoreOpen(false)}
+              className={clsx(styles.mobileSheetItem, norm === 'settings' && styles.mobileSheetItemActive)}>
+              ⚙️ Settings
+            </Link>
+          </div>
+        </div>
+      )}
+      <nav className={styles.mobileTabBar}>
+        {MOBILE_TABS.map(t => (
+          <Link key={t.key} href={t.href}
+            className={clsx(styles.mobileTab, norm === t.key && styles.mobileTabActive)}>
+            <span className={styles.mobileTabIcon}>{t.icon}</span>
+            <span className={styles.mobileTabLabel}>{t.label}</span>
+          </Link>
+        ))}
+        <button type="button" onClick={() => setMoreOpen(v => !v)}
+          className={clsx(styles.mobileTab, moreActive && styles.mobileTabActive)}>
+          <span className={styles.mobileTabIcon}>•••</span>
+          <span className={styles.mobileTabLabel}>Más</span>
+        </button>
+      </nav>
+    </>,
+    document.body
   )
 }
 
