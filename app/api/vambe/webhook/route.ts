@@ -693,6 +693,12 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   const map = getStageMap()
   const mappedStatus = map[newStageId]
+  // Si el stage no está en el map (stage nuevo en Vambe), loguear para que
+  // podamos agregarlo al map. Antes era silent skip y stages nuevos quedaban
+  // sin avanzar al lead.
+  if (!mappedStatus && newStageId) {
+    console.warn(`[vambe] Stage no mapeado: "${newStageId}" — agregar a DEFAULT_STAGE_MAP o VAMBE_STAGE_MAP env var. Lead queda en estado actual.`)
+  }
 
   // Si el lead aún no existe en el CRM, intentar promoverlo desde el pending
   // EN CUALQUIER stage change (no solo cuando target=='nuevo'). Razón: el lead

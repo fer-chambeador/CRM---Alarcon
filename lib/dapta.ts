@@ -270,8 +270,20 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
 
   // call_analysis puede venir DENTRO de call (Daniela) o en raíz (legado)
   const analysis = c.call_analysis || payload.call_analysis || {}
-  const customAnalysis = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
-  const summary = analysis.call_summary || customAnalysis.resumen_detallado || null
+  const rawCustom = (analysis.custom_analysis_data || {}) as DaptaCustomAnalysis
+  // Daniela mete strings "null"/"undefined" en campos opcionales que rompen
+  // queries downstream y renders en UI. Limpiamos TODO el objeto antes de persist.
+  const customAnalysis: DaptaCustomAnalysis = {}
+  for (const k of Object.keys(rawCustom)) {
+    const v = rawCustom[k]
+    if (typeof v === 'string') {
+      const cleaned = cleanNullString(v)
+      if (cleaned !== null) customAnalysis[k] = cleaned
+    } else if (v !== null && v !== undefined) {
+      customAnalysis[k] = v
+    }
+  }
+  const summary = cleanNullString(analysis.call_summary) || cleanNullString(customAnalysis.resumen_detallado as string) || null
 
   // lead_id: prioridad — dynamic_variables (real Daniela) > data.lead_id (legado)
   const leadIdFromPayload =
@@ -290,7 +302,18 @@ export function extractPostCallFields(payload: DaptaPostCallPayload): {
     startedAtIso,
     endedAtIso,
     recordingUrl: c.recording_url || null,
-    transcript: c.transcript_object || c.transcript || null,
+    // Limitar transcript a 200KB para evitar romper la columna en DB con calls
+    // muy largas (Daniela puede generar transcripts de >1MB en calls de 30min).
+    transcript: (() => {
+      const t = c.transcript_object || c.transcript || null
+      if (!t) return null
+      const serialized = typeof t === 'string' ? t : JSON.stringify(t)
+      if (serialized.length > 200_000) {
+        console.warn(`[dapta] transcript truncado de ${serialized.length} a 200KB para call ${c.call_id}`)
+        return serialized.slice(0, 200_000) + '...[truncado]'
+      }
+      return t
+    })(),
     summary,
     customAnalysis,
     leadIdFromPayload,

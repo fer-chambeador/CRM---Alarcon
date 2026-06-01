@@ -29,6 +29,10 @@ export function normalizeMexicanPhone(raw: string | null | undefined): string | 
   if (digits.length === 13 && digits.startsWith('521')) return `+52${digits.slice(3)}`
   if (digits.length === 11 && digits.startsWith('1')) return `+52${digits.slice(1)}`
 
+  // Internacional con + (no MX): solo aceptamos si tiene >= 10 digits
   if (trimmed.startsWith('+') && digits.length >= 10) return `+${digits}`
-  return trimmed
+
+  // Phone demasiado corto o formato no reconocido → null (no devolver basura)
+  // Antes esto devolvía `trimmed` y rompía downstream con phones inválidos.
+  return null
 }

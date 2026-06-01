@@ -62,11 +62,21 @@ export async function GET(req: NextRequest) {
       .not('status', 'in', '(canceled)')
       .limit(1)
     if (otherCalls && otherCalls.length > 0) {
+      const otherId = (otherCalls[0] as { id: string; status: string }).id
+      const otherStatus = (otherCalls[0] as { id: string; status: string }).status
       await supabase
         .from('llamadas')
-        .update({ status: 'canceled', error_message: 'auto-canceled: lead already has another call (1-call rule)' })
+        .update({ status: 'canceled', error_message: `auto-canceled: lead already has another call (1-call rule). Other call: ${otherId} status=${otherStatus}` })
         .eq('id', row.id)
-      results.push({ llamada_id: row.id, ok: false, reason: '1-call-rule: lead already has another call, auto-canceled' })
+      // Log a lead_actividad para auditoría — antes era silent y no quedaba
+      // rastro de la cancelación automática en el historial del lead.
+      await supabase.from('lead_actividad').insert({
+        lead_id: row.lead_id,
+        tipo: 'dapta_call_auto_canceled',
+        descripcion: `🚫 Cron auto-canceló esta llamada agendada porque el lead ya tiene otra llamada (1-call rule)`,
+        metadata: { source: 'dapta-cron', llamada_id: row.id, other_llamada_id: otherId, other_status: otherStatus },
+      })
+      results.push({ llamada_id: row.id, ok: false, reason: '1-call-rule: lead already has another call, auto-canceled', other: { id: otherId, status: otherStatus } })
       continue
     }
 
