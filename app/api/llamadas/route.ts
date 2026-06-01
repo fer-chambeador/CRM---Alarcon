@@ -17,19 +17,17 @@ export async function GET(req: NextRequest) {
   const offset = parseInt(url.searchParams.get('offset') || '0', 10)
 
   const supabase = createServiceClient()
+  // NOTA (1 jun 2026): el select con columnas específicas + range() estaba
+  // devolviendo data STALE (ver fila ID 20675a04 que tenía updated_at=created_at
+  // en la lista pero updated_at posterior en /llamadas/[id]). Cambiamos a
+  // select '*' + limit() para evitar el bug de cache/replica que afectaba los
+  // rescates de Patricia, Guadalupe, Martha, Jorge, Gerardo (rebanados de
+  // Marcando aunque ya estaban completed/no_answer/voicemail).
   let q = supabase
     .from('llamadas')
-    .select(`
-      id, lead_id, dapta_call_id, agent_name, status, outcome,
-      to_number, from_number, duration_seconds, recording_url,
-      summary, custom_analysis, sentimiento, interes_real,
-      pidio_link_pago, pidio_presentacion, agendar_seguimiento, scheduled_at,
-      triggered_by, trigger_reason, error_message,
-      started_at, ended_at, created_at, updated_at,
-      leads:lead_id ( id, nombre, email, empresa, telefono, status, presupuesto, vacante )
-    `, { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1)
+    .select(`*, leads:lead_id ( id, nombre, email, empresa, telefono, status, presupuesto, vacante )`, { count: 'exact' })
+    .order('updated_at', { ascending: false })
+    .limit(limit)
 
   if (status) q = q.eq('status', status)
   if (outcome) q = q.eq('outcome', outcome)
