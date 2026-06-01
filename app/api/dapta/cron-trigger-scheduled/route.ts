@@ -49,9 +49,30 @@ export async function GET(req: NextRequest) {
 
   for (const row of rows) {
     if (!row.lead_id) { results.push({ llamada_id: row.id, ok: false, reason: 'no lead_id' }); continue }
+
+    // ── OPTIMISTIC LOCK: marcar 'dialing' ANTES de llamar a Dapta ──
+    // Esto previene el bug que vimos donde la fila se quedaba en 'queued' y el
+    // siguiente cron tick la volvía a disparar (Olvera fue llamada N veces).
+    // Solo actualizamos si SIGUE en 'queued' — si otro worker ya la tomó,
+    // .update().eq('status','queued') no afecta filas y obtenemos array vacío.
+    const { data: locked, error: lockErr } = await supabase
+      .from('llamadas')
+      .update({ status: 'dialing', trigger_reason: 'scheduled_fired' })
+      .eq('id', row.id)
+      .eq('status', 'queued')
+      .select('id')
+    if (lockErr || !locked || locked.length === 0) {
+      results.push({ llamada_id: row.id, ok: false, reason: 'already-processed-or-lock-failed' })
+      continue
+    }
+
     const { data: leadData } = await supabase.from('leads').select('*').eq('id', row.lead_id).maybeSingle()
     const lead = leadData as Lead | null
-    if (!lead) { results.push({ llamada_id: row.id, ok: false, reason: 'lead not found' }); continue }
+    if (!lead) {
+      await supabase.from('llamadas').update({ status: 'failed', error_message: 'lead not found' }).eq('id', row.id)
+      results.push({ llamada_id: row.id, ok: false, reason: 'lead not found' })
+      continue
+    }
     if (!lead.telefono) {
       await supabase.from('llamadas').update({ status: 'failed', error_message: 'lead sin teléfono al disparar agendada' }).eq('id', row.id)
       results.push({ llamada_id: row.id, ok: false, reason: 'no phone' })
@@ -70,11 +91,7 @@ export async function GET(req: NextRequest) {
     })
 
     if (triggerResult.ok) {
-      // Marcar la llamada como disparada (sigue queued hasta que llegue el webhook con dapta_call_id real)
-      await supabase.from('llamadas').update({
-        trigger_reason: 'scheduled_fired',
-      }).eq('id', row.id)
-
+      // Status ya está 'dialing' (set arriba con lock). El post-call la moverá a 'completed'.
       // Mover lead a llamada_con_dapta si no está en etapa más avanzada
       if (!ADVANCED.has(lead.status)) {
         await supabase.from('leads').update({

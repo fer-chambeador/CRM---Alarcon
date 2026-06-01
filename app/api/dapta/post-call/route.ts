@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (b) Si tenemos lead_id de dynamic_variables, agarrar la llamada queued más reciente sin call_id
+  // (b) Si tenemos lead_id de dynamic_variables, agarrar la llamada dialing/queued más reciente sin call_id
   if (!llamadaId && f.leadIdFromPayload) {
     leadId = f.leadIdFromPayload
     const { data: latestQueued } = await supabase
@@ -78,6 +78,7 @@ export async function POST(req: NextRequest) {
       .select('id')
       .eq('lead_id', f.leadIdFromPayload)
       .is('dapta_call_id', null)
+      .in('status', ['dialing', 'queued'])
       .order('created_at', { ascending: false })
       .limit(1)
     if (latestQueued && latestQueued.length > 0) {
@@ -85,16 +86,53 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (c) Fallback: por teléfono buscar lead
+  // (c) Fallback: por teléfono buscar lead Y llamada dialing/queued sin dapta_call_id
   if (!leadId && toNumber) {
     const last10 = toNumber.replace(/\D/g, '').slice(-10)
-    const { data: leadByPhone } = await supabase
-      .from('leads')
+    if (last10.length === 10) {
+      const { data: leadByPhone } = await supabase
+        .from('leads')
+        .select('id')
+        .like('telefono', `%${last10}`)
+        .limit(1)
+      if (leadByPhone && leadByPhone.length > 0) {
+        leadId = (leadByPhone[0] as { id: string }).id
+      }
+    }
+  }
+
+  // (d) Si tenemos leadId pero NO llamadaId, intentar matchear dialing/queued sin dapta_call_id por leadId
+  if (leadId && !llamadaId) {
+    const { data: existingByLead } = await supabase
+      .from('llamadas')
       .select('id')
-      .like('telefono', `%${last10}`)
+      .eq('lead_id', leadId)
+      .is('dapta_call_id', null)
+      .in('status', ['dialing', 'queued'])
+      .order('created_at', { ascending: false })
       .limit(1)
-    if (leadByPhone && leadByPhone.length > 0) {
-      leadId = (leadByPhone[0] as { id: string }).id
+    if (existingByLead && existingByLead.length > 0) {
+      llamadaId = (existingByLead[0] as { id: string }).id
+    }
+  }
+
+  // (e) último fallback: matchear por to_number en dialing/queued (caso sin lead, ej. inbound o lead borrado)
+  if (!llamadaId && toNumber) {
+    const last10 = toNumber.replace(/\D/g, '').slice(-10)
+    if (last10.length === 10) {
+      const { data: existingByPhone } = await supabase
+        .from('llamadas')
+        .select('id, lead_id')
+        .like('to_number', `%${last10}`)
+        .is('dapta_call_id', null)
+        .in('status', ['dialing', 'queued'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (existingByPhone && existingByPhone.length > 0) {
+        const r = existingByPhone[0] as { id: string; lead_id: string | null }
+        llamadaId = r.id
+        if (!leadId && r.lead_id) leadId = r.lead_id
+      }
     }
   }
 
