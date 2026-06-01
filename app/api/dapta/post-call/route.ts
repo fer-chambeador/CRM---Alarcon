@@ -224,7 +224,38 @@ export async function POST(req: NextRequest) {
     llamadaId = (savedLlamada as { id?: string } | null)?.id || null
   }
 
-  // ── 4) Lead activity log ──
+  // ── 4) Si no contestaron, mover lead a 'no_show_llamada' + append nota ──
+  // Regla del user (1 jun 2026): si Dapta llamó y el cliente no respondió,
+  // el lead debe quedar en 'no_show_llamada' con una nota explícita en su card.
+  // Antes el lead se quedaba en 'llamada_con_dapta' y no había forma fácil de
+  // saber que la llamada no se concretó.
+  if (leadId && status === 'no_answer') {
+    const { data: leadCurrent } = await supabase
+      .from('leads')
+      .select('status, notas')
+      .eq('id', leadId)
+      .maybeSingle()
+    const lc = leadCurrent as { status: string; notas: string | null } | null
+    if (lc) {
+      // No tumbamos status si ya está en una etapa MÁS avanzada (convertido, etc.)
+      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      const newStatus = ADVANCED.has(lc.status) ? lc.status : 'no_show_llamada'
+      const noteLine = `[${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}] Vambe llamó pero lead no respondió`
+      const newNotas = lc.notas && lc.notas.trim().length > 0
+        ? `${lc.notas}\n${noteLine}`
+        : noteLine
+      await supabase
+        .from('leads')
+        .update({
+          status: newStatus,
+          notas: newNotas,
+          status_changed_at: new Date().toISOString(),
+        })
+        .eq('id', leadId)
+    }
+  }
+
+  // ── 5) Lead activity log ──
   if (leadId && llamadaId) {
     await supabase.from('lead_actividad').insert({
       lead_id: leadId,
