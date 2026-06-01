@@ -23,13 +23,25 @@ export async function GET(req: NextRequest) {
   const vambeKeys = allKeys.filter(k => k.startsWith('VAMBE_')).map(k => ({
     key: k, length: (process.env[k] || '').length,
   }))
-  const otherDebug = ['DAPTA_POST_CALL_SECRET', 'CRON_SECRET', 'DEPLOY_TRIGGER'].map(k => ({
+  const daptaKeys = allKeys.filter(k => k.startsWith('DAPTA_')).map(k => ({
+    key: k, length: (process.env[k] || '').length,
+  }))
+  const anthropicKeys = allKeys.filter(k => k.startsWith('ANTHROPIC_')).map(k => ({
+    key: k, length: (process.env[k] || '').length,
+  }))
+  const supabaseKeys = allKeys.filter(k => k.startsWith('NEXT_PUBLIC_SUPABASE_') || k.startsWith('SUPABASE_')).map(k => ({
+    key: k, length: (process.env[k] || '').length,
+  }))
+  const otherDebug = ['DAPTA_POST_CALL_SECRET', 'CRON_SECRET', 'DEPLOY_TRIGGER', 'NEXT_PUBLIC_CRM_URL', 'GOOGLE_CALENDAR_SYNC_SECRET'].map(k => ({
     key: k, present: !!process.env[k], length: (process.env[k] || '').length,
   }))
 
   return NextResponse.json({
     slack_vars: slackKeys,
     vambe_vars: vambeKeys,
+    dapta_vars: daptaKeys,
+    anthropic_vars: anthropicKeys,
+    supabase_vars: supabaseKeys,
     debug_vars: otherDebug,
     total_env_keys: allKeys.length,
     timestamp: new Date().toISOString(),
