@@ -49,20 +49,43 @@ export async function POST(req: NextRequest) {
     const empresaFromEmail = parsed.empresa || extractCompanyFromEmail(parsed.email)
     const normalizedTelefono = parsed.telefono ? (normalizeMexicanPhone(parsed.telefono) || parsed.telefono) : null
 
+    // ── Detectar canal de origen para sobreescribir canal_adquisicion ──
+    // Slack puede mandar el channel_id en event.channel. Si está en la lista de
+    // canales de Canirac, forzamos canal='Canirac' (override del parser de texto).
+    // Soporta tanto channel_id (Cxxxxx) como channel_name si Slack lo envía.
+    const channelId: string = (event.channel || '').trim()
+    const channelName: string = (event.channel_name || '').trim().toLowerCase()
+    const caniracIds = (process.env.SLACK_CANIRAC_CHANNEL_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+    const isCaniracChannel = (channelId && caniracIds.includes(channelId)) || channelName === 'canirac'
+    if (isCaniracChannel) {
+      parsed.canal_adquisicion = 'Canirac'
+    }
+
     // ── Pago confirmado → convertir automáticamente ──
+    // REGLA NUEVA (Fer, 1 jun 2026): cualquier pago confirmado a partir del 1 de
+    // Junio 2026 marca el lead como 'cliente_recurrente' (no 'convertido'). Los
+    // pagos antes de esa fecha siguen siendo 'convertido' (no rebreak histórico).
+    const RECURRENTE_CUTOFF = new Date('2026-06-01T00:00:00-06:00').getTime() // CDMX
     if (parsed.tipo_evento === 'pago_confirmado') {
       if (existing) {
+        const nowMs = Date.now()
+        const targetStatus: 'convertido' | 'cliente_recurrente' = nowMs >= RECURRENTE_CUTOFF
+          ? 'cliente_recurrente'
+          : 'convertido'
         await supabase.from('leads').update({
-          status: 'convertido',
+          status: targetStatus,
           plan: parsed.plan || existing.plan,
           nombre: parsed.nombre || existing.nombre,
           suscripcion_fecha: new Date().toISOString(),
+          status_changed_at: new Date().toISOString(),
         }).eq('id', existing.id)
         await supabase.from('lead_actividad').insert({
           lead_id: existing.id,
           tipo: 'slack_update',
-          descripcion: `Pago confirmado - Monto: $${parsed.monto} MXN`,
-          metadata: { monto: parsed.monto, plan: parsed.plan },
+          descripcion: targetStatus === 'cliente_recurrente'
+            ? `💎 Pago confirmado — promovido a Cliente Recurrente (post-1jun2026) - Monto: $${parsed.monto} MXN`
+            : `Pago confirmado - Monto: $${parsed.monto} MXN`,
+          metadata: { monto: parsed.monto, plan: parsed.plan, target_status: targetStatus },
         })
       }
       return NextResponse.json({ ok: true })

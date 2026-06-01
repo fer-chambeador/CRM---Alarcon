@@ -11,6 +11,7 @@ export const CANONICAL_CANALES = [
   'Recomendación',
   'LinkedIn',
   'WhatsApp',
+  'Canirac',
 ] as const
 
 export type CanonicalCanal = typeof CANONICAL_CANALES[number]
@@ -55,6 +56,10 @@ export function normalizeCanal(raw: string | null | undefined): string | null {
 
   // WhatsApp
   if (lower === 'wa' || lower.includes('whatsapp')) return 'WhatsApp'
+
+  // Canirac — Cámara Nacional de la Industria de Restaurantes y Alimentos Condimentados.
+  // Canal nuevo, los leads llegan desde el canal Slack #canirac (1 jun 2026).
+  if (lower.includes('canirac')) return 'Canirac'
 
   // Unknown — preserve as-is so we don't drop data, but title-case
   return trimmed
