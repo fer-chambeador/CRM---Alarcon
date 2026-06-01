@@ -9,15 +9,25 @@ export const maxDuration = 60
 /**
  * GET /api/dapta/cron-trigger-scheduled?secret=<DAPTA_POST_CALL_SECRET>
  *
- * Cron endpoint. Cada minuto (o lo que configures en Railway/Vercel cron):
+ * Cron endpoint. Cada minuto (o lo que configures en cron-job.org):
  *   - Busca llamadas con status='queued' AND scheduled_at <= now() AND dapta_call_id IS NULL
  *   - Para cada una, dispara Dapta y mueve el lead a 'llamada_con_dapta'
  *
  * Para que sea seguro pero llamable desde Railway/cron-job.org, lo gateamos con
  * el mismo secret de post-call (DAPTA_POST_CALL_SECRET).
  *
- * Idempotente: si por algún motivo se llama 2× para la misma fila, el segundo
- * intento la encuentra ya con dapta_call_id o ya disparada y la salta.
+ * ── PROTECCIONES CONTRA BUCLES (defensa en profundidad) ──
+ * 1. Optimistic lock: UPDATE status='dialing' WHERE status='queued' ANTES de llamar
+ *    a Dapta. Si otro worker ya la tomó, lock falla y skipeamos.
+ * 2. Regla 1-llamada-por-lead: si lead ya tiene OTRA llamada (status != canceled),
+ *    auto-cancelamos esta y skipeamos. Nunca podemos marcarle a un cliente 2+ veces.
+ * 3. Exclusión por trigger_reason: si la fila tiene trigger_reason='scheduled_fired'
+ *    YA fue procesada por el cron en algún momento — NO volver a tocar.
+ * 4. Stale guard: scheduled_at > 7 días en el pasado se ignora (probablemente obsoleta).
+ * 5. Batch size cap: max 5 llamadas por ejecución (antes 20). Más prudente.
+ *
+ * Idempotente: si se llama 2× para la misma fila, el segundo intento la encuentra
+ * con dapta_call_id, status!=queued, o trigger_reason='scheduled_fired' y la salta.
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -28,22 +38,30 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServiceClient()
   const nowIso = new Date().toISOString()
-  const limit = parseInt(url.searchParams.get('limit') || '20', 10)
+  // Batch size default 5 (bajamos de 20) — más prudente. Si el cron se rompe y
+  // se acumula la queue, sacamos máximo 5 por minuto en vez de 20 de golpe.
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '5', 10), 10)
+  // Stale guard: ignorar scheduled_at > 7 días en el pasado (probable obsoleta).
+  const minScheduledAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data: pending, error } = await supabase
     .from('llamadas')
-    .select('id, lead_id, scheduled_at, status')
+    .select('id, lead_id, scheduled_at, status, trigger_reason')
     .eq('status', 'queued')
     .is('dapta_call_id', null)
     .not('scheduled_at', 'is', null)
     .lte('scheduled_at', nowIso)
+    .gte('scheduled_at', minScheduledAt)
+    // EXTRA: nunca re-procesar filas que ya tuvieron trigger_reason='scheduled_fired'.
+    // Eso significa que el cron YA las disparó antes (defensa contra el bucle).
+    .or('trigger_reason.is.null,trigger_reason.neq.scheduled_fired')
     .order('scheduled_at', { ascending: true })
     .limit(limit)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const rows = (pending || []) as Array<{ id: string; lead_id: string | null; scheduled_at: string; status: string }>
-  const results: Array<{ llamada_id: string; ok: boolean; reason?: string }> = []
+  const rows = (pending || []) as Array<{ id: string; lead_id: string | null; scheduled_at: string; status: string; trigger_reason: string | null }>
+  const results: Array<{ llamada_id: string; ok: boolean; reason?: string; other?: { id: string; status: string } }> = []
 
   const ADVANCED = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
 
