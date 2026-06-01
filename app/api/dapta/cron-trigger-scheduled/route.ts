@@ -50,6 +50,26 @@ export async function GET(req: NextRequest) {
   for (const row of rows) {
     if (!row.lead_id) { results.push({ llamada_id: row.id, ok: false, reason: 'no lead_id' }); continue }
 
+    // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+    // Si este lead ya tiene OTRA llamada (no esta misma fila) en cualquier estado
+    // distinto de 'canceled', cancelamos ESTA fila y la skipeamos. Nunca podemos
+    // marcarle a un cliente más de una vez (regla del usuario, 31/05/2026).
+    const { data: otherCalls } = await supabase
+      .from('llamadas')
+      .select('id, status')
+      .eq('lead_id', row.lead_id)
+      .neq('id', row.id)
+      .not('status', 'in', '(canceled)')
+      .limit(1)
+    if (otherCalls && otherCalls.length > 0) {
+      await supabase
+        .from('llamadas')
+        .update({ status: 'canceled', error_message: 'auto-canceled: lead already has another call (1-call rule)' })
+        .eq('id', row.id)
+      results.push({ llamada_id: row.id, ok: false, reason: '1-call-rule: lead already has another call, auto-canceled' })
+      continue
+    }
+
     // ── OPTIMISTIC LOCK: marcar 'dialing' ANTES de llamar a Dapta ──
     // Esto previene el bug que vimos donde la fila se quedaba en 'queued' y el
     // siguiente cron tick la volvía a disparar (Olvera fue llamada N veces).
