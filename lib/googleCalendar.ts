@@ -255,6 +255,77 @@ export async function syncLeadToCalendar(
   }
 }
 
+// ─── Follow-up reminder (all-day event +3 días) ─────────────────────────
+//
+// Cuando un lead pasa a status='presentacion_enviada' creamos un all-day
+// event en GCal 3 días después con título "Follow Up - {nombre} - {telefono}".
+// All-day events aparecen como una barra arriba del día — visualmente
+// equivalente a un recordatorio sin requerir el scope de Tasks API.
+
+type FollowUpLead = Pick<Lead, 'nombre' | 'empresa' | 'email' | 'telefono' | 'vacante' | 'notas' | 'monto'>
+
+function ymd(d: Date): string {
+  // YYYY-MM-DD en zona horaria CDMX (sin shift por UTC).
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  return fmt.format(d) // 'YYYY-MM-DD'
+}
+
+/** Construye el title canónico del follow-up: "Follow Up - {nombre} - {telefono}". */
+export function followUpTitle(lead: Pick<Lead, 'nombre' | 'empresa' | 'email' | 'telefono'>): string {
+  const who = lead.nombre || lead.empresa || lead.email || 'Lead'
+  const tel = lead.telefono || 's/teléfono'
+  return `Follow Up - ${who} - ${tel}`
+}
+
+/** Crea all-day event con default duedate = hoy+3días (CDMX). */
+export async function createFollowUpReminder(
+  supabase: Supabase,
+  lead: FollowUpLead & { email: string },
+  daysAhead = 3,
+): Promise<string> {
+  const due = new Date(Date.now() + daysAhead * 86400_000)
+  const startDate = ymd(due)
+  // GCal all-day: end.date debe ser DÍA SIGUIENTE (exclusivo) para que ocupe
+  // solo el día de start.
+  const endDt = new Date(due.getTime() + 86400_000)
+  const endDate = ymd(endDt)
+
+  const descLines: string[] = []
+  descLines.push(`Lead: ${lead.nombre || lead.empresa || lead.email}`)
+  if (lead.empresa) descLines.push(`Empresa: ${lead.empresa}`)
+  if (lead.telefono) descLines.push(`Teléfono: ${lead.telefono}`)
+  if (lead.email) descLines.push(`Email: ${lead.email}`)
+  if (lead.vacante) descLines.push(`Vacante: ${lead.vacante}`)
+  if (lead.monto) descLines.push(`Monto propuesto: $${Number(lead.monto).toLocaleString('es-MX')}`)
+  if (lead.notas) descLines.push(`\nNotas:\n${lead.notas}`)
+  descLines.push('\n— Generado automáticamente por Chambas CRM tras enviar presentación.')
+
+  const body = {
+    summary: followUpTitle(lead),
+    description: descLines.join('\n'),
+    start: { date: startDate },
+    end:   { date: endDate },
+    // Recordatorios populares 1 día antes + el mismo día a las 9am
+    reminders: {
+      useDefault: false,
+      overrides: [
+        { method: 'popup', minutes: 24 * 60 },          // 1 día antes
+        { method: 'popup', minutes: 0 },                // mismo día (00:00)
+      ],
+    },
+  }
+
+  const result = await calendarFetch(supabase, 'POST', '/calendars/{calendarId}/events', body) as { id?: string }
+  return result?.id || ''
+}
+
+export async function deleteFollowUpReminder(supabase: Supabase, eventId: string): Promise<void> {
+  await deleteCalendarEvent(supabase, eventId)
+}
+
 export async function isConnected(supabase: Supabase): Promise<{ connected: boolean; google_email: string | null }> {
   const { data } = await supabase
     .from('google_calendar_tokens').select('google_email').eq('user_id', USER_ID).single()

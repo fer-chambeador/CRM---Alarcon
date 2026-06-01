@@ -10,6 +10,7 @@ import {
 } from '@/lib/dapta'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertLlamadaPidioLinkPago, alertLlamadaPidioPresentacion } from '@/lib/slackAlertDapta'
+import { handleStatusChangeForFollowUp } from '@/lib/followUp'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -258,6 +259,42 @@ export async function POST(req: NextRequest) {
           status_changed_at: new Date().toISOString(),
         })
         .eq('id', leadId)
+    }
+  }
+
+  // ── 4.5) Si Daniela detectó pidio_presentacion, AVANZAR el lead a
+  //         'presentacion_enviada' (si no está más adelante ya) + disparar
+  //         el follow-up de GCal +3 días. Esto cubre el caso en que el user
+  //         no toca el status manualmente — Daniela lo hace en automático.
+  if (leadId && customData.outcome === 'pidio_presentacion') {
+    const { data: leadRow } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', leadId)
+      .maybeSingle()
+    const fullLead = leadRow as Lead | null
+    if (fullLead) {
+      const AHEAD = new Set<Lead['status']>(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      if (!AHEAD.has(fullLead.status)) {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'presentacion_enviada',
+            status_changed_at: new Date().toISOString(),
+          })
+          .eq('id', leadId)
+        // Disparar follow-up — leemos versión actualizada del lead para que el
+        // título use el nombre/teléfono más reciente.
+        const updatedLead: Lead = { ...fullLead, status: 'presentacion_enviada' }
+        await handleStatusChangeForFollowUp(
+          supabase,
+          leadId,
+          updatedLead,
+          fullLead.status,
+          'presentacion_enviada',
+          fullLead.gcal_followup_event_id,
+        )
+      }
     }
   }
 
