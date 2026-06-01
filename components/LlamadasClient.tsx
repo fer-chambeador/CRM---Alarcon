@@ -174,9 +174,32 @@ export default function LlamadasClient() {
   async function cancelScheduled(id: string) {
     if (!confirm('¿Cancelar esta llamada agendada?')) return
     try {
-      await fetch(`/api/llamadas/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'canceled' }) })
+      const res = await fetch(`/api/llamadas/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'canceled' }) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        const errMsg = (data as { error?: string }).error || `HTTP ${res.status}`
+        // Si el backend rechaza por "ya disparada", ofrecer force-cancel
+        if (res.status === 400 && errMsg.includes('ya se disparó')) {
+          if (confirm(`No se puede cancelar normalmente porque la llamada ya se disparó.\n\n¿Forzar cancelación de todos modos? (solo cambia el status en CRM, no afecta a Dapta)`)) {
+            const force = await fetch(`/api/llamadas/${id}?force=1`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'canceled' }) })
+            if (!force.ok) {
+              const d2 = await force.json().catch(() => ({}))
+              alert(`Error al forzar cancelación: ${(d2 as { error?: string }).error || force.status}`)
+              return
+            }
+            load()
+            return
+          }
+          return
+        }
+        alert(`Error al cancelar: ${errMsg}`)
+        return
+      }
       load()
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+      alert(`Error de red al cancelar: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   return (

@@ -36,6 +36,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   } | null
   if (!body) return NextResponse.json({ error: 'invalid body' }, { status: 400 })
 
+  // Bypass: ?force=1 permite "soft-cancel" en CRM aunque la llamada ya tenga
+  // dapta_call_id (i.e. ya se disparó). NO afecta a Dapta — solo marca la fila
+  // local como canceled para que desaparezca de la UI/queries. Usado cuando el
+  // user explícitamente quiere ocultar una llamada legacy.
+  const url = new URL(req.url)
+  const force = url.searchParams.get('force') === '1'
+
   const supabase = createServiceClient()
   const { data: existing } = await supabase
     .from('llamadas')
@@ -44,8 +51,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .maybeSingle()
   if (!existing) return NextResponse.json({ error: 'no encontrada' }, { status: 404 })
 
-  if ((existing as { dapta_call_id?: string | null }).dapta_call_id) {
-    return NextResponse.json({ error: 'la llamada ya se disparó — no se puede modificar' }, { status: 400 })
+  if ((existing as { dapta_call_id?: string | null }).dapta_call_id && !force) {
+    return NextResponse.json({ error: 'la llamada ya se disparó — no se puede modificar (usar ?force=1 para forzar cancel en CRM)' }, { status: 400 })
   }
 
   const updates: Record<string, unknown> = {}
