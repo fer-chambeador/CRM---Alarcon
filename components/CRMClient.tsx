@@ -40,15 +40,16 @@ function formatFecha(dateStr: string) {
 }
 
 // ─── Date filter ─────────────────────────────────────────────────────────────
-type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado'
+type DateRange = 'todo' | 'hoy' | 'semana' | 'mes' | 'mes-pasado' | 'custom'
 const DATE_LABELS: Record<DateRange, string> = {
   todo: 'Todo el tiempo',
   hoy: 'Hoy',
   semana: 'Esta semana',
   mes: 'Este mes',
   'mes-pasado': 'Mes pasado',
+  custom: 'Rango personalizado…',
 }
-function dateRangeBounds(range: DateRange): { from: Date | null; to: Date | null } {
+function dateRangeBounds(range: DateRange, customFrom?: string, customTo?: string): { from: Date | null; to: Date | null } {
   const now = new Date()
   switch (range) {
     case 'todo':       return { from: null, to: null }
@@ -58,6 +59,16 @@ function dateRangeBounds(range: DateRange): { from: Date | null; to: Date | null
     case 'mes-pasado': {
       const prev = subMonths(now, 1)
       return { from: startOfMonth(prev), to: endOfMonth(prev) }
+    }
+    case 'custom': {
+      // Custom range: from = inicio del día customFrom (00:00 local), to = fin del día customTo (23:59:59 local)
+      const from = customFrom ? startOfDay(new Date(customFrom + 'T00:00:00')) : null
+      let to: Date | null = null
+      if (customTo) {
+        const t = new Date(customTo + 'T23:59:59')
+        if (!isNaN(t.getTime())) to = t
+      }
+      return { from, to }
     }
   }
 }
@@ -427,6 +438,12 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
   const [dateRange, setDateRange] = useState<DateRange>('todo')
+  // Custom date range — solo se usan cuando dateRange === 'custom'.
+  // Default: el rango del mes actual (inicio mes → hoy) para que abra con algo útil.
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const monthStartIso = startOfMonth(new Date()).toISOString().slice(0, 10)
+  const [customFrom, setCustomFrom] = useState<string>(monthStartIso)
+  const [customTo, setCustomTo] = useState<string>(todayIso)
   const [newLeadFlash, setNewLeadFlash] = useState<string | null>(null)
   const [liveCount, setLiveCount] = useState(0)
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>({ key: 'fecha', dir: 'desc' })
@@ -485,7 +502,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   }, [])
 
   const dateScoped = useMemo(() => {
-    const { from, to } = dateRangeBounds(dateRange)
+    const { from, to } = dateRangeBounds(dateRange, customFrom, customTo)
     if (!from && !to) return leads
     return leads.filter(l => {
       const t = new Date(l.created_at).getTime()
@@ -493,7 +510,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       if (to && t > to.getTime()) return false
       return true
     })
-  }, [leads, dateRange])
+  }, [leads, dateRange, customFrom, customTo])
 
   const filtered = useMemo(() => {
     const q = search.trim()
@@ -650,6 +667,37 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
               <option key={r} value={r}>{DATE_LABELS[r]}</option>
             ))}
           </select>
+          {dateRange === 'custom' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={e => setCustomFrom(e.target.value)}
+                style={{
+                  background: 'var(--glass)', border: '1px solid var(--border2)',
+                  color: 'var(--text2)', padding: '7px 10px', borderRadius: 'var(--radius-pill)',
+                  fontSize: 12, fontFamily: 'var(--font)', colorScheme: 'dark',
+                }}
+                aria-label="Desde"
+                title="Desde"
+              />
+              <span style={{ color: 'var(--text3)', fontSize: 12 }}>→</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={e => setCustomTo(e.target.value)}
+                style={{
+                  background: 'var(--glass)', border: '1px solid var(--border2)',
+                  color: 'var(--text2)', padding: '7px 10px', borderRadius: 'var(--radius-pill)',
+                  fontSize: 12, fontFamily: 'var(--font)', colorScheme: 'dark',
+                }}
+                aria-label="Hasta"
+                title="Hasta"
+              />
+            </div>
+          )}
           <button onClick={() => setExportOpen(true)}
             title="Afina y descarga los leads visibles en formato CSV/Excel"
             style={{
