@@ -1702,9 +1702,21 @@ type MovementData = {
   sample_size: number
 }
 
+type DaptaMetrics = {
+  dapta_exitosas: number
+  dapta_convertidas: number
+  llamadas_agendadas: number
+  conversiones_manuales: number
+  vambe_outbound_msgs: number
+  outbound_pidio_llamada: number
+  outbound_convertidos: number
+  outbound_total_leads_unicos: number
+}
+
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
   const [movement, setMovement] = useState<MovementData | null>(null)
+  const [daptaMetrics, setDaptaMetrics] = useState<DaptaMetrics | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>('mes')
 
   const scoped = useMemo(() => {
@@ -1765,6 +1777,21 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     return () => { cancelled = true }
   }, [dateRange])
 
+  // Fetch dapta + outbound metrics when range changes
+  useEffect(() => {
+    const { from, to } = dateRangeBounds(dateRange)
+    const qs = new URLSearchParams()
+    if (from) qs.set('from', from.toISOString())
+    if (to)   qs.set('to', to.toISOString())
+    let cancelled = false
+    setDaptaMetrics(null)
+    fetch(`/api/analytics/dapta?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then((j: DaptaMetrics) => { if (!cancelled) setDaptaMetrics(j) })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [dateRange])
+
   // tactics removidas — user pidió sin sugerencias en este rediseño
 
   return (
@@ -1800,6 +1827,62 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label="Forecast ponderado" value={fmtMoney(stats.forecast)} sub={`Meta ${fmtMoney(periodGoal)}`} accentColor="#a594ff" />
             <KPICard label="Tasa de conversión" value={fmtPct(stats.conversionRate)} sub={`${stats.cerrados} de ${stats.total - stats.descartados} (sin descartados)`} accentColor="#4ea8f5" />
             <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
+          </div>
+
+          {/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
+          <GroupHeader title="Daniela (Dapta)" subtitle="Llamadas de voz IA: exitosas, convertidas y agendadas en el rango." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard
+              label="Dapta exitosas"
+              value={daptaMetrics ? String(daptaMetrics.dapta_exitosas) : '…'}
+              sub="llamadas ≥ 3 min con análisis"
+              accentColor="#22d68a"
+            />
+            <KPICard
+              label="Dapta convertidas"
+              value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
+              sub="leads que cerraron tras llamar"
+              accentColor="#7c6af7"
+            />
+            <KPICard
+              label="Agendadas este periodo"
+              value={daptaMetrics ? String(daptaMetrics.llamadas_agendadas) : '…'}
+              sub="con scheduled_at en el rango"
+              accentColor="#4ea8f5"
+            />
+            <KPICard
+              label="Conversiones manuales (Fer)"
+              value={daptaMetrics ? String(daptaMetrics.conversiones_manuales) : '…'}
+              sub="cerrados sin pasar por Dapta"
+              accentColor="#f5c842"
+            />
+          </div>
+
+          {/* ── VAMBE · outbound ─────────────────────────────────────────── */}
+          <GroupHeader title="Vambe outbound" subtitle="Templates de WhatsApp salientes y embudo posterior." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard
+              label="Outbound enviados"
+              value={daptaMetrics ? String(daptaMetrics.vambe_outbound_msgs) : '…'}
+              sub={daptaMetrics ? `${daptaMetrics.outbound_total_leads_unicos} leads únicos` : '—'}
+              accentColor="#a594ff"
+            />
+            <KPICard
+              label="Pidieron llamada"
+              value={daptaMetrics ? String(daptaMetrics.outbound_pidio_llamada) : '…'}
+              sub={daptaMetrics && daptaMetrics.outbound_total_leads_unicos > 0
+                ? `${((daptaMetrics.outbound_pidio_llamada / daptaMetrics.outbound_total_leads_unicos) * 100).toFixed(0)}% del total outbound`
+                : '—'}
+              accentColor="#4ea8f5"
+            />
+            <KPICard
+              label="Outbound convertidos"
+              value={daptaMetrics ? String(daptaMetrics.outbound_convertidos) : '…'}
+              sub={daptaMetrics && daptaMetrics.outbound_total_leads_unicos > 0
+                ? `${((daptaMetrics.outbound_convertidos / daptaMetrics.outbound_total_leads_unicos) * 100).toFixed(1)}% conv. outbound`
+                : '—'}
+              accentColor="#22d68a"
+            />
           </div>
 
           {/* Tabla principal con tabs (full width, sin sidebar) */}
