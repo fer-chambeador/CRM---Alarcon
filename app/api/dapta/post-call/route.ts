@@ -164,6 +164,13 @@ export async function POST(req: NextRequest) {
       proximoPasoFinal = 'Llamada terminó sin cierre claro — escribir por WhatsApp para retomar y agendar.'
     }
   }
+  // IMPORTANTE: NO existe una columna 'proximo_paso' en la tabla `llamadas`.
+  // La UI lee el próximo paso desde `custom_analysis.proximo_paso` (JSONB).
+  // Por eso inyectamos el valor final ahí antes de persistir, en lugar de
+  // intentar un campo separado (que rompía el INSERT con error de schema cache).
+  if (proximoPasoFinal) {
+    customData.proximo_paso = proximoPasoFinal
+  }
 
   const fields: Record<string, unknown> = {
     dapta_call_id: daptaCallId,
@@ -179,7 +186,6 @@ export async function POST(req: NextRequest) {
     summary: f.summary,
     custom_analysis: customData,
     outcome: customData.outcome || null,
-    proximo_paso: proximoPasoFinal,
     sentimiento: customData.sentimiento || (f.userSentiment ? f.userSentiment.toLowerCase() : null),
     interes_real: customData.interes_real || null,
     error_message: status === 'no_answer' ? `disconnection_reason: ${disconnectionReason}` : null,
