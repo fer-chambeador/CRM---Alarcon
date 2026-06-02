@@ -176,7 +176,7 @@ export default function LlamadaDetailClient({ id }: { id: string }) {
               <FieldRow label="Canal" value={lead?.canal_adquisicion || '—'} />
             </div>
             {lead && (
-              <button className={styles.backBtn} onClick={() => router.push(`/leads?email=${encodeURIComponent(lead.email || '')}`)} style={{ marginTop: 14 }}>
+              <button className={styles.backBtn} onClick={() => router.push(`/leads/${lead.id}`)} style={{ marginTop: 14 }}>
                 Ver lead en CRM →
               </button>
             )}
