@@ -802,7 +802,7 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   // ── Alertas a Slack para eventos críticos ──
   // No bloqueamos el response — corre best-effort en paralelo.
-  fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted).catch(e => {
+  fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted, previousStageId).catch(e => {
     console.error('Slack alert error', e)
   })
 
@@ -813,8 +813,41 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 }
 
 /** Dispara alertas a Slack según la stage que llegó. No-op si no hay webhook configurado. */
-async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean) {
+async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean, previousStageId?: string) {
   if (newStageId === STAGE_ATENCION_HUMANA) {
+    // GUARD: Si el lead venía de un flujo confirmado (llamada agendada o Confirmados ✅),
+    // el bot la escaló por error — silenciamos la alerta SOS porque la "fricción" es solo
+    // que Fer debe llamar manualmente, no que la AI no pudo continuar.
+    //
+    // Detección por stage previo y por status interno (ambos en paralelo, defensivo):
+    //   - prev: Llamadas ☎️, Agendados Consultoría 📆, Confirmados ✅
+    //   - status: llamada_agendada / llamada_con_dapta / presentacion_enviada
+    const cameFromCallFlow =
+      previousStageId === STAGE_LLAMADA_COMERCIAL ||
+      previousStageId === STAGE_DEMO_AGENDADA ||
+      previousStageId === STAGE_DEMO_CONFIRMADA
+    const statusIsCallFlow =
+      lead.status === 'llamada_agendada' ||
+      lead.status === 'llamada_con_dapta' ||
+      lead.status === 'presentacion_enviada'
+
+    if (cameFromCallFlow || statusIsCallFlow) {
+      const supabase = createServiceClient()
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'vambe_alerta_silenciada',
+        descripcion: '🔇 SOS silenciado — lead venía confirmado / con llamada agendada (Vambe escaló por error)',
+        metadata: {
+          previous_stage_id: previousStageId,
+          new_stage_id: newStageId,
+          status: lead.status,
+          reason: cameFromCallFlow ? 'previous_stage_in_call_flow' : 'status_in_call_flow',
+        },
+      })
+      console.log(`[Vambe SOS guard] Lead ${lead.id} venía de flujo confirmado (prev=${previousStageId}, status=${lead.status}) — alerta silenciada`)
+      return
+    }
+
     // Crear ticket de atención humana + alerta a #alertas-vambe con resumen
     // del último mensaje y botones Atendido/Dismiss.
     const supabase = createServiceClient()
