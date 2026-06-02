@@ -131,14 +131,40 @@ export default function OutboundClient() {
   const approve = async (id: string, dapta_immediate = false) => {
     setBusy(s => ({ ...s, [id]: 'approve' }))
     try {
-      const res = await fetch(`/api/aprobaciones/${id}/approve`, {
+      let res = await fetch(`/api/aprobaciones/${id}/approve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dapta_immediate }),
       })
+      let body = await res.json().catch(() => ({}))
+
+      // Si el lead ya tiene llamada previa, pedimos password y reintentamos
+      // con force:true. Aplica solo al flujo dapta_call (los vambe_template
+      // nunca devuelven 'lead-already-called').
+      if (res.status === 409 && body.error === 'lead-already-called') {
+        const prev = body.previous_status || '?'
+        const password = window.prompt(
+          `Este lead ya tiene una llamada previa (status="${prev}").\n\nSi quieres VOLVER a llamarlo, escribe el password de re-llamada:`,
+          '',
+        )
+        if (!password) {
+          alert('Re-llamada cancelada — no se capturó password.')
+          return
+        }
+        res = await fetch(`/api/aprobaciones/${id}/approve`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ dapta_immediate, force: true, password }),
+        })
+        body = await res.json().catch(() => ({}))
+        if (res.status === 401 && body.error === 'force-password-required') {
+          alert('Password incorrecto. Pídeselo a Fer.')
+          return
+        }
+      }
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        alert('Falló: ' + (err.error || res.status))
+        alert('Falló: ' + (body.error || res.status))
       }
       await load()
     } finally {

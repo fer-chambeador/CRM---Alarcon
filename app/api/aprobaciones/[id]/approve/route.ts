@@ -153,32 +153,53 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     if (a.tipo === 'dapta_call') {
-      // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+      // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO (con bypass por password) ──
       // Aplica también al flujo de aprobaciones: si el lead ya tiene cualquier
       // otra llamada (no canceled), rechazamos para no marcar 2 veces. Esto
       // protege el caso donde Fer aprueba 2 items del mismo lead por error.
-      const { data: prevCall } = await supabase
-        .from('llamadas')
-        .select('id, status, created_at')
-        .eq('lead_id', lead.id)
-        .not('status', 'in', '(canceled)')
-        .order('created_at', { ascending: false })
-        .limit(1)
-      if (prevCall && prevCall.length > 0) {
-        const p = prevCall[0] as { id: string; status: string; created_at: string }
-        // Revertir el lock optimista — volver el aprobación a pending para que el
-        // user pueda decidir (rechazar manualmente o cancelar la llamada previa).
-        await supabase.from('aprobaciones').update({
-          status: 'pending',
-          decided_at: null,
-        }).eq('id', a.id)
-        return NextResponse.json({
-          ok: false,
-          error: 'lead-already-called',
-          detail: `Este lead ya tiene una llamada previa (status=${p.status}, llamada_id=${p.id}). Cancélala primero o rechaza esta aprobación.`,
-          previous_llamada_id: p.id,
-          previous_status: p.status,
-        }, { status: 409 })
+      //
+      // BYPASS: el frontend puede mandar { force: true, password: '1234' } en
+      // el body. Si el password matchea DAPTA_FORCE_CALL_PASSWORD (default
+      // '1234'), se permite re-llamar al lead.
+      const bodyTyped = body as { dapta_immediate?: boolean; force?: boolean; password?: string }
+      const forceCall = !!bodyTyped.force
+      if (forceCall) {
+        const passExpected = process.env.DAPTA_FORCE_CALL_PASSWORD || '1234'
+        if (bodyTyped.password !== passExpected) {
+          // Revertir el lock optimista
+          await supabase.from('aprobaciones').update({ status: 'pending', decided_at: null }).eq('id', a.id)
+          return NextResponse.json({
+            ok: false,
+            error: 'force-password-required',
+            detail: 'Para re-llamar a un lead con llamada previa necesitas el password correcto.',
+          }, { status: 401 })
+        }
+      }
+
+      if (!forceCall) {
+        const { data: prevCall } = await supabase
+          .from('llamadas')
+          .select('id, status, created_at')
+          .eq('lead_id', lead.id)
+          .not('status', 'in', '(canceled)')
+          .order('created_at', { ascending: false })
+          .limit(1)
+        if (prevCall && prevCall.length > 0) {
+          const p = prevCall[0] as { id: string; status: string; created_at: string }
+          // Revertir el lock optimista — volver el aprobación a pending para que el
+          // user pueda decidir (rechazar manualmente o cancelar la llamada previa).
+          await supabase.from('aprobaciones').update({
+            status: 'pending',
+            decided_at: null,
+          }).eq('id', a.id)
+          return NextResponse.json({
+            ok: false,
+            error: 'lead-already-called',
+            detail: `Este lead ya tiene una llamada previa (status=${p.status}, llamada_id=${p.id}). Captura el password para forzar re-llamar.`,
+            previous_llamada_id: p.id,
+            previous_status: p.status,
+          }, { status: 409 })
+        }
       }
 
       // Si dapta_immediate=true → llamar ya. Si no, agendar a lead.llamada_at - 5min.
