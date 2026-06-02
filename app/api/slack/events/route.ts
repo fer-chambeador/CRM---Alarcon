@@ -33,7 +33,13 @@ export async function POST(req: NextRequest) {
 
   if (payload.type === 'event_callback') {
     const event = payload.event
-    if (event.type !== 'message' || event.subtype || !event.text) {
+    // Aceptar mensajes de usuarios humanos (sin subtype) Y mensajes del bot
+    // "Chambas Alert" que envía con subtype='bot_message'. Sin esto, NINGÚN
+    // lead del onboarding (panel.chambas.ai) entra al CRM, porque todos llegan
+    // via el bot a canales #leads-sales / #check-in-entrevistas.
+    // Otros subtypes (channel_join, message_changed, etc.) se siguen ignorando.
+    const subtype = event.subtype
+    if (event.type !== 'message' || !event.text || (subtype && subtype !== 'bot_message')) {
       return NextResponse.json({ ok: true })
     }
 
