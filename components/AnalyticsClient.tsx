@@ -1713,10 +1713,98 @@ type DaptaMetrics = {
   outbound_total_leads_unicos: number
 }
 
+type FunnelStage = { stage: string; label: string; count: number }
+type FunnelTiming = { from: string; to: string; medianDays: number | null; sampleSize: number }
+type FunnelData = {
+  total_leads: number
+  stages: FunnelStage[]
+  conversion: Array<{ stage: string; rate: number; label: string }>
+  timings: FunnelTiming[]
+}
+
+function FunnelSection({ data }: { data: FunnelData | null }) {
+  if (!data) {
+    return (
+      <section className={styles.section}>
+        <header className={styles.sectionHeader}>
+          <div>
+            <h3>Funnel completo</h3>
+            <span className={styles.sectionSubtitle}>Cargando…</span>
+          </div>
+        </header>
+      </section>
+    )
+  }
+  const max = data.stages[0]?.count || 1
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Funnel completo</h3>
+          <span className={styles.sectionSubtitle}>
+            Cuántos leads pasaron por cada etapa · % conversión a la siguiente · tiempo mediana entre etapas.
+          </span>
+        </div>
+      </header>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+        {data.stages.map((s, i) => {
+          const widthPct = max > 0 ? Math.max(2, (s.count / max) * 100) : 0
+          const conv = data.conversion[i]
+          const timing = i > 0 ? data.timings[i - 1] : null
+          const dropOff = i > 0 ? data.stages[i - 1].count - s.count : 0
+          const convPct = conv && i > 0 ? Math.round(conv.rate * 100) : null
+          return (
+            <div key={s.stage}>
+              {timing && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '4px 16px', fontSize: 11, color: 'var(--text3)',
+                  fontStyle: 'italic',
+                }}>
+                  <span>↓</span>
+                  <span>
+                    {convPct !== null ? `${convPct}% pasaron` : '—'}
+                    {dropOff > 0 ? ` · ${dropOff} se quedaron` : ''}
+                  </span>
+                  {timing.medianDays !== null && (
+                    <span>· tiempo: <strong style={{ color: '#a594ff' }}>{timing.medianDays.toFixed(1)}d</strong> mediana (n={timing.sampleSize})</span>
+                  )}
+                </div>
+              )}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                background: 'var(--glass)', border: '1px solid var(--border)',
+                borderRadius: 10, padding: '10px 16px',
+              }}>
+                <div style={{ minWidth: 180, fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                  {s.label}
+                </div>
+                <div style={{ flex: 1, position: 'relative', height: 24 }}>
+                  <div style={{
+                    position: 'absolute', left: 0, top: 0, bottom: 0,
+                    width: `${widthPct}%`,
+                    background: `linear-gradient(90deg, rgba(124,84,232,${0.4 - i * 0.04}), rgba(124,84,232,${0.2 - i * 0.025}))`,
+                    border: '1px solid rgba(167,139,250,0.45)',
+                    borderRadius: 6,
+                  }} />
+                </div>
+                <div style={{ minWidth: 60, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>
+                  {s.count}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
   const [movement, setMovement] = useState<MovementData | null>(null)
   const [daptaMetrics, setDaptaMetrics] = useState<DaptaMetrics | null>(null)
+  const [funnelData, setFunnelData] = useState<FunnelData | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>('mes')
 
   const scoped = useMemo(() => {
@@ -1788,6 +1876,21 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     fetch(`/api/analytics/dapta?${qs}`, { cache: 'no-store' })
       .then(r => r.json())
       .then((j: DaptaMetrics) => { if (!cancelled) setDaptaMetrics(j) })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [dateRange])
+
+  // Fetch funnel
+  useEffect(() => {
+    const { from, to } = dateRangeBounds(dateRange)
+    const qs = new URLSearchParams()
+    if (from) qs.set('from', from.toISOString())
+    if (to)   qs.set('to', to.toISOString())
+    let cancelled = false
+    setFunnelData(null)
+    fetch(`/api/analytics/funnel?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then((j: FunnelData) => { if (!cancelled) setFunnelData(j) })
       .catch(() => { /* ignore */ })
     return () => { cancelled = true }
   }, [dateRange])
@@ -1884,6 +1987,10 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
               accentColor="#22d68a"
             />
           </div>
+
+          {/* ── FUNNEL completo lead→pago ─────────────────────────────── */}
+          <GroupHeader title="Funnel de ventas" subtitle="Camino completo: lead nuevo → contactado → Daniela → pago. Conversión y tiempo entre etapas." />
+          <FunnelSection data={funnelData} />
 
           {/* Tabla principal con tabs (full width, sin sidebar) */}
           <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />
