@@ -4,6 +4,7 @@ import type { Lead } from '@/lib/supabase'
 import { sendTemplate } from '@/lib/vambe'
 import { triggerDaptaCall } from '@/lib/dapta'
 import { getOutboundTemplate } from '@/lib/systemSettings'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -77,6 +78,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       decided_at: new Date().toISOString(),
     }).eq('id', a.id)
     return NextResponse.json({ ok: false, error: 'lead sin teléfono' }, { status: 400 })
+  }
+
+  // ── Normalizar el teléfono (defensa en profundidad) ──
+  // Mismo fix que /api/dapta/trigger (2 jun 2026): si el lead viene con
+  // teléfono malformado (formato MX viejo +5201…, espacios, etc.) Vambe
+  // o Dapta no podrán contactarlo y la fila quedará stuck. Normalizamos
+  // antes y persistimos el canónico en lead.telefono.
+  const phoneNormalized = normalizeMexicanPhone(lead.telefono)
+  if (!phoneNormalized) {
+    await supabase.from('aprobaciones').update({
+      status: 'failed',
+      error_message: `Teléfono inválido: '${lead.telefono}'. Edítalo manualmente.`,
+      decided_at: new Date().toISOString(),
+    }).eq('id', a.id)
+    return NextResponse.json({ ok: false, error: 'telefono-no-valido', detail: `El teléfono '${lead.telefono}' no se pudo normalizar.` }, { status: 400 })
+  }
+  if (phoneNormalized !== lead.telefono) {
+    await supabase.from('leads').update({ telefono: phoneNormalized }).eq('id', lead.id)
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'field_change',
+      descripcion: `Teléfono normalizado: ${lead.telefono} → ${phoneNormalized}`,
+      metadata: { field: 'telefono', before: lead.telefono, after: phoneNormalized, source: 'aprobacion_approve_auto_normalize' },
+    })
+    lead.telefono = phoneNormalized
   }
 
   // 2. Ejecutar según tipo

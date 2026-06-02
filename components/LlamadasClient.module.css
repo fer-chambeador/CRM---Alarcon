@@ -130,7 +130,11 @@
   gap: 8px;
   align-items: center;
 }
-.filterChip {
+.filterChip,
+.filterChipActive {
+  /* Base compartida — el active solo cambia color/border/background.
+     Antes .filterChipActive heredaba SOLO sus propiedades y se perdía
+     padding/font/cursor del baseline, lo que producía tabs torpes. */
   background: var(--glass);
   border: 1px solid var(--border2);
   color: var(--text2);
@@ -140,12 +144,25 @@
   font-weight: 500;
   cursor: pointer;
   font-family: var(--font);
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
-.filterChip:hover { border-color: var(--accent); color: var(--text); }
+.filterChip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(255,255,255,0.04);
+}
 .filterChipActive {
-  background: rgba(124,84,232,0.18);
-  border-color: rgba(124,84,232,0.55);
-  color: white;
+  background: linear-gradient(180deg, rgba(124,84,232,0.28) 0%, rgba(124,84,232,0.16) 100%);
+  border-color: rgba(167,139,250,0.65);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(124,84,232,0.25), 0 4px 14px -4px rgba(124,84,232,0.35);
+}
+.filterChipActive:hover {
+  border-color: rgba(196,178,255,0.85);
 }
 
 .tableWrap {
@@ -328,75 +345,4 @@
   border-radius: var(--radius-md);
   font-size: 13px;
   margin: 0 0 16px;
-}
-
-/* ── Mobile pass ─────────────────────────────────────── */
-@media (max-width: 768px) {
-  .root { flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
-  .sidebar {
-    width: 100%; flex-direction: column; padding: 14px 14px 12px; gap: 6px;
-    border-right: none; border-bottom: 1px solid var(--border); overflow: visible;
-  }
-  .logo { padding: 0 4px 12px; font-size: 18px; margin-bottom: 4px; }
-  .main { overflow: visible; }
-  .topBar { padding: 14px 16px; flex-wrap: wrap; gap: 8px; }
-  .topBar h1 { font-size: 22px; }
-  .body { padding: 8px 14px 24px; gap: 14px; }
-  .summary { grid-template-columns: 1fr 1fr; gap: 10px; }
-  .summaryCard { padding: 14px 16px; }
-  .filterBar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
-  .filterChip { white-space: nowrap; flex-shrink: 0; }
-
-  /* Table → stacked cards */
-  .tableWrap { border: none; background: transparent; border-radius: 0; overflow-x: visible; }
-  .table, .table tbody { display: block; width: 100%; }
-  .table thead { display: none; }
-  .row {
-    display: block;
-    background: var(--glass);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 12px 14px 8px;
-    margin-bottom: 10px;
-  }
-  .table tbody td {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    max-width: none !important;
-    padding: 6px 0 !important;
-    border: none !important;
-    text-align: right;
-  }
-  .table tbody td::before {
-    content: attr(data-label);
-    flex-shrink: 0;
-    text-align: left;
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-    color: var(--text3);
-  }
-  .table tbody tr:hover td { background: transparent; }
-  /* Lead cell = card title */
-  .leadCell {
-    display: block !important;
-    text-align: left !important;
-    padding: 0 0 8px !important;
-    margin-bottom: 6px;
-    border-bottom: 1px solid var(--border) !important;
-  }
-  .leadCell::before { display: none; }
-  /* Long text cells stack their value under the label */
-  .summaryCell, .nextStepCell {
-    flex-direction: column;
-    align-items: flex-start;
-    text-align: left;
-  }
-
-  .modalBackdrop { padding: 0; align-items: flex-start; }
-  .modal { max-width: 100%; min-height: 100vh; border-radius: 0; }
 }

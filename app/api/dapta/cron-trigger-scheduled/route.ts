@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { triggerDaptaCall } from '@/lib/dapta'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -125,6 +126,24 @@ export async function GET(req: NextRequest) {
       await supabase.from('llamadas').update({ status: 'failed', error_message: 'lead sin teléfono al disparar agendada' }).eq('id', row.id)
       results.push({ llamada_id: row.id, ok: false, reason: 'no phone' })
       continue
+    }
+
+    // Normalizar teléfono ANTES de pasarlo a Dapta. Mismo fix que el
+    // resto de los puntos donde disparamos llamadas (trigger directo,
+    // approve de aprobaciones). Si el formato es inválido, marca failed
+    // sin intentar el trigger — evita que la fila quede stuck en dialing.
+    const phoneNorm = normalizeMexicanPhone(lead.telefono)
+    if (!phoneNorm) {
+      await supabase.from('llamadas').update({
+        status: 'failed',
+        error_message: `Teléfono inválido al disparar agendada: '${lead.telefono}'.`,
+      }).eq('id', row.id)
+      results.push({ llamada_id: row.id, ok: false, reason: 'invalid phone' })
+      continue
+    }
+    if (phoneNorm !== lead.telefono) {
+      await supabase.from('leads').update({ telefono: phoneNorm }).eq('id', lead.id)
+      lead.telefono = phoneNorm
     }
 
     const triggerResult = await triggerDaptaCall({
