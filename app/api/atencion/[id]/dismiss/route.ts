@@ -29,11 +29,23 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       })
       .eq('id', params.id)
 
+    // Vambe 3 (diseño A aprobado): "No relevante" → cierra ticket + descarta lead
+    // Cambiamos el status del lead a 'perdido' para que no aparezca en el funnel
+    // activo. El stage en Vambe se cambia manualmente si Fer lo necesita
+    // (no hay API pública de Vambe para mover stage).
+    await supabase
+      .from('leads')
+      .update({
+        status: 'perdido',
+        status_changed_at: new Date().toISOString(),
+      })
+      .eq('id', t.lead_id)
+
     await supabase.from('lead_actividad').insert({
       lead_id: t.lead_id,
       tipo: 'atencion_humana_dismissed',
-      descripcion: '✗ Asistencia humana descartada (no relevante)',
-      metadata: { source: 'slack', ticket_id: params.id },
+      descripcion: '✗ Asistencia humana descartada — lead marcado como perdido',
+      metadata: { source: 'slack', ticket_id: params.id, target_status: 'perdido' },
     })
   }
 

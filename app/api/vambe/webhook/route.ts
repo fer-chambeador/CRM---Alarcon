@@ -328,6 +328,207 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
         .update({ responded_at: new Date().toISOString() })
         .in('id', recipients.map(r => r.id))
     }
+
+    // Vambe 1: si el lead está en Asistencia Humana y no ha tenido actividad
+    // del lado del bot/equipo en >7 días, es un lead "abandonado" que vuelve.
+    // Alertamos a Slack para que Fer lo retome. (No reactivamos el bot
+    // automáticamente — eso requeriría mover stage en Vambe via API.)
+    if (lead.vambe_stage_id === STAGE_ATENCION_HUMANA) {
+      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+      const { data: lastOutbound } = await supabase
+        .from('lead_actividad')
+        .select('created_at')
+        .eq('lead_id', lead.id)
+        .or('tipo.eq.vambe_message,tipo.eq.atencion_humana_attended')
+        .like('descripcion', '📨%')   // solo mensajes outbound del bot
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const lastActivityAt = lastOutbound ? new Date((lastOutbound as { created_at: string }).created_at).getTime() : 0
+      const isStale = !lastActivityAt || (Date.now() - lastActivityAt > SEVEN_DAYS_MS)
+      if (isStale) {
+        // Idempotencia: no alertar más de una vez por día
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        const { data: recentAlert } = await supabase
+          .from('lead_actividad')
+          .select('id')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'lead_viejo_reactivado')
+          .gte('created_at', oneDayAgo)
+          .limit(1)
+          .maybeSingle()
+        if (!recentAlert) {
+          await alertLeadReactivated(supabase, lead, text).catch(e => {
+            console.error('[Vambe 1] alertLeadReactivated error', e)
+          })
+        }
+      }
+    }
+
+    // Vambe 5: si el lead tiene una llamada agendada dentro de las próximas 4h
+    // y acaba de responder, es probable que esté pidiendo reagendar (o avisando
+    // que no podrá). Disparamos alerta a Slack para que Fer pueda actuar.
+    // Idempotente por timestamp del lead (no alertar dos veces para la misma llamada).
+    if (lead.llamada_at && lead.status === 'llamada_agendada') {
+      const llamadaAt = new Date(lead.llamada_at).getTime()
+      const now = Date.now()
+      const FOUR_HOURS_MS = 4 * 60 * 60 * 1000
+      const isWithinReminderWindow = llamadaAt > now && (llamadaAt - now) <= FOUR_HOURS_MS
+      if (isWithinReminderWindow) {
+        // Idempotencia: no alertar si ya hay una alerta para esta llamada
+        const { data: existingAlert } = await supabase
+          .from('lead_actividad')
+          .select('id')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'reminder_response_alert')
+          .filter('metadata->>llamada_at', 'eq', lead.llamada_at)
+          .limit(1)
+          .maybeSingle()
+        if (!existingAlert) {
+          await alertReminderResponse(supabase, lead, text, lead.llamada_at).catch(e => {
+            console.error('[Vambe 5] alertReminderResponse error', e)
+          })
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Vambe 1: alerta a Slack cuando un lead viejo en Asistencia Humana vuelve a
+ * escribir. El bot no se reactiva automáticamente (no hay API pública de Vambe
+ * para mover stage), pero al menos Fer se entera y puede atenderlo.
+ */
+async function alertLeadReactivated(
+  supabase: Supabase,
+  lead: Lead,
+  message: string,
+): Promise<void> {
+  const webhookUrl = process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL
+    || await (async () => {
+      const { data } = await supabase.from('system_settings').select('value').eq('key', 'slack_alertas_vambe_webhook').maybeSingle()
+      return (data as { value?: string } | null)?.value
+    })()
+    || process.env.SLACK_ALERT_WEBHOOK_URL
+  if (!webhookUrl) return
+
+  const base = process.env.NEXT_PUBLIC_CRM_URL || 'https://crm-alarcon-production.up.railway.app'
+  const leadUrl = `${base}/leads/${lead.id}`
+
+  const blocks: unknown[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: '🔔 Lead viejo volvió a escribir', emoji: true },
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Lead:*\n${lead.nombre || lead.email || '(sin nombre)'}` },
+        { type: 'mrkdwn', text: `*Número:*\n${lead.telefono || '—'}` },
+      ],
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Estaba en Asistencia Humana sin actividad >7 días — ahora escribió:*\n> ${(message || '(sin texto)').slice(0, 500).replace(/\n/g, '\n> ')}` },
+    },
+    {
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: `${lead.empresa ? `🏢 ${lead.empresa}` : ''}${lead.vacante ? ` · 💼 ${lead.vacante}` : ''}` },
+      ],
+    },
+    {
+      type: 'actions',
+      elements: [
+        { type: 'button', text: { type: 'plain_text', text: 'Ver lead' }, url: leadUrl, style: 'primary' },
+      ],
+    },
+  ]
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `🔔 Lead viejo volvió: ${lead.nombre || lead.email}`, blocks }),
+    })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'lead_viejo_reactivado',
+      descripcion: '🔔 Lead viejo en Asistencia Humana volvió a escribir — alerta Slack',
+      metadata: { message: message.slice(0, 300) },
+    })
+  } catch (e) {
+    console.error('[Vambe 1] fetch error', e)
+  }
+}
+
+/**
+ * Vambe 5: alerta a Slack cuando un lead responde dentro de la ventana del
+ * reminder (4h antes de la llamada). Le da contexto a Fer para decidir si
+ * reagenda, confirma o no hace nada.
+ */
+async function alertReminderResponse(
+  supabase: Supabase,
+  lead: Lead,
+  message: string,
+  llamadaAt: string,
+): Promise<void> {
+  const webhookUrl = process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL
+    || await (async () => {
+      const { data } = await supabase.from('system_settings').select('value').eq('key', 'slack_alertas_vambe_webhook').maybeSingle()
+      return (data as { value?: string } | null)?.value
+    })()
+    || process.env.SLACK_ALERT_WEBHOOK_URL
+  if (!webhookUrl) {
+    console.warn('[Vambe 5] no webhook configurado')
+    return
+  }
+
+  const base = process.env.NEXT_PUBLIC_CRM_URL || 'https://crm-alarcon-production.up.railway.app'
+  const leadUrl = `${base}/leads/${lead.id}`
+  const fmtTime = new Date(llamadaAt).toLocaleString('es-MX', {
+    timeZone: 'America/Mexico_City',
+    dateStyle: 'medium', timeStyle: 'short',
+  })
+
+  const blocks: unknown[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: '⏰ Lead respondió al reminder', emoji: true },
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Lead:*\n${lead.nombre || lead.email || '(sin nombre)'}` },
+        { type: 'mrkdwn', text: `*Llamada:*\n${fmtTime}` },
+      ],
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Mensaje del lead:*\n> ${(message || '(sin texto)').slice(0, 500).replace(/\n/g, '\n> ')}` },
+    },
+    {
+      type: 'actions',
+      elements: [
+        { type: 'button', text: { type: 'plain_text', text: 'Ver lead' }, url: leadUrl },
+      ],
+    },
+  ]
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `⏰ Lead respondió al reminder: ${lead.nombre || lead.email}`, blocks }),
+    })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'reminder_response_alert',
+      descripcion: '⏰ Alerta Slack: lead respondió al reminder',
+      metadata: { llamada_at: llamadaAt, message: message.slice(0, 300) },
+    })
+  } catch (e) {
+    console.error('[Vambe 5] fetch error', e)
   }
 }
 
