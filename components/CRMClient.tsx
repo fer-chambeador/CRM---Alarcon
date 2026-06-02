@@ -455,7 +455,12 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
         if (payload.eventType === 'INSERT') {
           const newLead = payload.new as Lead
-          setLeads(prev => [newLead, ...prev])
+          // De-duplicar: si el lead ya está en el state (porque handleAdd lo
+          // agregó al recibir la respuesta del POST), no lo dupliques. Race
+          // condition común: el POST devuelve el lead Y realtime dispara
+          // INSERT casi simultáneo — uno de los dos llega primero, el otro
+          // tiene que respetar.
+          setLeads(prev => prev.some(l => l.id === newLead.id) ? prev : [newLead, ...prev])
           setNewLeadFlash(newLead.email)
           setLiveCount(c => c + 1)
           setTimeout(() => setNewLeadFlash(null), 3000)
@@ -487,7 +492,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
   }, [])
   const handleDelete = useCallback((id: string) => { setLeads(prev => prev.filter(l => l.id !== id)) }, [])
-  const handleAdd = useCallback((lead: Lead) => { setLeads(prev => [lead, ...prev]) }, [])
+  const handleAdd = useCallback((lead: Lead) => {
+    // De-duplicar: si el realtime listener ya añadió el lead (puede llegar
+    // antes que la respuesta del POST), no lo agregues otra vez.
+    setLeads(prev => prev.some(l => l.id === lead.id) ? prev : [lead, ...prev])
+  }, [])
 
   const updateStatus = useCallback(async (leadId: string, newStatus: Lead['status']) => {
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l))
