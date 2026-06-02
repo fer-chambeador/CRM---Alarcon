@@ -86,6 +86,23 @@ export async function POST(req: NextRequest) {
   // para evitar bucles de cron y spam al cliente.
   const url = new URL(req.url)
   const force = url.searchParams.get('force') === '1'
+
+  // Si el caller quiere forzar (re-llamar a un lead que ya tuvo llamada),
+  // requerimos password. Esto previene loops accidentales y re-disparos
+  // por mistap en la UI. El password está en env (DAPTA_FORCE_CALL_PASSWORD,
+  // default '1234') — Fer lo conoce, no tiene que entrar a Railway para
+  // hacer el re-disparo, pero un click accidental no lo va a disparar.
+  if (force) {
+    const passProvided = url.searchParams.get('password') || (body as { password?: string })?.password || req.headers.get('x-force-password')
+    const passExpected = process.env.DAPTA_FORCE_CALL_PASSWORD || '1234'
+    if (passProvided !== passExpected) {
+      return NextResponse.json({
+        error: 'force-password-required',
+        detail: 'Para re-llamar a un lead con llamada previa necesitas pasar ?password=<password>. Pídeselo a Fer.',
+      }, { status: 401 })
+    }
+  }
+
   if (!force) {
     const { data: prev } = await supabase
       .from('llamadas')
@@ -98,7 +115,7 @@ export async function POST(req: NextRequest) {
       const p = prev[0] as { id: string; status: string; created_at: string }
       return NextResponse.json({
         error: 'lead-already-called',
-        detail: `Este lead ya tiene una llamada previa (status=${p.status}, creada ${p.created_at}). Cancélala primero o pasa ?force=1.`,
+        detail: `Este lead ya tiene una llamada previa (status=${p.status}, creada ${p.created_at}). Para re-llamar, vuelve a intentar y captura el password cuando te lo pida la UI.`,
         previous_llamada_id: p.id,
         previous_status: p.status,
       }, { status: 409 })
