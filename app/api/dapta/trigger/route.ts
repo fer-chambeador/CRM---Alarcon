@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { triggerDaptaCall } from '@/lib/dapta'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -46,6 +47,32 @@ export async function POST(req: NextRequest) {
   const l = lead as Lead
   if (!l.telefono) {
     return NextResponse.json({ error: 'el lead no tiene teléfono' }, { status: 400 })
+  }
+
+  // ── Normalizar el teléfono ANTES de cualquier operación ──
+  // Si el teléfono está malformado (ej. formato MX viejo "+5201..." con
+  // prefijo de larga distancia "01"), Dapta no puede marcar y la fila queda
+  // stuck en 'dialing'. Bug visto con Yanelli + Petrus (2 jun 2026).
+  //
+  // Si normalizamos y el formato cambió, también ACTUALIZAMOS el lead en DB
+  // para evitar volver a tener el mismo problema.
+  const phoneNormalized = normalizeMexicanPhone(l.telefono)
+  if (!phoneNormalized) {
+    return NextResponse.json({
+      error: 'el-telefono-no-es-valido',
+      detail: `El teléfono '${l.telefono}' no se pudo normalizar a un formato MX válido. Edita el lead y corrige el número antes de llamar.`,
+    }, { status: 400 })
+  }
+  if (phoneNormalized !== l.telefono) {
+    // Actualizar el lead con el formato canónico para futuras operaciones.
+    await supabase.from('leads').update({ telefono: phoneNormalized }).eq('id', l.id)
+    await supabase.from('lead_actividad').insert({
+      lead_id: l.id,
+      tipo: 'field_change',
+      descripcion: `Teléfono normalizado: ${l.telefono} → ${phoneNormalized}`,
+      metadata: { field: 'telefono', before: l.telefono, after: phoneNormalized, source: 'dapta_trigger_auto_normalize' },
+    })
+    l.telefono = phoneNormalized
   }
 
   // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
