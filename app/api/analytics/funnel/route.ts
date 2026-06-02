@@ -122,13 +122,14 @@ export async function GET(req: NextRequest) {
   // 5. Tiempos entre etapas consecutivas — para cada par (A, B) donde B = A+1,
   //    mediana del delta para los leads que pasaron por ambos.
   const transitionTimings: Array<{ from: Stage; to: Stage; medianDays: number | null; sampleSize: number }> = []
+  const historyArray: Array<Array<{ stage: Stage; at: number }>> = Array.from(transitionsByLead.values())
   for (let i = 0; i < STAGES.length - 1; i++) {
     const a = STAGES[i]
     const b = STAGES[i + 1]
     const deltas: number[] = []
-    for (const [, history] of transitionsByLead) {
-      const aEvent = history.find(h => h.stage === a)
-      const bEvent = history.find(h => h.stage === b)
+    for (const history of historyArray) {
+      const aEvent = history.find((h: { stage: Stage; at: number }) => h.stage === a)
+      const bEvent = history.find((h: { stage: Stage; at: number }) => h.stage === b)
       if (aEvent && bEvent && bEvent.at > aEvent.at) {
         deltas.push((bEvent.at - aEvent.at) / 86400_000)
       }
