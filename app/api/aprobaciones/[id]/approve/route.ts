@@ -134,19 +134,44 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         result_metadata: { vambe_response: result },
         decided_at: new Date().toISOString(),
       }).eq('id', a.id)
-      // Si el lead sigue en 'nuevo', avanzarlo a 'contactado'
-      if (lead.status === 'nuevo') {
-        await supabase.from('leads').update({
-          status: 'contactado',
-          status_changed_at: new Date().toISOString(),
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-        }).eq('id', lead.id)
+
+      // ── Actualizar lead: +1 contacto + reset counter de días + nota ──
+      // Regla del user (2 jun 2026): cada vez que se aprueba un Vambe
+      // template, el lead debe:
+      //   1. Incrementar veces_contactado +1 (sin importar el status — leads
+      //      en 1er, 2do, 3er contacto deben SIEMPRE subir un escalón).
+      //   2. Reiniciar el aging counter (ultimo_contacto = NOW).
+      //   3. Si el lead estaba en 'nuevo', avanzar a 'contactado' (status_changed_at).
+      //   4. Append nota "Ya se contactó con Vambe (timestamp)" para que el
+      //      user vea en la card del lead que fue una re-touch automatizado.
+      const nowIso = new Date().toISOString()
+      const timestampMx = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })
+      const newNoteLine = `[${timestampMx}] Ya se contactó con Vambe`
+      const newNotas = (lead.notas && lead.notas.trim().length > 0)
+        ? `${lead.notas}\n${newNoteLine}`
+        : newNoteLine
+      const leadUpdates: Record<string, unknown> = {
+        veces_contactado: (lead.veces_contactado || 0) + 1,
+        ultimo_contacto: nowIso,
+        notas: newNotas,
       }
+      if (lead.status === 'nuevo') {
+        leadUpdates.status = 'contactado'
+        leadUpdates.status_changed_at = nowIso
+      }
+      await supabase.from('leads').update(leadUpdates).eq('id', lead.id)
+
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'template_sent',
-        descripcion: `📨 Mensaje Vambe enviado: ${templateName}`,
-        metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, template_name: templateName },
+        descripcion: `📨 Mensaje Vambe enviado: ${templateName} (contacto #${(lead.veces_contactado || 0) + 1})`,
+        metadata: {
+          source: 'aprobacion',
+          aprobacion_id: a.id,
+          template_id: templateId,
+          template_name: templateName,
+          veces_contactado_after: (lead.veces_contactado || 0) + 1,
+        },
       })
 
       return NextResponse.json({ ok: true, tipo: 'vambe_template', result })
