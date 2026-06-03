@@ -502,16 +502,30 @@ async function execGenerateAnalyticsReport(input: { period?: string; focus?: str
 
   // Devolver datos crudos al modelo + instrucciones de cómo redactar el reporte.
   // El modelo (Sonnet) interpreta y genera el markdown analítico final.
+  // NB: tipamos los accumulators explícitamente para evitar inferencia '{}' de TS.
+  const countBy = (key: string, fallback: string): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const l of leadsList) {
+      const v = String(l[key] || fallback)
+      out[v] = (out[v] || 0) + 1
+    }
+    return out
+  }
+  const sumField = (list: Array<Record<string, unknown>>, key: string): number => {
+    let total = 0
+    for (const l of list) total += Number(l[key]) || 0
+    return total
+  }
   const summary = {
     period,
     from: from?.toISOString().slice(0, 10) || 'inicio del tiempo',
     to: now.toISOString().slice(0, 10),
     focus,
     leads_total: leadsList.length,
-    by_status: leadsList.reduce((acc, l) => { const s = String(l.status || 'unknown'); acc[s] = (acc[s] || 0) + 1; return acc }, {} as Record<string, number>),
-    by_canal: leadsList.reduce((acc, l) => { const c = String(l.canal_adquisicion || '(sin canal)'); acc[c] = (acc[c] || 0) + 1; return acc }, {} as Record<string, number>),
-    by_presupuesto: leadsList.reduce((acc, l) => { const p = String(l.presupuesto || 'none'); acc[p] = (acc[p] || 0) + 1; return acc }, {} as Record<string, number>),
-    monto_total_pipeline: leadsList.reduce((s, l) => s + (Number(l.monto) || 0), 0),
+    by_status: countBy('status', 'unknown'),
+    by_canal: countBy('canal_adquisicion', '(sin canal)'),
+    by_presupuesto: countBy('presupuesto', 'none'),
+    monto_total_pipeline: sumField(leadsList, 'monto'),
     convertidos: leadsList.filter(l => l.status === 'convertido' || l.status === 'cliente_recurrente').length,
     descartados: leadsList.filter(l => l.status === 'descartado').length,
     llamadas_total: llamadasList.length,
@@ -519,7 +533,7 @@ async function execGenerateAnalyticsReport(input: { period?: string; focus?: str
     llamadas_pidio_pago: llamadasList.filter(l => l.pidio_link_pago).length,
     llamadas_pidio_presentacion: llamadasList.filter(l => l.pidio_presentacion).length,
     duracion_media_seg: llamadasList.length > 0
-      ? Math.round(llamadasList.reduce((s, l) => s + (Number(l.duration_seconds) || 0), 0) / llamadasList.length)
+      ? Math.round(sumField(llamadasList, 'duration_seconds') / llamadasList.length)
       : 0,
     interes_alto_pct: llamadasList.length > 0
       ? Math.round(llamadasList.filter(l => l.interes_real === 'alto').length / llamadasList.length * 100)
