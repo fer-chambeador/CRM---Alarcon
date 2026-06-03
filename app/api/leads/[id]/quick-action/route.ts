@@ -63,11 +63,53 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         templateId: tpl.template_id,
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
       })
-      // BUG FIX (3 jun 2026): el bump de veces_contactado + reset de ultimo_contacto
-      // se hacía SOLO si lead estaba en 'nuevo'. Si ya estaba en 'contactado'
-      // (2do/3er contacto), no se actualizaba — el counter de días seguía corriendo
-      // y nunca subía a 3er contacto. Ahora bumpeamos SIEMPRE que se manda mensaje,
-      // y solo el cambio de status a 'contactado' es condicional.
+      // BUG FIX (3 jun 2026 — 2da iteración tras caso gerardolara555):
+      // Vambe puede retornar HTTP 200 con un error en el body (sin lanzar).
+      // Si la respuesta NO indica éxito explícito, abortar antes de bumpear
+      // el lead. Sin esto, el CRM marca "Contactado" pero el cliente nunca
+      // recibe el mensaje, y Fer no sabe que falló.
+      type VambeSendResult = {
+        success?: boolean
+        ok?: boolean
+        status?: string
+        error?: string | { message?: string }
+        message?: string
+        data?: { status?: string; error?: string }
+      }
+      const r = (result || {}) as VambeSendResult
+      const explicitFail =
+        r.success === false ||
+        r.ok === false ||
+        (typeof r.status === 'string' && /^(failed|error|rejected)/i.test(r.status)) ||
+        (typeof r.data?.status === 'string' && /^(failed|error|rejected)/i.test(r.data.status)) ||
+        !!r.error
+      if (explicitFail) {
+        const reason = typeof r.error === 'string' ? r.error
+          : (r.error as { message?: string })?.message
+          || r.message || r.data?.error || 'Vambe rechazó el envío sin lanzar HTTP error'
+        // Logear como actividad para que quede rastro del intento fallido
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'template_send_failed',
+          descripcion: `⚠️ Vambe NO envió el template (${tpl.template_name}): ${reason}`,
+          metadata: { source: 'leads_quick_action', template_id: tpl.template_id, template_name: tpl.template_name, vambe_response: r },
+        })
+        return NextResponse.json({ ok: false, error: `Vambe rechazó: ${reason}`, vambe_response: r }, { status: 502 })
+      }
+
+      // Orden CRÍTICO: insertar actividad PRIMERO, lead después.
+      // Si falla el insert, NO se actualiza el lead (no queda como
+      // "Contactado" fantasma sin registro de envío).
+      const { error: actErr } = await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'template_sent',
+        descripcion: `📨 Vambe ${tpl.template_name} (manual desde /leads)`,
+        metadata: { source: 'leads_quick_action', template_id: tpl.template_id, template_name: tpl.template_name },
+      })
+      if (actErr) {
+        console.error('[quick-action] insert lead_actividad falló', actErr)
+        return NextResponse.json({ ok: false, error: `Mensaje enviado pero no se pudo registrar en CRM: ${actErr.message}` }, { status: 500 })
+      }
       const updates: Record<string, unknown> = {
         ultimo_contacto: new Date().toISOString(),
         veces_contactado: (lead.veces_contactado || 0) + 1,
@@ -77,12 +119,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         updates.status_changed_at = new Date().toISOString()
       }
       await supabase.from('leads').update(updates).eq('id', lead.id)
-      await supabase.from('lead_actividad').insert({
-        lead_id: lead.id,
-        tipo: 'template_sent',
-        descripcion: `📨 Vambe ${tpl.template_name} (manual desde /leads)`,
-        metadata: { source: 'leads_quick_action', template_id: tpl.template_id, template_name: tpl.template_name },
-      })
       return NextResponse.json({ ok: true, action: 'message', result })
     } catch (e) {
       return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 })
