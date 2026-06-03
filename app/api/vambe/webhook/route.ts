@@ -349,18 +349,46 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
   // Y solo si NO es un retry/dedup (sameKind+recent) — esos ya están
   // consolidados en la misma actividad.
   if (!isInbound && !(sameKind && recent)) {
-    if (lead.status === 'nuevo') {
-      await supabase.from('leads').update({
-        status: 'contactado',
-        status_changed_at: new Date().toISOString(),
-        veces_contactado: (lead.veces_contactado || 0) + 1,
-        ultimo_contacto: new Date().toISOString(),
-      }).eq('id', lead.id)
-    } else {
-      await supabase.from('leads').update({
-        veces_contactado: (lead.veces_contactado || 0) + 1,
-        ultimo_contacto: new Date().toISOString(),
-      }).eq('id', lead.id)
+    // FIX (3 jun 2026): evitar DOUBLE BUMP. Cuando Fer clickea "📨 Mensaje"
+    // en el CRM, /quick-action bumpea veces_contactado +1 y crea una activity
+    // template_sent. Luego Vambe nos manda webhook message.sent que vuelve a
+    // entrar aquí. Sin guard, el counter sube +2 en una sola acción de Fer
+    // (ej: 1er contacto → 3er contacto sin pasar por 2do).
+    //
+    // Lo mismo aplica al flow de aprobaciones (Outbound → Aprobar): el
+    // endpoint /api/aprobaciones/[id]/approve también bumpea +1 y crea
+    // template_sent. El webhook llega después y duplicaría el bump.
+    //
+    // Guard: si hay una actividad 'template_sent' para este lead en los
+    // últimos 5 min, asumimos que el bump ya lo hizo el endpoint que disparó
+    // el envío (quick-action o aprobaciones). Solo bumpeamos en el webhook
+    // si NO hay template_sent reciente — eso indica que el mensaje vino del
+    // bot Vambe proactivo o del equipo desde la UI de Vambe directamente.
+    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString()
+    const { data: recentTemplateSent } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'template_sent')
+      .gte('created_at', fiveMinAgo)
+      .limit(1)
+      .maybeSingle()
+    const alreadyBumpedByEndpoint = !!recentTemplateSent
+
+    if (!alreadyBumpedByEndpoint) {
+      if (lead.status === 'nuevo') {
+        await supabase.from('leads').update({
+          status: 'contactado',
+          status_changed_at: new Date().toISOString(),
+          veces_contactado: (lead.veces_contactado || 0) + 1,
+          ultimo_contacto: new Date().toISOString(),
+        }).eq('id', lead.id)
+      } else {
+        await supabase.from('leads').update({
+          veces_contactado: (lead.veces_contactado || 0) + 1,
+          ultimo_contacto: new Date().toISOString(),
+        }).eq('id', lead.id)
+      }
     }
   }
 
