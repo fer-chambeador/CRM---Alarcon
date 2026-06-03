@@ -38,11 +38,17 @@ export async function GET(req: NextRequest) {
   qExit = qExit.lte('created_at', to)
   const { count: daptaExitosas } = await qExit
 
-  // ── 2. Dapta convertidas: leads únicos con llamada Y status cerrado ──
+  // ── 2. Funnel Dapta completo: exitosa → presentación/pago → convertido ──
+  // Tomamos las llamadas Dapta EXITOSAS (completed, ≥3min) en el rango y
+  // medimos a qué stage llegó cada lead único. Esto nos da el funnel real
+  // del flow Dapta: cuántos pasaron de "Daniela los llamó OK" a "Fer mandó
+  // info" y finalmente a "pagaron".
   let qConv = supabase
     .from('llamadas')
     .select('lead_id, leads:lead_id ( status )')
     .not('dapta_call_id', 'is', null)
+    .eq('status', 'completed')
+    .gte('duration_seconds', 180)
     .not('lead_id', 'is', null)
   if (from) qConv = qConv.gte('created_at', from)
   qConv = qConv.lte('created_at', to)
@@ -51,15 +57,22 @@ export async function GET(req: NextRequest) {
     lead_id: string | null
     leads: { status?: string } | { status?: string }[] | null
   }>
+  const exitosaLeadIds = new Set<string>()
+  const presentacionOrPagoIds = new Set<string>()
   const convertedLeadIds = new Set<string>()
+  // Stages "post-llamada" — el lead ya pasó del momento de la llamada
+  const POST_PRES = new Set(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
+  const CERRADOS = new Set(['convertido', 'cliente_recurrente'])
   for (const r of rows) {
     if (!r.lead_id) continue
+    exitosaLeadIds.add(r.lead_id)
     const leadsField = r.leads
     const s = Array.isArray(leadsField) ? leadsField[0]?.status : leadsField?.status
-    if (s === 'convertido' || s === 'cliente_recurrente') {
-      convertedLeadIds.add(r.lead_id)
-    }
+    if (s && POST_PRES.has(s)) presentacionOrPagoIds.add(r.lead_id)
+    if (s && CERRADOS.has(s))  convertedLeadIds.add(r.lead_id)
   }
+  const daptaExitosaLeadsUnicos = exitosaLeadIds.size
+  const daptaAPresentacion = presentacionOrPagoIds.size
   const daptaConvertidas = convertedLeadIds.size
 
   // ── 3. Llamadas agendadas (scheduled_at en rango) ──
@@ -136,6 +149,9 @@ export async function GET(req: NextRequest) {
     llamadas_agendadas: llamadasAgendadas ?? 0,
     llamadas_manuales: llamadasManuales,
     conversiones_manuales: llamadasManuales,  // deprecated alias para compatibilidad — usar llamadas_manuales en código nuevo
+    // Funnel Dapta completo (leads únicos que tuvieron llamada exitosa Dapta)
+    dapta_exitosa_leads: daptaExitosaLeadsUnicos,
+    dapta_a_presentacion: daptaAPresentacion,
     vambe_outbound_msgs: vambeOutboundMsgs ?? 0,
     outbound_pidio_llamada: outboundPidioLlamada,
     outbound_convertidos: outboundConvertidos,
