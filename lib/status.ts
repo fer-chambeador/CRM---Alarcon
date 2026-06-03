@@ -83,7 +83,7 @@ export function fmtPct(n: number): string {
 export const sumMonto = (rows: Lead[]) => rows.reduce((a, l) => a + (l.monto ?? DEFAULT_MONTO), 0)
 
 // ─── Business rules / alerts ────────────────────────────────────────────────
-export type AlertKind = 'follow_up' | 'last_chance' | 'llamada_pending' | 'presentacion_pending'
+export type AlertKind = 'follow_up' | 'last_chance' | 'llamada_pending' | 'presentacion_pending' | 'liga_pago_pending' | 'espera_aprobacion_pending'
 export type AlertAction = {
   label: string
   status?: Lead['status']
@@ -226,8 +226,45 @@ export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | 
       kind: 'presentacion_pending', level: 'warning', hours,
       text: '48 h desde la propuesta. ¿Resultado?',
       actions: [
-        { label: 'Convertido', status: 'convertido' },
+        { label: 'Liga de pago enviada', status: 'liga_pago_enviada' },
         { label: 'Espera aprobación', status: 'espera_aprobacion' },
+        { label: 'Convertido', status: 'convertido' },
+      ],
+    }
+  }
+
+  // Audit #1: liga de pago enviada >= 48h → confirma pago.
+  // Si Fer mandó la liga y el cliente no responde, el dinero está casi en mano
+  // pero necesita push. Antes del fix estos leads se perdían en silencio.
+  if (lead.status === 'liga_pago_enviada' && hours >= 48) {
+    return {
+      kind: 'liga_pago_pending',
+      level: hours >= 96 ? 'urgent' : 'warning',
+      hours,
+      text: hours >= 96
+        ? '4 días desde la liga. Confirma pago o márcalo perdido.'
+        : '48 h desde la liga. ¿Ya pagó?',
+      actions: [
+        { label: 'Convertido', status: 'convertido' },
+        { label: 'Descartado', status: 'descartado' },
+      ],
+    }
+  }
+
+  // Audit #1: espera de aprobación >= 72h → push manual a quien decide.
+  // Lead pasó por dirección/jefe y nadie ha vuelto. Recordatorio para Fer.
+  if (lead.status === 'espera_aprobacion' && hours >= 72) {
+    return {
+      kind: 'espera_aprobacion_pending',
+      level: hours >= 168 ? 'urgent' : 'warning',
+      hours,
+      text: hours >= 168
+        ? '7 días esperando aprobación. Mueve o descarta.'
+        : '72 h en espera de aprobación. Llama a hacer push.',
+      actions: [
+        { label: 'Liga de pago enviada', status: 'liga_pago_enviada' },
+        { label: 'Convertido', status: 'convertido' },
+        { label: 'Descartado', status: 'descartado' },
       ],
     }
   }

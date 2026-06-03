@@ -22,6 +22,37 @@ import { rowsToCsv, downloadCsv, exportFilename } from '@/lib/export'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
+/**
+ * Audit #7: traduce el error de un fetch fallido a algo accionable.
+ * Antes hacíamos alert('Falló: 502') y Fer no sabía qué hacer.
+ * Ahora detectamos los casos típicos de Vambe/Dapta y damos contexto + qué hacer.
+ */
+function explainError(rawError: string | number | undefined, status: number | undefined): string {
+  const e = String(rawError || '').toLowerCase()
+  if (e.includes('lead sin telefono') || e.includes('no phone')) {
+    return 'Este lead no tiene teléfono guardado. Edita el lead y agrega el número antes de mandar.'
+  }
+  if (e.includes('template') && (e.includes('no configurado') || e.includes('not configured'))) {
+    return 'No hay template Vambe configurado. Ve a Settings → Templates outbound y elige uno.'
+  }
+  if (e.includes('vambe rechaz') || e.includes('rate limit')) {
+    return `Vambe rechazó el envío: ${rawError}. Posibles causas: número bloqueado, fuera de ventana 24h, o saturación de templates.`
+  }
+  if (e.includes('ya enviado recientemente') || e.includes('anti doble-click') || status === 409) {
+    return 'Ya mandaste un mensaje hace menos de 2 minutos. Espera para evitar duplicados.'
+  }
+  if (e.includes('already-called') || e.includes('llamada ya disparada')) {
+    return 'Este lead ya tiene una llamada en curso o reciente. Cancela o espera a que termine.'
+  }
+  if (status === 502) {
+    return `Vambe/Dapta no respondió bien: ${rawError || 'sin detalles'}. Reintenta en 30s; si sigue, revisa Settings → Webhooks.`
+  }
+  if (status === 500 || status === 503) {
+    return `Error del servidor: ${rawError || 'desconocido'}. Reintenta. Si sigue, avisa al equipo de tech.`
+  }
+  return rawError ? `Falló: ${rawError}` : `Falló (${status || 'sin código'}). Reintenta.`
+}
+
 function tipoLabel(t: string | null) {
   if (!t) return ''
   return ({
@@ -285,6 +316,23 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
               >
                 Ver detalle ↗
               </a>
+              {/* Audit #11: deep-link directo al chat Vambe — Fer cierra ventas vía WhatsApp,
+                  evitar los 2-3 clicks para llegar al chat desde aquí. */}
+              {lead.telefono && (() => {
+                const pipelineId = '66b6ff34-3ec3-4972-8b90-33a3dc4e45fd'
+                const contactId = (lead as Lead & { vambe_contact_id?: string }).vambe_contact_id
+                const today = new Date().toISOString().slice(0, 10)
+                const url = contactId
+                  ? `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&chatContactId=${contactId}`
+                  : `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&query=${encodeURIComponent(lead.telefono.replace(/\D/g, '').slice(-10))}`
+                return (
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    style={{ marginLeft: 8, fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'rgba(34,214,138,0.15)', color: '#22d68a', textDecoration: 'none', fontWeight: 600 }}
+                    title="Abrir chat Vambe en pestaña nueva">
+                    💬 Vambe ↗
+                  </a>
+                )
+              })()}
             </div>
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}
@@ -499,16 +547,48 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   }, [])
 
   const updateStatus = useCallback(async (leadId: string, newStatus: Lead['status']) => {
+    // Audit #4: si descartamos, pedir razón para análisis cualitativo posterior.
+    // Capturamos el motivo en notas para que /analytics pueda agruparlo.
+    let descartadoNota: string | null = null
+    if (newStatus === 'descartado') {
+      const lead = leads.find(l => l.id === leadId)
+      const opts = [
+        '1. No le interesa',
+        '2. No contesta',
+        '3. Mal teléfono',
+        '4. Es candidato (no empresa)',
+        '5. Otro',
+      ].join('\n')
+      const choice = prompt(`Razón para descartar a ${lead?.nombre || lead?.email || 'este lead'}?\n\n${opts}\n\nEscribe el número o el motivo libre:`)
+      if (choice === null) return  // user canceló
+      const cleaned = (choice || '').trim()
+      if (!cleaned) return
+      const mapped =
+        cleaned === '1' ? 'No le interesa' :
+        cleaned === '2' ? 'No contesta' :
+        cleaned === '3' ? 'Mal teléfono' :
+        cleaned === '4' ? 'Es candidato (no empresa)' :
+        cleaned === '5' ? 'Otro' :
+        cleaned
+      const stamp = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })
+      descartadoNota = `[${stamp}] Descartado — ${mapped}`
+    }
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l))
     try {
+      const body: Record<string, unknown> = { status: newStatus }
+      if (descartadoNota) {
+        const lead = leads.find(l => l.id === leadId)
+        const prevNotas = lead?.notas?.trim() || ''
+        body.notas = prevNotas ? `${prevNotas}\n${descartadoNota}` : descartadoNota
+      }
       const res = await fetch(`/api/leads/${leadId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(body),
       })
       const updated = await res.json()
       if (updated && updated.id) setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
     } catch {}
-  }, [])
+  }, [leads])
 
   const dateScoped = useMemo(() => {
     const { from, to } = dateRangeBounds(dateRange, customFrom, customTo)
@@ -736,7 +816,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroIndigo)}>
             <div className={styles.kpiHeroLabel}>Pipeline por cerrar</div>
             <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCierre)}</div>
-            <div className={styles.kpiHeroSub}>Propuesta enviada + espera de aprobación</div>
+            <div className={styles.kpiHeroSub}>Propuesta + Espera de aprobación + Liga de pago</div>
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroDark)}>
             <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
@@ -862,25 +942,18 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           title={lead.telefono ? `Mandar mensaje Vambe a ${lead.telefono}` : 'lead sin teléfono'}
                           disabled={!lead.telefono}
                           onClick={async () => {
-                            if (!confirm(`¿Mandar mensaje Vambe a ${lead.nombre || lead.email}?`)) return
+                            // Audit #6: removido el confirm nativo — anti-doble-click ya está
+                            // en el endpoint (2 min) y el confirm sumaba 1 click sin agregar safety real.
                             const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
                               method: 'POST',
                               headers: { 'content-type': 'application/json' },
                               body: JSON.stringify({ action: 'message' }),
                             })
                             const data = await res.json()
-                            if (!data.ok) { alert('Falló: ' + (data.error || res.status)); return }
-                            // Re-fetch del lead para actualizar la fila sin
-                            // refresh manual (user 2 jun 2026). El backend
-                            // sube veces_contactado, ultimo_contacto, notas
-                            // y posiblemente status.
-                            try {
-                              const r2 = await fetch(`/api/leads/${lead.id}`, { cache: 'no-store' })
-                              if (r2.ok) {
-                                const fresh = await r2.json() as Lead
-                                if (fresh && fresh.id) handleSave(fresh)
-                              }
-                            } catch {}
+                            if (!data.ok) { alert(explainError(data.error, res.status)); return }
+                            // Audit #5: el endpoint ahora devuelve el lead actualizado,
+                            // no necesitamos el segundo fetch.
+                            if (data.lead && data.lead.id) handleSave(data.lead as Lead)
                           }}
                           style={{
                             background: 'linear-gradient(135deg, #22d68a, #1ab574)',
@@ -900,17 +973,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                               body: JSON.stringify({ action: 'call' }),
                             })
                             const data = await res.json()
-                            if (!data.ok) { alert('Falló: ' + (data.error || res.status)); return }
-                            // Re-fetch del lead para actualizar la fila sin
-                            // refresh manual. 'call' avanza el lead a
-                            // llamada_con_dapta + crea fila en llamadas.
-                            try {
-                              const r2 = await fetch(`/api/leads/${lead.id}`, { cache: 'no-store' })
-                              if (r2.ok) {
-                                const fresh = await r2.json() as Lead
-                                if (fresh && fresh.id) handleSave(fresh)
-                              }
-                            } catch {}
+                            if (!data.ok) { alert(explainError(data.error, res.status)); return }
+                            // Audit #5: el endpoint ahora devuelve el lead, no necesitamos refetch.
+                            if (data.lead && data.lead.id) handleSave(data.lead as Lead)
                           }}
                           style={{
                             background: 'linear-gradient(135deg, #7c54e8, #5a8af0)',

@@ -118,8 +118,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         updates.status = 'contactado'
         updates.status_changed_at = new Date().toISOString()
       }
-      await supabase.from('leads').update(updates).eq('id', lead.id)
-      return NextResponse.json({ ok: true, action: 'message', result })
+      // Audit #5: retornar el lead actualizado para evitar el round-trip extra
+      // del frontend (que antes hacía GET /api/leads/[id] tras este POST).
+      const { data: updatedLead } = await supabase
+        .from('leads')
+        .update(updates)
+        .eq('id', lead.id)
+        .select('*')
+        .single()
+      return NextResponse.json({ ok: true, action: 'message', result, lead: updatedLead })
     } catch (e) {
       return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 })
     }
@@ -201,5 +208,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       metadata: { source: 'leads_quick_action' },
     })
   }
-  return NextResponse.json({ ok: tr.ok, action: 'call', dapta: tr })
+  // Audit #5: incluir el lead actualizado para evitar 2do fetch del frontend
+  const { data: updatedLead } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', lead.id)
+    .single()
+  return NextResponse.json({ ok: tr.ok, action: 'call', dapta: tr, lead: updatedLead })
 }

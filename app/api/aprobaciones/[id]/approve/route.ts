@@ -128,6 +128,44 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
       })
 
+      // Audit #2: validar la response de Vambe ANTES de marcar approved.
+      // Vambe puede devolver HTTP 200 con success:false / error en body.
+      // Sin esto, marcamos aprobado y el lead "Contactado" sin que el cliente
+      // haya recibido el mensaje. Mismo guard que /quick-action.
+      type VambeSendResult = {
+        success?: boolean
+        ok?: boolean
+        status?: string
+        error?: string | { message?: string }
+        message?: string
+        data?: { status?: string; error?: string }
+      }
+      const vr = (result || {}) as VambeSendResult
+      const explicitFail =
+        vr.success === false ||
+        vr.ok === false ||
+        (typeof vr.status === 'string' && /^(failed|error|rejected)/i.test(vr.status)) ||
+        (typeof vr.data?.status === 'string' && /^(failed|error|rejected)/i.test(vr.data.status)) ||
+        !!vr.error
+      if (explicitFail) {
+        const reason = typeof vr.error === 'string' ? vr.error
+          : (vr.error as { message?: string })?.message
+          || vr.message || vr.data?.error || 'Vambe rechazó el envío sin lanzar HTTP error'
+        await supabase.from('aprobaciones').update({
+          status: 'failed',
+          result_metadata: { vambe_response: vr },
+          error_message: `Vambe rechazó: ${reason}`,
+          decided_at: new Date().toISOString(),
+        }).eq('id', a.id)
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'template_send_failed',
+          descripcion: `⚠️ Vambe NO envió template ${templateName}: ${reason}`,
+          metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, vambe_response: vr },
+        })
+        return NextResponse.json({ ok: false, error: `Vambe rechazó: ${reason}`, vambe_response: vr }, { status: 502 })
+      }
+
       // Marcar aprobación + lead
       await supabase.from('aprobaciones').update({
         status: 'approved',
