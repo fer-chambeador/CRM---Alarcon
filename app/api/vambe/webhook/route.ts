@@ -177,11 +177,25 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
     const { data: byId } = await supabase.from('leads').select('*').eq('vambe_contact_id', aiContactId).maybeSingle()
     if (byId) return byId as Lead
   }
-  const fromNumber = (data.fromNumber || data.from_number || '') as string
-  const toNumber = (data.toNumber || data.to_number || '') as string
+  // Extraer teléfono de TODOS los campos posibles que Vambe puede usar según
+  // el tipo de evento. message.received usa fromNumber/from_number, pero
+  // message.sent puede usar toNumber/to_number/destination/contact_phone_number/
+  // contact_phone, y a veces anidado en data.payload o data.contact.
+  const payload = (data.payload || {}) as Record<string, unknown>
+  const contact = (data.contact || {}) as Record<string, unknown>
+  const phoneCandidatesRaw: string[] = [
+    data.fromNumber, data.from_number, data.fromPhoneNumber,
+    data.toNumber, data.to_number, data.toPhoneNumber,
+    data.destination, data.destination_number,
+    data.contact_phone_number, data.contact_phone, data.phone, data.phoneNumber,
+    payload.fromNumber, payload.from_number, payload.toNumber, payload.to_number,
+    payload.contact_phone_number, payload.contact_phone, payload.phone,
+    contact.phone, contact.phoneNumber, contact.contact_phone_number,
+  ].filter(v => typeof v === 'string' && v.length > 0) as string[]
+
   // El número del lead es el que NO sea nuestro channel
   const channelPhone = (process.env.VAMBE_CHANNEL_PHONE || '').replace(/[+\s\-()]/g, '')
-  const candidatePhones = [fromNumber, toNumber]
+  const candidatePhones = phoneCandidatesRaw
     .map(p => p.replace(/[+\s\-()]/g, ''))
     .filter(p => p && p !== channelPhone)
   for (const phone of candidatePhones) {
@@ -190,8 +204,24 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
     // SAFETY: si last10 < 10 dígitos, el LIKE %X% matchearía CUALQUIER lead.
     // Mejor saltarse este número que riesgo de contaminar la BD.
     if (last10.length < 10) continue
-    const { data: byPhone } = await supabase.from('leads').select('*').like('telefono', `%${last10}`).maybeSingle()
-    if (byPhone) return byPhone as Lead
+    // Usar .limit(1) en vez de maybeSingle() para evitar null cuando hay
+    // múltiples leads con el mismo last10 (ej: dos leads con el mismo phone
+    // por duplicación histórica). Tomamos el más reciente.
+    const { data: byPhones } = await supabase
+      .from('leads')
+      .select('*')
+      .like('telefono', `%${last10}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (byPhones && byPhones.length > 0) return byPhones[0] as Lead
+  }
+  // Diagnóstico: si llegamos aquí sin match, dejar rastro mínimo en logs
+  if (aiContactId || candidatePhones.length > 0) {
+    console.warn('[vambe webhook] findLead sin match', {
+      aiContactId,
+      candidatePhones: candidatePhones.slice(0, 3),
+      dataKeys: Object.keys(data).slice(0, 20),
+    })
   }
   return null
 }
