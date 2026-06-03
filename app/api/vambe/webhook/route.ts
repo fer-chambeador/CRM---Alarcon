@@ -334,6 +334,36 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     })
   }
 
+  // ── BUG FIX (3 jun 2026): cuando Vambe (el bot o un humano del equipo)
+  // envía un mensaje OUTBOUND, también debemos bumpear veces_contactado +
+  // resetear ultimo_contacto en el lead — igual que cuando Fer clickea
+  // "📨 Mensaje" desde /leads (que va por /api/leads/[id]/quick-action).
+  //
+  // Sin esto, los mensajes mandados por el bot Vambe (asistente Outbound
+  // proactivo, o envíos manuales del equipo desde Vambe UI) no cuentan
+  // como "contacto" en el CRM — el counter de días no se reinicia y el
+  // lead nunca avanza a 2do/3er contacto.
+  //
+  // Solo aplica para outbound (envíos del lado nuestro). Inbound son
+  // respuestas del cliente y NO deben bumpear veces_contactado.
+  // Y solo si NO es un retry/dedup (sameKind+recent) — esos ya están
+  // consolidados en la misma actividad.
+  if (!isInbound && !(sameKind && recent)) {
+    if (lead.status === 'nuevo') {
+      await supabase.from('leads').update({
+        status: 'contactado',
+        status_changed_at: new Date().toISOString(),
+        veces_contactado: (lead.veces_contactado || 0) + 1,
+        ultimo_contacto: new Date().toISOString(),
+      }).eq('id', lead.id)
+    } else {
+      await supabase.from('leads').update({
+        veces_contactado: (lead.veces_contactado || 0) + 1,
+        ultimo_contacto: new Date().toISOString(),
+      }).eq('id', lead.id)
+    }
+  }
+
   // NOTA: REMOVIDO el auto-promote nuevo → contactado.
   // Fer pidió que los leads de Vambe se queden en 'nuevo' hasta que él
   // los mueva con una acción manual (Mensaje/Llamar) o el sistema lo haga
