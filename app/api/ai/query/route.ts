@@ -7,7 +7,10 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
-const MODEL = 'claude-haiku-4-5-20251001'  // Haiku: rápido + barato y soporta tool use bien
+// Sonnet 4.6: rate limit MUCHO más alto que Haiku (Tier estándar: 50K vs 10K tokens/min)
+// + razonamiento superior para análisis cualitativo de patrones. El system prompt está
+// con prompt caching → costo neto se mantiene bajo aunque el modelo sea más caro.
+const MODEL = 'claude-sonnet-4-6'
 
 /**
  * Pre-calcula bounds de fecha para que el modelo NO los infiera mal.
@@ -147,9 +150,97 @@ ESTILO DE RESPUESTA:
 - Números concretos: counts, montos en MXN ($ con comas), %.
 - Markdown ok. Tablas markdown si ayudan.
 - Al ejecutar acciones, confirmá qué se hizo y cuántos leads se afectaron.
+
+═══════════════════════════════════════════════════════════════════════
+CONOCIMIENTO DEL PRODUCTO — para reportes y respuestas con contexto real:
+
+CHAMBAS AY (qué vende):
+- Bolsa de trabajo en WhatsApp enfocada SOLO en operativos (meseros, choferes,
+  ayudantes generales, call center, almacenistas, lavalozas, cocineros, etc.).
+- Cobramos por "espacio de publicación": $1,160 MXN, dura 30 días, editable
+  ilimitadamente. Una publicación = una vacante activa.
+- Buscamos candidatos por código postal cerca del cliente, filtramos por
+  preguntas que el cliente define, los mandamos a entrevista por WhatsApp.
+- Pago: liga de pago (tarjeta) o transferencia. Rodrigo del equipo apoya
+  con facturación.
+
+DAPTA — Daniela (agente de voz IA):
+- Llama por teléfono a los leads "Llamada agendada" para cerrar la venta de
+  $1,160. Modelo Gemini 3.1 Pro, tono mexicano cálido.
+- Origen del número: +525517282187 (fijo).
+- Flow: Daniela explica producto en 4-6 min, cierra con "te mando la liga
+  de pago" o "te mando la presentación" según interés.
+- Outcomes que Daniela detecta (campo \`outcome\` en llamadas):
+  * pidio_link_pago → cliente quiere pagar YA. Daniela cierra "te llega la liga".
+    Auto-mueve el lead a status 'liga_pago_enviada'.
+  * pidio_presentacion → cliente quiere material para pasar a dirección.
+    Auto-mueve a 'presentacion_enviada' + crea aprobación de propuesta.
+  * callback → cliente pide volver a hablar otro día.
+  * no_interesado → descarte.
+  * no_answer / voicemail → no contestó.
+- Campos clave: \`interes_real\` (alto/medio/bajo), \`sentimiento\` (positivo/neutral/negativo),
+  \`duration_seconds\` (≥180s = llamada exitosa real, <180s = enganche corto).
+- Tabla: \`llamadas\` con \`lead_id\`, \`dapta_call_id\`, \`status\`, \`outcome\`, \`transcript\`,
+  \`custom_analysis\`, \`pidio_link_pago\`, \`pidio_presentacion\`, \`agendar_seguimiento\`.
+- Llamada "exitosa" = duration_seconds ≥ 180 + status='completed'.
+
+VAMBE — WhatsApp AI:
+- 4 asistentes: Outbound (cold leads), Interesado Agendador (warm), Agendados
+  Consultoría (post-llamada agendada → confirma o reagenda — TAMBIÉN cubre
+  stage Confirmados ✅), Agendador llamadas y videollamadas (deprecated,
+  solo llamada 10 min).
+- Pipeline Vambe (etapas): Lanzamiento → Interesado → Agendados Consultoría 📆
+  → Llamadas ☎️ → Asistencia Humana → Contactados via WhatsApp → Confirmados ✅
+  → Ganados → Perdidos.
+- Templates Meta aprobados: outbound_primer_mensaje_sales (cold opener),
+  meeting_reminder_in_person_default_template (reminder 20 min antes),
+  outbound_v1/v2/enero_2026 (variantes outbound), te_extranamos (reactivación),
+  tom (form), probando_crm (test). Templates requieren aprobación Meta para
+  editarse (minutos a 24h).
+- Outbound flow: lead nuevo → CRM lo crea desde Slack/form → /outbound genera
+  aprobación con score → Fer aprueba o rechaza → si aprueba se manda template
+  vía Vambe → contador veces_contactado +1, ultimo_contacto = NOW.
+- Cuando Vambe envía mensaje fuera del CRM (bot proactivo o humano del equipo
+  desde la UI de Vambe), el webhook message.sent llega al CRM y bumpea
+  veces_contactado igualmente (con guard de 5 min para evitar double-bump
+  con quick-action).
+
+EMBUDO DE VENTAS (status interno del CRM):
+- nuevo → contactado → llamada_agendada → llamada_con_dapta → presentacion_enviada
+  → espera_aprobacion → liga_pago_enviada → convertido → cliente_recurrente
+- descartado: lead muerto. Marcado con razón en notas (Audit #4).
+- Recurrente: pagó al menos 2 veces. cliente_recurrente es subset de convertido
+  para el funnel.
+
+CRON / AUTOMATIZACIÓN ACTIVA:
+- Cron 'promote-recurrentes' día 1 cada mes: convertidos del mes anterior →
+  cliente_recurrente.
+- Cron 'cron-trigger-scheduled' c/15min: dispara llamadas Dapta que tienen
+  scheduled_at en próximos 5 min.
+- Webhook Vambe → CRM: registra mensajes, cambia status según stage de Vambe,
+  silencia SOS si lead viene de flujo confirmado (Vambe 6).
+- Webhook Dapta post-call: post-llamada actualiza status + crea actividades +
+  dispara follow-up GCal.
+
+KPIs OPERATIVOS CLAVE (para análisis):
+- Tasa conversión global: convertidos / (total - descartados).
+- Tasa Dapta exitosa → pagó: dapta_convertidas / dapta_exitosa_leads.
+- Tasa Outbound → respondió: outbound_pidio_llamada / outbound_total_leads.
+- Llamadas manuales: agendadas - dapta_disparadas (cuánto trabajo manual hizo Fer).
+- Pipeline cerrado: suma de monto de leads convertidos (default $1,160 por lead).
+═══════════════════════════════════════════════════════════════════════
+
+CUÁNDO USAR generate_analytics_report:
+- "dame un reporte", "análisis del mes", "qué patrones ves", "cómo va la operación"
+- Después de llamarla, el resultado incluye datos pre-calculados + instrucciones
+  para redactar el reporte. Tú redactas el markdown final con análisis y patrones,
+  y LLAMAS \`generate_file\` con filename "reporte-YYYY-MM-DD.md" para que el user
+  lo descargue.
+- Para convertir a PDF: el user abre el .md en su mac y "Imprimir → Guardar como PDF"
+  (Markdown sin extra deps). Mencionalo si pregunta.
 `
 
-const MAX_TURNS = 5
+const MAX_TURNS = 10  // subido de 5 → más espacio para flows multi-tool (analítica + reporte + tool de envío)
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -246,7 +337,7 @@ ${question}`
     ]
     const res = await anthropicCall({
       model: MODEL,
-      max_tokens: 8000,  // Suficiente para generar CSVs grandes en una sola llamada
+      max_tokens: 16000,  // Sonnet 4.6 admite outputs grandes (reportes analytics, CSVs masivos)
       system: systemBlocks,
       messages,
       tools: TOOL_DEFINITIONS,

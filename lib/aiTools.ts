@@ -174,6 +174,30 @@ Después de llamar esta tool, el frontend muestra un botón "⇣ Descargar nombr
     },
   },
   {
+    name: 'generate_analytics_report',
+    description: `Genera un reporte ejecutivo con métricas clave del CRM (leads, Dapta, Vambe, conversión, funnel) más un BRIEF con patrones detectados, oportunidades de mejora y próximas acciones recomendadas. Devuelve markdown estructurado que se entrega al user como archivo .md descargable (que puede convertir a PDF imprimiendo desde el navegador). Útil cuando el user pide "dame un reporte", "qué está pasando con mi operación", "análisis del mes", "patrones que ves".
+
+El reporte incluye AUTOMÁTICAMENTE:
+- Resumen ejecutivo (3-5 líneas)
+- KPIs principales (leads, conversión, pipeline, Dapta funnel, Vambe outbound)
+- Patrones detectados (canales que ganan, etapas donde se cae el funnel, days-to-close, etc.)
+- Oportunidades / quick wins
+- 3 acciones recomendadas para esta semana
+
+Después de llamar esta tool, llama TAMBIÉN a generate_file con el markdown y filename "reporte-YYYY-MM-DD.md" para que el user lo descargue.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['hoy', 'semana', 'mes', 'mes_pasado', 'todo'], description: 'Periodo del análisis. Default: mes.' },
+        focus: {
+          type: 'string',
+          enum: ['general', 'dapta', 'vambe', 'conversion', 'canales'],
+          description: 'Sobre qué centrar el análisis. general = balance completo. dapta = solo flow Daniela. vambe = solo outbound. conversion = solo embudo. canales = solo desglose por canal.',
+        },
+      },
+    },
+  },
+  {
     name: 'list_leads_filtered',
     description: `Devuelve una lista de leads que matchean los filtros, ordenados por score descendente (los hot primero). Úsalo cuando el user pregunta cosas como:
 - "¿qué leads calientes / hot debo contactar hoy?"
@@ -453,6 +477,74 @@ async function execGenerateFile(input: {
   }
 }
 
+async function execGenerateAnalyticsReport(input: { period?: string; focus?: string }, supabase: Supabase): Promise<ToolResult> {
+  const period = input.period || 'mes'
+  const focus = input.focus || 'general'
+  // Calcular bounds del periodo
+  const now = new Date()
+  let from: Date | null = null
+  if (period === 'hoy')         { from = new Date(now); from.setHours(0, 0, 0, 0) }
+  else if (period === 'semana') { const d = now.getDay(); const m = d === 0 ? -6 : 1 - d; from = new Date(now); from.setDate(now.getDate() + m); from.setHours(0, 0, 0, 0) }
+  else if (period === 'mes')    { from = new Date(now.getFullYear(), now.getMonth(), 1) }
+  else if (period === 'mes_pasado') { from = new Date(now.getFullYear(), now.getMonth() - 1, 1) }
+  // 'todo' deja from=null
+
+  // Pull leads + llamadas + actividad (con join al lead) en el periodo
+  let qLeads = supabase.from('leads').select('*')
+  if (from) qLeads = qLeads.gte('created_at', from.toISOString())
+  const { data: leads } = await qLeads.limit(2000)
+  const leadsList = (leads || []) as Array<Record<string, unknown>>
+
+  let qLla = supabase.from('llamadas').select('*')
+  if (from) qLla = qLla.gte('created_at', from.toISOString())
+  const { data: llamadas } = await qLla.limit(1000)
+  const llamadasList = (llamadas || []) as Array<Record<string, unknown>>
+
+  // Devolver datos crudos al modelo + instrucciones de cómo redactar el reporte.
+  // El modelo (Sonnet) interpreta y genera el markdown analítico final.
+  const summary = {
+    period,
+    from: from?.toISOString().slice(0, 10) || 'inicio del tiempo',
+    to: now.toISOString().slice(0, 10),
+    focus,
+    leads_total: leadsList.length,
+    by_status: leadsList.reduce((acc, l) => { const s = String(l.status || 'unknown'); acc[s] = (acc[s] || 0) + 1; return acc }, {} as Record<string, number>),
+    by_canal: leadsList.reduce((acc, l) => { const c = String(l.canal_adquisicion || '(sin canal)'); acc[c] = (acc[c] || 0) + 1; return acc }, {} as Record<string, number>),
+    by_presupuesto: leadsList.reduce((acc, l) => { const p = String(l.presupuesto || 'none'); acc[p] = (acc[p] || 0) + 1; return acc }, {} as Record<string, number>),
+    monto_total_pipeline: leadsList.reduce((s, l) => s + (Number(l.monto) || 0), 0),
+    convertidos: leadsList.filter(l => l.status === 'convertido' || l.status === 'cliente_recurrente').length,
+    descartados: leadsList.filter(l => l.status === 'descartado').length,
+    llamadas_total: llamadasList.length,
+    llamadas_completadas: llamadasList.filter(l => l.status === 'completed').length,
+    llamadas_pidio_pago: llamadasList.filter(l => l.pidio_link_pago).length,
+    llamadas_pidio_presentacion: llamadasList.filter(l => l.pidio_presentacion).length,
+    duracion_media_seg: llamadasList.length > 0
+      ? Math.round(llamadasList.reduce((s, l) => s + (Number(l.duration_seconds) || 0), 0) / llamadasList.length)
+      : 0,
+    interes_alto_pct: llamadasList.length > 0
+      ? Math.round(llamadasList.filter(l => l.interes_real === 'alto').length / llamadasList.length * 100)
+      : 0,
+  }
+
+  return {
+    ok: true,
+    summary: `Datos pre-calculados del periodo ${period} (${leadsList.length} leads, ${llamadasList.length} llamadas). El modelo debe ahora redactar el reporte markdown y entregarlo al user vía generate_file (filename: reporte-${now.toISOString().slice(0, 10)}.md).`,
+    data: {
+      ...summary,
+      _instructions_for_model: `Con estos datos, redacta un reporte markdown ejecutivo con estas secciones EN ORDEN:
+1. **Resumen ejecutivo** (3 líneas: qué se hizo, cómo va, qué destacar)
+2. **KPIs del periodo** (tabla con métricas clave)
+3. **Funnel y conversión** (si focus permite — % entre etapas, dónde se cae)
+4. **Dapta — operativa de Daniela** (si focus permite — interés alto, pidió pago/presentación, duración promedio, eficacia)
+5. **Patrones detectados** (3-5 bullets — qué canal funciona, qué etapa atasca, qué tipo de cliente convierte mejor)
+6. **Oportunidades y quick wins** (3 sugerencias accionables esta semana)
+7. **3 acciones recomendadas para esta semana** (con números y deadline implícito)
+
+Tono: directo, español MX, números con $/comas/%, tablas markdown si ayudan. Después de redactar, LLAMA a generate_file con filename "reporte-${now.toISOString().slice(0, 10)}.md", mime_type "text/markdown", content=el markdown completo del reporte.`,
+    },
+  }
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────
 export async function executeTool(name: string, input: unknown, supabase: Supabase): Promise<ToolResult> {
   try {
@@ -468,6 +560,7 @@ export async function executeTool(name: string, input: unknown, supabase: Supaba
       case 'send_template_campaign':  return await execSendTemplateCampaign(input as Parameters<typeof execSendTemplateCampaign>[0], supabase)
       case 'query_campaigns':         return await execQueryCampaigns(input as Parameters<typeof execQueryCampaigns>[0], supabase)
       case 'list_leads_filtered':     return await execListLeadsFiltered(input as Parameters<typeof execListLeadsFiltered>[0], supabase)
+      case 'generate_analytics_report': return await execGenerateAnalyticsReport(input as Parameters<typeof execGenerateAnalyticsReport>[0], supabase)
       default:                    return { ok: false, summary: `Tool desconocida: ${name}`, error: 'unknown_tool' }
     }
   } catch (e) {

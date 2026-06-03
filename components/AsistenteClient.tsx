@@ -25,12 +25,21 @@ type Turn = {
 }
 
 const SUGGESTIONS = [
-  '¿Cuántos leads cayeron este mes y de qué canales?',
-  '¿Qué canal tiene la mejor tasa de conversión?',
-  'Marca como descartado a los leads en "contactado" con más de 30 días sin moverse',
-  'Agrega nota al lead juan@empresa.com: "llamó pidiendo descuento"',
-  '¿Cuál es el pipeline cerrado de Instagram este mes?',
-  'Cambia el status de jose@mail.com a propuesta enviada',
+  // Reportes (NUEVO)
+  'Dame un reporte ejecutivo del mes con patrones detectados',
+  'Análisis del flow Dapta: qué % pasa de llamada exitosa a propuesta a pago',
+  'Reporte de canales: cuál convierte más por monto invertido',
+  // Outbound masivo
+  'Mándame outbound a todos los nuevos de Facebook que llevan ≥3 días sin contactar',
+  'Manda follow-up a los contactado que llevan 5 días sin moverse',
+  // Bulk updates
+  'Descarta a los leads en contactado con más de 30 días sin avance',
+  'Marca como espera de aprobación a los presentacion_enviada que llevan más de 48h',
+  // Listas filtradas
+  '¿Qué leads hot debo contactar hoy?',
+  'Lista los 10 leads con interés alto que aún no convierten',
+  // Análisis Dapta
+  '¿Cuántas llamadas de Daniela fueron exitosas esta semana? ¿qué outcomes detectó?',
 ]
 
 // Tiny markdown renderer — handles **bold**, `code`, *italic*, lists, line breaks. No external dep.
