@@ -91,6 +91,7 @@ const FUNNEL_RANK: Record<Lead['status'], number> = {
   no_show_llamada: 2,
   presentacion_enviada: 3,
   espera_aprobacion: 4,
+  liga_pago_enviada: 4.5,
   convertido: 5,
   cliente_recurrente: 5,
   descartado: -1,
