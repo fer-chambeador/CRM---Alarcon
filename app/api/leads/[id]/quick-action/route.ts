@@ -63,13 +63,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         templateId: tpl.template_id,
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
       })
-      if (lead.status === 'nuevo') {
-        await supabase.from('leads').update({
-          status: 'contactado',
-          status_changed_at: new Date().toISOString(),
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-        }).eq('id', lead.id)
+      // BUG FIX (3 jun 2026): el bump de veces_contactado + reset de ultimo_contacto
+      // se hacía SOLO si lead estaba en 'nuevo'. Si ya estaba en 'contactado'
+      // (2do/3er contacto), no se actualizaba — el counter de días seguía corriendo
+      // y nunca subía a 3er contacto. Ahora bumpeamos SIEMPRE que se manda mensaje,
+      // y solo el cambio de status a 'contactado' es condicional.
+      const updates: Record<string, unknown> = {
+        ultimo_contacto: new Date().toISOString(),
+        veces_contactado: (lead.veces_contactado || 0) + 1,
       }
+      if (lead.status === 'nuevo') {
+        updates.status = 'contactado'
+        updates.status_changed_at = new Date().toISOString()
+      }
+      await supabase.from('leads').update(updates).eq('id', lead.id)
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'template_sent',
@@ -144,7 +151,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     error_message: tr.ok ? null : (tr.error || 'unknown'),
   })
   if (tr.ok) {
-    const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','convertido','cliente_recurrente'])
+    const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','liga_pago_enviada','convertido','cliente_recurrente'])
     if (!ADVANCED.has(lead.status)) {
       await supabase.from('leads').update({
         status: 'llamada_con_dapta',

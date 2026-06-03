@@ -8,6 +8,7 @@ export const STATUS_LABELS: Record<Lead['status'], string> = {
   no_show_llamada: 'No show llamada',
   presentacion_enviada: 'Propuesta enviada',
   espera_aprobacion: 'Espera de aprobación',
+  liga_pago_enviada: 'Liga de pago enviada',
   convertido: 'Convertido',
   cliente_recurrente: 'Cliente recurrente',
   descartado: 'Descartado',
@@ -21,13 +22,14 @@ export const STATUS_ORDER: Lead['status'][] = [
   'no_show_llamada',
   'presentacion_enviada',
   'espera_aprobacion',
+  'liga_pago_enviada',
   'convertido',
   'cliente_recurrente',
   'descartado',
 ]
 
 export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_con_dapta', 'llamada_agendada', 'no_show_llamada']
-export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
+export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
 /**
@@ -38,6 +40,7 @@ export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurre
 export const STATUS_PROJECTION_ORDER: Lead['status'][] = [
   'convertido',
   'cliente_recurrente',
+  'liga_pago_enviada',
   'espera_aprobacion',
   'presentacion_enviada',
   'llamada_agendada',
@@ -59,6 +62,7 @@ export function statusColor(s: Lead['status']): string {
     no_show_llamada: '#f05a5a',
     presentacion_enviada: '#a594ff',
     espera_aprobacion: '#ffba3d',
+    liga_pago_enviada: '#50d4a0',
     convertido: '#22d68a',
     cliente_recurrente: '#22d68a',
     descartado: '#606078',

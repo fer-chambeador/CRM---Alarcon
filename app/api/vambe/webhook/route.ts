@@ -893,7 +893,7 @@ function extractDateFromMessages(messages: Array<{ message: string; created_at: 
 function shouldAdvanceStatus(current: Lead['status'], target: Lead['status']): boolean {
   const order: Lead['status'][] = [
     'nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada',
-    'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente',
+    'presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente',
   ]
   if (target === 'descartado') return current !== 'descartado'
   const ci = order.indexOf(current)

@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
   const rows = (pending || []) as Array<{ id: string; lead_id: string | null; scheduled_at: string; status: string; trigger_reason: string | null }>
   const results: Array<{ llamada_id: string; ok: boolean; reason?: string; other?: { id: string; status: string } }> = []
 
-  const ADVANCED = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+  const ADVANCED = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
 
   for (const row of rows) {
     if (!row.lead_id) { results.push({ llamada_id: row.id, ok: false, reason: 'no lead_id' }); continue }

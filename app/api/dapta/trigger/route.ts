@@ -201,7 +201,7 @@ export async function POST(req: NextRequest) {
   // ── Mover el lead al bucket "llamada_con_dapta" ──
   // Solo si la llamada se disparó OK Y el lead no está ya en una etapa más avanzada.
   if (triggerResult.ok) {
-    const ADVANCED_STATUSES = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+    const ADVANCED_STATUSES = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
     if (!ADVANCED_STATUSES.has(l.status)) {
       await supabase
         .from('leads')

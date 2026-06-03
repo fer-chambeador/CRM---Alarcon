@@ -245,7 +245,7 @@ export async function POST(req: NextRequest) {
     const lc = leadCurrent as { status: string; notas: string | null } | null
     if (lc) {
       // No tumbamos status si ya está en una etapa MÁS avanzada (convertido, etc.)
-      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
       const newStatus = ADVANCED.has(lc.status) ? lc.status : 'no_show_llamada'
       const noteLine = `[${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}] Vambe llamó pero lead no respondió`
       const newNotas = lc.notas && lc.notas.trim().length > 0
@@ -274,7 +274,7 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
     const fullLead = leadRow as Lead | null
     if (fullLead) {
-      const AHEAD = new Set<Lead['status']>(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      const AHEAD = new Set<Lead['status']>(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
       if (!AHEAD.has(fullLead.status)) {
         await supabase
           .from('leads')

@@ -171,6 +171,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   overflow-x: auto;
+  flex-shrink: 0;
 }
 .table {
   width: 100%;

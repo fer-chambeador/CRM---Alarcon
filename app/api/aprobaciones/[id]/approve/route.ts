@@ -271,7 +271,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
 
       // Mover lead a llamada_con_dapta (si no está ya en algo más avanzado)
-      const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','convertido','cliente_recurrente'])
+      const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','liga_pago_enviada','convertido','cliente_recurrente'])
       if (!ADVANCED.has(lead.status)) {
         await supabase.from('leads').update({
           status: 'llamada_con_dapta',
