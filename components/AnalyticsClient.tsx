@@ -1706,7 +1706,8 @@ type DaptaMetrics = {
   dapta_exitosas: number
   dapta_convertidas: number
   llamadas_agendadas: number
-  conversiones_manuales: number
+  llamadas_manuales: number
+  conversiones_manuales: number  // deprecated alias — preferir llamadas_manuales
   vambe_outbound_msgs: number
   outbound_pidio_llamada: number
   outbound_convertidos: number
@@ -1954,9 +1955,9 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
               accentColor="#4ea8f5"
             />
             <KPICard
-              label="Conversiones manuales (Fer)"
-              value={daptaMetrics ? String(daptaMetrics.conversiones_manuales) : '…'}
-              sub="cerrados sin pasar por Dapta"
+              label="Llamadas manuales (Fer)"
+              value={daptaMetrics ? String(daptaMetrics.llamadas_manuales ?? daptaMetrics.conversiones_manuales) : '…'}
+              sub="agendadas que no tomó Dapta"
               accentColor="#f5c842"
             />
           </div>

@@ -71,27 +71,19 @@ export async function GET(req: NextRequest) {
   qAgend = qAgend.lte('scheduled_at', to)
   const { count: llamadasAgendadas } = await qAgend
 
-  // ── 4. Conversiones manuales (cerrados SIN Dapta) ──
-  let qLeadsCerrados = supabase
-    .from('leads')
-    .select('id, status')
-    .in('status', ['convertido', 'cliente_recurrente'])
-  if (from) qLeadsCerrados = qLeadsCerrados.gte('status_changed_at', from)
-  qLeadsCerrados = qLeadsCerrados.lte('status_changed_at', to)
-  const { data: leadsCerrados } = await qLeadsCerrados
-  let conversionesManuales = 0
-  if (leadsCerrados && leadsCerrados.length > 0) {
-    const ids = (leadsCerrados as Array<{ id: string }>).map(l => l.id)
-    const { data: llamadasOfClosed } = await supabase
-      .from('llamadas')
-      .select('lead_id')
-      .in('lead_id', ids)
-      .not('dapta_call_id', 'is', null)
-    const conDapta = new Set<string>(
-      ((llamadasOfClosed ?? []) as Array<{ lead_id: string }>).map(l => l.lead_id),
-    )
-    conversionesManuales = ids.filter(id => !conDapta.has(id)).length
-  }
+  // ── 4. Llamadas manuales (agendadas - llamadas con dapta_call_id) ──
+  // Estas son las llamadas que Fer tuvo que hacer porque Dapta no las tomó
+  // (sea porque falló, porque Fer la llamó manual antes, o porque el cron
+  // no la disparó). Métrica útil para medir el costo operativo de Fer.
+  // Fórmula: total agendadas en el rango − llamadas con dapta_call_id en el rango.
+  let qDaptaDisparadas = supabase
+    .from('llamadas')
+    .select('id', { count: 'exact', head: true })
+    .not('dapta_call_id', 'is', null)
+  if (from) qDaptaDisparadas = qDaptaDisparadas.gte('scheduled_at', from)
+  qDaptaDisparadas = qDaptaDisparadas.lte('scheduled_at', to)
+  const { count: daptaDisparadas } = await qDaptaDisparadas
+  const llamadasManuales = Math.max(0, (llamadasAgendadas ?? 0) - (daptaDisparadas ?? 0))
 
   // ── 5. Vambe outbound mensajes enviados ──
   let qMsgs = supabase
@@ -142,7 +134,8 @@ export async function GET(req: NextRequest) {
     dapta_exitosas: daptaExitosas ?? 0,
     dapta_convertidas: daptaConvertidas,
     llamadas_agendadas: llamadasAgendadas ?? 0,
-    conversiones_manuales: conversionesManuales,
+    llamadas_manuales: llamadasManuales,
+    conversiones_manuales: llamadasManuales,  // deprecated alias para compatibilidad — usar llamadas_manuales en código nuevo
     vambe_outbound_msgs: vambeOutboundMsgs ?? 0,
     outbound_pidio_llamada: outboundPidioLlamada,
     outbound_convertidos: outboundConvertidos,
