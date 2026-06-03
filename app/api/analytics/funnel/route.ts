@@ -25,7 +25,9 @@ export const fetchCache = 'force-no-store'
  * funnel). Sin filtro = todos.
  */
 
-const STAGES = ['nuevo', 'contactado', 'llamada_agendada', 'llamada_con_dapta', 'presentacion_enviada', 'convertido', 'cliente_recurrente'] as const
+// Recurrente quitado del funnel (user request, 3 jun 2026): un cliente recurrente
+// ya está convertido — duplicar en el funnel ruidoso para la vista de captación.
+const STAGES = ['nuevo', 'contactado', 'llamada_agendada', 'llamada_con_dapta', 'presentacion_enviada', 'convertido'] as const
 type Stage = typeof STAGES[number]
 
 const STAGE_LABEL: Record<Stage, string> = {
@@ -35,7 +37,6 @@ const STAGE_LABEL: Record<Stage, string> = {
   llamada_con_dapta: 'Daniela llamó',
   presentacion_enviada: 'Presentación enviada',
   convertido: 'Convertido',
-  cliente_recurrente: 'Recurrente',
 }
 
 // Rank en el funnel — un lead en "presentacion_enviada" YA pasó por todas las anteriores.
@@ -46,7 +47,6 @@ const STAGE_RANK: Record<Stage, number> = {
   llamada_con_dapta: 3,
   presentacion_enviada: 4,
   convertido: 5,
-  cliente_recurrente: 6,
 }
 
 function median(xs: number[]): number | null {
@@ -108,7 +108,11 @@ export async function GET(req: NextRequest) {
   ) as Record<Stage, Set<string>>
 
   for (const l of leads) {
-    const currentRank = STAGE_RANK[l.status as Stage] ?? -1
+    // 'cliente_recurrente' es un super-set de 'convertido' (ya pagó al menos una vez),
+    // así que para el funnel lo tratamos como 'convertido' (rank 5). No tener un
+    // rank propio simplifica el funnel sin perder el cliente del conteo final.
+    const effectiveStatus = l.status === 'cliente_recurrente' ? 'convertido' : l.status
+    const currentRank = STAGE_RANK[effectiveStatus as Stage] ?? -1
     const history = transitionsByLead.get(l.id) || []
     for (const s of STAGES) {
       const sRank = STAGE_RANK[s]
