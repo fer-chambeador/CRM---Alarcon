@@ -276,7 +276,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
       <span>↳ {label}</span>
     </Link>
   )
-  const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   const onSettings = active === 'settings' || active === 'templates'
   return (
     <>
@@ -284,8 +283,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
         {link('/leads', 'leads', 'Leads', '📋')}
         {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
         {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
-        {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
-        {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
         {link('/asistente', 'asistente', 'Asistente', '🧠')}
         {link('/settings', 'settings', 'Settings', '⚙️')}
@@ -301,7 +298,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
 const MOBILE_TABS = [
   { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
   { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
-  { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
   { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
   { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
 ] as const
