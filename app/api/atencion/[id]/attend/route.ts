@@ -29,15 +29,19 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .update({
         status: 'attended',
         attended_at: new Date().toISOString(),
-        attended_by: 'slack',
+        attended_by: 'fer@chambas.ai',  // Vambe 3: registrar quien atendio (Fer via Slack)
       })
       .eq('id', params.id)
 
+    // Vambe 3 (diseño A): "Sí atendido" → Asistencia humana + Atendido por Fer.
+    // El lead permanece en stage de Asistencia Humana de Vambe (no se mueve),
+    // pero registramos quién lo atendió para reportes y para que el bot no
+    // vuelva a escalar.
     await supabase.from('lead_actividad').insert({
       lead_id: t.lead_id,
       tipo: 'atencion_humana_attended',
-      descripcion: '✓ Asistencia humana atendida (desde Slack)',
-      metadata: { source: 'slack', ticket_id: params.id },
+      descripcion: '✓ Asistencia humana atendida por Fer (desde Slack)',
+      metadata: { source: 'slack', ticket_id: params.id, attended_by: 'fer@chambas.ai' },
     })
   }
 

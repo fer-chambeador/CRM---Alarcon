@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { triggerDaptaCall } from '@/lib/dapta'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -48,6 +49,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'el lead no tiene teléfono' }, { status: 400 })
   }
 
+  // ── Normalizar el teléfono ANTES de cualquier operación ──
+  // Si el teléfono está malformado (ej. formato MX viejo "+5201..." con
+  // prefijo de larga distancia "01"), Dapta no puede marcar y la fila queda
+  // stuck en 'dialing'. Bug visto con Yanelli + Petrus (2 jun 2026).
+  //
+  // Si normalizamos y el formato cambió, también ACTUALIZAMOS el lead en DB
+  // para evitar volver a tener el mismo problema.
+  const phoneNormalized = normalizeMexicanPhone(l.telefono)
+  if (!phoneNormalized) {
+    return NextResponse.json({
+      error: 'el-telefono-no-es-valido',
+      detail: `El teléfono '${l.telefono}' no se pudo normalizar a un formato MX válido. Edita el lead y corrige el número antes de llamar.`,
+    }, { status: 400 })
+  }
+  if (phoneNormalized !== l.telefono) {
+    // Actualizar el lead con el formato canónico para futuras operaciones.
+    await supabase.from('leads').update({ telefono: phoneNormalized }).eq('id', l.id)
+    await supabase.from('lead_actividad').insert({
+      lead_id: l.id,
+      tipo: 'field_change',
+      descripcion: `Teléfono normalizado: ${l.telefono} → ${phoneNormalized}`,
+      metadata: { field: 'telefono', before: l.telefono, after: phoneNormalized, source: 'dapta_trigger_auto_normalize' },
+    })
+    l.telefono = phoneNormalized
+  }
+
   // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
   // Nunca debemos volver a marcarle a un cliente al que ya intentamos contactar.
   // Si hay CUALQUIER llamada previa (queued, dialing, completed, failed, no_answer,
@@ -59,6 +86,23 @@ export async function POST(req: NextRequest) {
   // para evitar bucles de cron y spam al cliente.
   const url = new URL(req.url)
   const force = url.searchParams.get('force') === '1'
+
+  // Si el caller quiere forzar (re-llamar a un lead que ya tuvo llamada),
+  // requerimos password. Esto previene loops accidentales y re-disparos
+  // por mistap en la UI. El password está en env (DAPTA_FORCE_CALL_PASSWORD,
+  // default '1234') — Fer lo conoce, no tiene que entrar a Railway para
+  // hacer el re-disparo, pero un click accidental no lo va a disparar.
+  if (force) {
+    const passProvided = url.searchParams.get('password') || (body as { password?: string })?.password || req.headers.get('x-force-password')
+    const passExpected = process.env.DAPTA_FORCE_CALL_PASSWORD || '1234'
+    if (passProvided !== passExpected) {
+      return NextResponse.json({
+        error: 'force-password-required',
+        detail: 'Para re-llamar a un lead con llamada previa necesitas pasar ?password=<password>. Pídeselo a Fer.',
+      }, { status: 401 })
+    }
+  }
+
   if (!force) {
     const { data: prev } = await supabase
       .from('llamadas')
@@ -71,7 +115,7 @@ export async function POST(req: NextRequest) {
       const p = prev[0] as { id: string; status: string; created_at: string }
       return NextResponse.json({
         error: 'lead-already-called',
-        detail: `Este lead ya tiene una llamada previa (status=${p.status}, creada ${p.created_at}). Cancélala primero o pasa ?force=1.`,
+        detail: `Este lead ya tiene una llamada previa (status=${p.status}, creada ${p.created_at}). Para re-llamar, vuelve a intentar y captura el password cuando te lo pida la UI.`,
         previous_llamada_id: p.id,
         previous_status: p.status,
       }, { status: 409 })
@@ -157,7 +201,7 @@ export async function POST(req: NextRequest) {
   // ── Mover el lead al bucket "llamada_con_dapta" ──
   // Solo si la llamada se disparó OK Y el lead no está ya en una etapa más avanzada.
   if (triggerResult.ok) {
-    const ADVANCED_STATUSES = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+    const ADVANCED_STATUSES = new Set(['llamada_agendada', 'no_show_llamada', 'presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
     if (!ADVANCED_STATUSES.has(l.status)) {
       await supabase
         .from('leads')

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { normalizeCanal } from '@/lib/canales'
 import { syncLeadToCalendar } from '@/lib/googleCalendar'
+import { handleStatusChangeForFollowUp } from '@/lib/followUp'
+import type { Lead } from '@/lib/supabase'
 
 const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at','tipo_llamada'] as const
 
@@ -136,6 +138,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
     if (actividades.length > 0) {
       await supabase.from('lead_actividad').insert(actividades)
+    }
+  }
+
+  // Auto-create follow-up en GCal cuando status cambia a 'presentacion_enviada'
+  // (y borrarlo si pasa a un estado terminal). Best-effort, no bloquea la
+  // respuesta si falla. Ver lib/followUp.ts para la lógica completa.
+  if (leadBefore && 'status' in updates) {
+    const before = leadBefore as Record<string, unknown>
+    const oldStatus = (before.status as Lead['status']) ?? null
+    const newStatus = updates.status as Lead['status']
+    const oldFollowUpId = (before.gcal_followup_event_id as string | null) ?? null
+    if (oldStatus !== newStatus) {
+      await handleStatusChangeForFollowUp(
+        supabase,
+        id,
+        data as Lead,
+        oldStatus,
+        newStatus,
+        oldFollowUpId,
+      )
     }
   }
 

@@ -8,6 +8,7 @@ export const STATUS_LABELS: Record<Lead['status'], string> = {
   no_show_llamada: 'No show llamada',
   presentacion_enviada: 'Propuesta enviada',
   espera_aprobacion: 'Espera de aprobación',
+  liga_pago_enviada: 'Liga de pago enviada',
   convertido: 'Convertido',
   cliente_recurrente: 'Cliente recurrente',
   descartado: 'Descartado',
@@ -21,13 +22,14 @@ export const STATUS_ORDER: Lead['status'][] = [
   'no_show_llamada',
   'presentacion_enviada',
   'espera_aprobacion',
+  'liga_pago_enviada',
   'convertido',
   'cliente_recurrente',
   'descartado',
 ]
 
 export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_con_dapta', 'llamada_agendada', 'no_show_llamada']
-export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion']
+export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
 /**
@@ -38,6 +40,7 @@ export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurre
 export const STATUS_PROJECTION_ORDER: Lead['status'][] = [
   'convertido',
   'cliente_recurrente',
+  'liga_pago_enviada',
   'espera_aprobacion',
   'presentacion_enviada',
   'llamada_agendada',
@@ -59,6 +62,7 @@ export function statusColor(s: Lead['status']): string {
     no_show_llamada: '#f05a5a',
     presentacion_enviada: '#a594ff',
     espera_aprobacion: '#ffba3d',
+    liga_pago_enviada: '#50d4a0',
     convertido: '#22d68a',
     cliente_recurrente: '#22d68a',
     descartado: '#606078',
@@ -79,7 +83,7 @@ export function fmtPct(n: number): string {
 export const sumMonto = (rows: Lead[]) => rows.reduce((a, l) => a + (l.monto ?? DEFAULT_MONTO), 0)
 
 // ─── Business rules / alerts ────────────────────────────────────────────────
-export type AlertKind = 'follow_up' | 'last_chance' | 'llamada_pending' | 'presentacion_pending'
+export type AlertKind = 'follow_up' | 'last_chance' | 'llamada_pending' | 'presentacion_pending' | 'liga_pago_pending' | 'espera_aprobacion_pending'
 export type AlertAction = {
   label: string
   status?: Lead['status']
@@ -222,8 +226,45 @@ export function getLeadAlert(lead: Lead, now: number = Date.now()): LeadAlert | 
       kind: 'presentacion_pending', level: 'warning', hours,
       text: '48 h desde la propuesta. ¿Resultado?',
       actions: [
-        { label: 'Convertido', status: 'convertido' },
+        { label: 'Liga de pago enviada', status: 'liga_pago_enviada' },
         { label: 'Espera aprobación', status: 'espera_aprobacion' },
+        { label: 'Convertido', status: 'convertido' },
+      ],
+    }
+  }
+
+  // Audit #1: liga de pago enviada >= 48h → confirma pago.
+  // Si Fer mandó la liga y el cliente no responde, el dinero está casi en mano
+  // pero necesita push. Antes del fix estos leads se perdían en silencio.
+  if (lead.status === 'liga_pago_enviada' && hours >= 48) {
+    return {
+      kind: 'liga_pago_pending',
+      level: hours >= 96 ? 'urgent' : 'warning',
+      hours,
+      text: hours >= 96
+        ? '4 días desde la liga. Confirma pago o márcalo perdido.'
+        : '48 h desde la liga. ¿Ya pagó?',
+      actions: [
+        { label: 'Convertido', status: 'convertido' },
+        { label: 'Descartado', status: 'descartado' },
+      ],
+    }
+  }
+
+  // Audit #1: espera de aprobación >= 72h → push manual a quien decide.
+  // Lead pasó por dirección/jefe y nadie ha vuelto. Recordatorio para Fer.
+  if (lead.status === 'espera_aprobacion' && hours >= 72) {
+    return {
+      kind: 'espera_aprobacion_pending',
+      level: hours >= 168 ? 'urgent' : 'warning',
+      hours,
+      text: hours >= 168
+        ? '7 días esperando aprobación. Mueve o descarta.'
+        : '72 h en espera de aprobación. Llama a hacer push.',
+      actions: [
+        { label: 'Liga de pago enviada', status: 'liga_pago_enviada' },
+        { label: 'Convertido', status: 'convertido' },
+        { label: 'Descartado', status: 'descartado' },
       ],
     }
   }

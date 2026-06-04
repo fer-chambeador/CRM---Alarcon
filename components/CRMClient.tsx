@@ -22,6 +22,37 @@ import { rowsToCsv, downloadCsv, exportFilename } from '@/lib/export'
 
 const CONTACTO_LABELS = ['—', '1er contacto', '2do contacto', '3er contacto', 'Descartado por intentos']
 
+/**
+ * Audit #7: traduce el error de un fetch fallido a algo accionable.
+ * Antes hacíamos alert('Falló: 502') y Fer no sabía qué hacer.
+ * Ahora detectamos los casos típicos de Vambe/Dapta y damos contexto + qué hacer.
+ */
+function explainError(rawError: string | number | undefined, status: number | undefined): string {
+  const e = String(rawError || '').toLowerCase()
+  if (e.includes('lead sin telefono') || e.includes('no phone')) {
+    return 'Este lead no tiene teléfono guardado. Edita el lead y agrega el número antes de mandar.'
+  }
+  if (e.includes('template') && (e.includes('no configurado') || e.includes('not configured'))) {
+    return 'No hay template Vambe configurado. Ve a Settings → Templates outbound y elige uno.'
+  }
+  if (e.includes('vambe rechaz') || e.includes('rate limit')) {
+    return `Vambe rechazó el envío: ${rawError}. Posibles causas: número bloqueado, fuera de ventana 24h, o saturación de templates.`
+  }
+  if (e.includes('ya enviado recientemente') || e.includes('anti doble-click') || status === 409) {
+    return 'Ya mandaste un mensaje hace menos de 2 minutos. Espera para evitar duplicados.'
+  }
+  if (e.includes('already-called') || e.includes('llamada ya disparada')) {
+    return 'Este lead ya tiene una llamada en curso o reciente. Cancela o espera a que termine.'
+  }
+  if (status === 502) {
+    return `Vambe/Dapta no respondió bien: ${rawError || 'sin detalles'}. Reintenta en 30s; si sigue, revisa Settings → Webhooks.`
+  }
+  if (status === 500 || status === 503) {
+    return `Error del servidor: ${rawError || 'desconocido'}. Reintenta. Si sigue, avisa al equipo de tech.`
+  }
+  return rawError ? `Falló: ${rawError}` : `Falló (${status || 'sin código'}). Reintenta.`
+}
+
 function tipoLabel(t: string | null) {
   if (!t) return ''
   return ({
@@ -285,6 +316,23 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
               >
                 Ver detalle ↗
               </a>
+              {/* Audit #11: deep-link directo al chat Vambe — Fer cierra ventas vía WhatsApp,
+                  evitar los 2-3 clicks para llegar al chat desde aquí. */}
+              {lead.telefono && (() => {
+                const pipelineId = '66b6ff34-3ec3-4972-8b90-33a3dc4e45fd'
+                const contactId = (lead as Lead & { vambe_contact_id?: string }).vambe_contact_id
+                const today = new Date().toISOString().slice(0, 10)
+                const url = contactId
+                  ? `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&chatContactId=${contactId}`
+                  : `https://app.vambeai.com/pipeline?id=${pipelineId}&startDate=${today}&query=${encodeURIComponent(lead.telefono.replace(/\D/g, '').slice(-10))}`
+                return (
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    style={{ marginLeft: 8, fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'rgba(34,214,138,0.15)', color: '#22d68a', textDecoration: 'none', fontWeight: 600 }}
+                    title="Abrir chat Vambe en pestaña nueva">
+                    💬 Vambe ↗
+                  </a>
+                )
+              })()}
             </div>
             <div className={styles.modalMeta}>
               {formatFecha(lead.created_at)}
@@ -455,7 +503,12 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, (payload) => {
         if (payload.eventType === 'INSERT') {
           const newLead = payload.new as Lead
-          setLeads(prev => [newLead, ...prev])
+          // De-duplicar: si el lead ya está en el state (porque handleAdd lo
+          // agregó al recibir la respuesta del POST), no lo dupliques. Race
+          // condition común: el POST devuelve el lead Y realtime dispara
+          // INSERT casi simultáneo — uno de los dos llega primero, el otro
+          // tiene que respetar.
+          setLeads(prev => prev.some(l => l.id === newLead.id) ? prev : [newLead, ...prev])
           setNewLeadFlash(newLead.email)
           setLiveCount(c => c + 1)
           setTimeout(() => setNewLeadFlash(null), 3000)
@@ -487,19 +540,55 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
   }, [])
   const handleDelete = useCallback((id: string) => { setLeads(prev => prev.filter(l => l.id !== id)) }, [])
-  const handleAdd = useCallback((lead: Lead) => { setLeads(prev => [lead, ...prev]) }, [])
+  const handleAdd = useCallback((lead: Lead) => {
+    // De-duplicar: si el realtime listener ya añadió el lead (puede llegar
+    // antes que la respuesta del POST), no lo agregues otra vez.
+    setLeads(prev => prev.some(l => l.id === lead.id) ? prev : [lead, ...prev])
+  }, [])
 
   const updateStatus = useCallback(async (leadId: string, newStatus: Lead['status']) => {
+    // Audit #4: si descartamos, pedir razón para análisis cualitativo posterior.
+    // Capturamos el motivo en notas para que /analytics pueda agruparlo.
+    let descartadoNota: string | null = null
+    if (newStatus === 'descartado') {
+      const lead = leads.find(l => l.id === leadId)
+      const opts = [
+        '1. No le interesa',
+        '2. No contesta',
+        '3. Mal teléfono',
+        '4. Es candidato (no empresa)',
+        '5. Otro',
+      ].join('\n')
+      const choice = prompt(`Razón para descartar a ${lead?.nombre || lead?.email || 'este lead'}?\n\n${opts}\n\nEscribe el número o el motivo libre:`)
+      if (choice === null) return  // user canceló
+      const cleaned = (choice || '').trim()
+      if (!cleaned) return
+      const mapped =
+        cleaned === '1' ? 'No le interesa' :
+        cleaned === '2' ? 'No contesta' :
+        cleaned === '3' ? 'Mal teléfono' :
+        cleaned === '4' ? 'Es candidato (no empresa)' :
+        cleaned === '5' ? 'Otro' :
+        cleaned
+      const stamp = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })
+      descartadoNota = `[${stamp}] Descartado — ${mapped}`
+    }
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l))
     try {
+      const body: Record<string, unknown> = { status: newStatus }
+      if (descartadoNota) {
+        const lead = leads.find(l => l.id === leadId)
+        const prevNotas = lead?.notas?.trim() || ''
+        body.notas = prevNotas ? `${prevNotas}\n${descartadoNota}` : descartadoNota
+      }
       const res = await fetch(`/api/leads/${leadId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(body),
       })
       const updated = await res.json()
       if (updated && updated.id) setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
     } catch {}
-  }, [])
+  }, [leads])
 
   const dateScoped = useMemo(() => {
     const { from, to } = dateRangeBounds(dateRange, customFrom, customTo)
@@ -727,7 +816,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroIndigo)}>
             <div className={styles.kpiHeroLabel}>Pipeline por cerrar</div>
             <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCierre)}</div>
-            <div className={styles.kpiHeroSub}>Propuesta enviada + espera de aprobación</div>
+            <div className={styles.kpiHeroSub}>Propuesta + Espera de aprobación + Liga de pago</div>
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroDark)}>
             <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
@@ -790,25 +879,25 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         </div>
                       </div>
                     </td>
-                    <td data-label="Empresa" className={styles.empresaCell} onClick={e => e.stopPropagation()}>
+                    <td className={styles.empresaCell} onClick={e => e.stopPropagation()}>
                       {lead.empresa
                         ? <span className={styles.empresaCopy} onClick={() => navigator.clipboard.writeText(lead.empresa!)} title="Click para copiar">
                             {lead.empresa} <span className={styles.copyIcon}>📋</span>
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td data-label="Teléfono" onClick={e => e.stopPropagation()}>
+                    <td onClick={e => e.stopPropagation()}>
                       {lead.telefono
                         ? <span className={styles.telefonoCell} onClick={() => navigator.clipboard.writeText(lead.telefono!)} title="Click para copiar">
                             {lead.telefono} <span className={styles.copyIcon}>📋</span>
                           </span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td data-label="Ubicación">{(lead.estado || phoneToState(lead.telefono))
+                    <td>{(lead.estado || phoneToState(lead.telefono))
                       ? <span className={styles.ubicacionTag} title={lead.estado ? 'manual' : 'auto desde LADA'}>{lead.estado || phoneToState(lead.telefono)}</span>
                       : <span className={styles.empty}>—</span>}</td>
-                    <td data-label="Canal">{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
-                    <td data-label="Status" onClick={e => e.stopPropagation()}>
+                    <td>{lead.canal_adquisicion ? <span className={styles.canalTag}>{lead.canal_adquisicion}</span> : <span className={styles.empty}>—</span>}</td>
+                    <td onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         <button className={styles.statusInlineBtn}
                           title="Click para cambiar status"
@@ -832,8 +921,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                         })()}
                       </div>
                     </td>
-                    <td data-label="Monto" className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
-                    <td data-label="Presupuesto">
+                    <td className={styles.montoCell}>{fmtMoney(lead.monto ?? DEFAULT_MONTO)}</td>
+                    <td>
                       {lead.presupuesto
                         ? <span className={styles.presupuestoTag}
                             style={{ '--pc': PRESUPUESTO_COLORS[lead.presupuesto as Presupuesto] } as React.CSSProperties}>
@@ -841,27 +930,30 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           </span>
                         : <span className={styles.empty}>No registrado</span>}
                     </td>
-                    <td data-label="Contacto">
+                    <td>
                       {(lead.veces_contactado || 0) > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
                         : <span className={styles.empty}>—</span>}
                     </td>
-                    <td data-label="Fecha" className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
-                    <td data-label="Acciones" onClick={e => e.stopPropagation()}>
+                    <td className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
+                    <td onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button
                           title={lead.telefono ? `Mandar mensaje Vambe a ${lead.telefono}` : 'lead sin teléfono'}
                           disabled={!lead.telefono}
                           onClick={async () => {
-                            if (!confirm(`¿Mandar mensaje Vambe a ${lead.nombre || lead.email}?`)) return
+                            // Audit #6: removido el confirm nativo — anti-doble-click ya está
+                            // en el endpoint (2 min) y el confirm sumaba 1 click sin agregar safety real.
                             const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
                               method: 'POST',
                               headers: { 'content-type': 'application/json' },
                               body: JSON.stringify({ action: 'message' }),
                             })
                             const data = await res.json()
-                            if (!data.ok) alert('Falló: ' + (data.error || res.status))
-                            else alert('✅ Mensaje enviado')
+                            if (!data.ok) { alert(explainError(data.error, res.status)); return }
+                            // Audit #5: el endpoint ahora devuelve el lead actualizado,
+                            // no necesitamos el segundo fetch.
+                            if (data.lead && data.lead.id) handleSave(data.lead as Lead)
                           }}
                           style={{
                             background: 'linear-gradient(135deg, #22d68a, #1ab574)',
@@ -881,8 +973,9 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                               body: JSON.stringify({ action: 'call' }),
                             })
                             const data = await res.json()
-                            if (!data.ok) alert('Falló: ' + (data.error || res.status))
-                            else alert('✅ Llamada disparada')
+                            if (!data.ok) { alert(explainError(data.error, res.status)); return }
+                            // Audit #5: el endpoint ahora devuelve el lead, no necesitamos refetch.
+                            if (data.lead && data.lead.id) handleSave(data.lead as Lead)
                           }}
                           style={{
                             background: 'linear-gradient(135deg, #7c54e8, #5a8af0)',
@@ -893,7 +986,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           }}>📞 Llamar</button>
                       </div>
                     </td>
-                    <td className={styles.rowDeleteCell} onClick={e => e.stopPropagation()}>
+                    <td onClick={e => e.stopPropagation()}>
                       <button className={styles.rowDeleteBtn} onClick={async () => {
                         if (!confirm(`¿Eliminar ${lead.email}?`)) return
                         await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })

@@ -287,8 +287,8 @@ export default function LlamadasClient() {
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th>Lead</th>
                   <th>Fecha</th>
+                  <th>Lead</th>
                   <th>Teléfono</th>
                   <th>Status</th>
                   <th>Outcome</th>
@@ -338,23 +338,23 @@ function Row({ l, onClick }: { l: Llamada; onClick: () => void }) {
     : l.interes_real === 'medio' ? styles.interesMedio
     : l.interes_real === 'bajo' ? styles.interesBajo : ''
   return (
-    <tr onClick={onClick} className={styles.row}>
-      <td data-label="Lead" className={styles.leadCell}>
+    <tr onClick={onClick}>
+      <td className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
+      <td>
         <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
         {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
       </td>
-      <td data-label="Fecha" className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
-      <td data-label="Teléfono" className={styles.mono}>{l.to_number}</td>
-      <td data-label="Status"><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
-      <td data-label="Outcome">
+      <td className={styles.mono}>{l.to_number}</td>
+      <td><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
+      <td>
         {l.outcome ? <span className={clsx(styles.outcomeChip, OUTCOME_CLASS[l.outcome] || styles.outcomeOtro)}>{OUTCOME_LABEL[l.outcome] || l.outcome}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td data-label="Interés">
+      <td>
         {l.interes_real ? <span className={interesClass}>{l.interes_real}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td data-label="Duración" className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
-      <td data-label="Resumen" className={styles.summaryCell} style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
-      <td data-label="Próximo paso" className={styles.nextStepCell} style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
+      <td className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
+      <td style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
+      <td style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
     </tr>
   )
 }
@@ -405,12 +405,38 @@ function TriggerCallModal({ onClose, onTriggered }: { onClose: () => void; onTri
         }
         payload.scheduled_at = d.toISOString()
       }
-      const res = await fetch('/api/dapta/trigger', {
+      // 1er intento — sin force, regla "1 llamada por lead" aplica.
+      let res = await fetch('/api/dapta/trigger', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      const j = await res.json()
+      let j = await res.json()
+      // Si el lead ya tiene llamada previa, ofrecemos forzar con password.
+      if (res.status === 409 && j.error === 'lead-already-called') {
+        const previaStatus = j.previous_status || '?'
+        const password = window.prompt(
+          `Este lead ya tiene una llamada previa (status="${previaStatus}").\n\nSi quieres VOLVER a llamarlo, escribe el password de re-llamada:`,
+          '',
+        )
+        if (!password) {
+          setError('Re-llamada cancelada — no se capturó password.')
+          setSubmitting(false)
+          return
+        }
+        const forceUrl = `/api/dapta/trigger?force=1&password=${encodeURIComponent(password)}`
+        res = await fetch(forceUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        j = await res.json()
+        if (res.status === 401 && j.error === 'force-password-required') {
+          setError('Password incorrecto. Pídeselo a Fer.')
+          setSubmitting(false)
+          return
+        }
+      }
       if (!res.ok || !j.ok) {
         setError(j.error || j.dapta?.error || `Error HTTP ${res.status}`)
       } else {

@@ -177,6 +177,23 @@ export default function PendientesClient({ initialLeads }: { initialLeads: Lead[
           text: 'Lead nuevo de hoy — entrá rápido antes de que se enfríe',
           primaryAction: { label: 'Marcar contactado', status: 'contactado' },
         })
+        continue
+      }
+
+      // Audit #8: lead en llamada_con_dapta sin avance hace >24h. La llamada
+      // tuvo outcome (callback / pidio_presentacion / pidio_link_pago) pero
+      // Fer no actualizó el status. Antes desaparecía de pendientes.
+      if (lead.status === 'llamada_con_dapta' && lead.status_changed_at) {
+        const sinceCambioMs = now - new Date(lead.status_changed_at).getTime()
+        if (sinceCambioMs >= 24 * 60 * 60 * 1000) {
+          const dias = Math.floor(sinceCambioMs / (24 * 60 * 60 * 1000))
+          out.push({
+            lead, alert: null, priority: actionPriority(lead, 55),
+            kind: 'follow_up',
+            text: `Daniela llamó hace ${dias} ${dias === 1 ? 'día' : 'días'} — falta cerrar el resultado`,
+            primaryAction: { label: 'Propuesta enviada', status: 'presentacion_enviada' },
+          })
+        }
       }
     }
 

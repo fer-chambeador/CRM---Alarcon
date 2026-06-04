@@ -66,7 +66,21 @@ export function isVambeTemplateCandidate(lead: Lead, ageMinutes: number): {
   }
 }
 
-/** Decide si el lead califica para Dapta call (baja calificación + llamada agendada). */
+/** Decide si el lead califica para Dapta call. **TODAS** las llamadas
+ *  agendadas pasan por el queue de outbound, sin importar score.
+ *
+ *  Cambio (2 jun 2026): antes la regla excluía leads `hot` (score ≥60) bajo
+ *  la idea de "los hot los llama Fer a mano". En la práctica resultó al
+ *  revés: Daniela cerró clientes hot (Miriam, Patricia, etc.) con tasa
+ *  alta, y dejar fuera del queue a los hot significaba que Fer los olvidaba
+ *  o llegaba tarde. Ahora TODOS los leads con status='llamada_agendada'
+ *  califican; el score sigue mostrándose como chip en la UI para que el
+ *  user decida si los marca como Manual o los manda a Daniela.
+ *
+ *  Vambe templates (isVambeTemplateCandidate) SIGUE excluyendo hot — un
+ *  template genérico a un lead caliente sería contra-productivo; mejor un
+ *  primer mensaje manual personalizado.
+ */
 export function isDaptaCallCandidate(lead: Lead): {
   candidate: boolean
   reason: string
@@ -76,9 +90,6 @@ export function isDaptaCallCandidate(lead: Lead): {
 
   if (lead.status !== 'llamada_agendada') {
     return { candidate: false, reason: `lead.status=${lead.status} (esperaba 'llamada_agendada')` }
-  }
-  if (bucket === 'hot') {
-    return { candidate: false, reason: `lead es hot (${score} pts) — llamada manual` }
   }
   if (!lead.llamada_at) {
     return { candidate: false, reason: 'lead sin llamada_at — no se puede agendar Dapta' }
@@ -96,7 +107,7 @@ export function isDaptaCallCandidate(lead: Lead): {
   }
   return {
     candidate: true,
-    reason: `Baja calificación (${score} pts · ${bucket}) · llamada agendada ${new Date(llamadaTime).toLocaleString('es-MX')}`,
+    reason: `${bucket === 'hot' ? '🔥' : bucket} (${score} pts) · llamada agendada ${new Date(llamadaTime).toLocaleString('es-MX')}`,
   }
 }
 

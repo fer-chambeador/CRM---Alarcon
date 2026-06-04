@@ -177,11 +177,25 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
     const { data: byId } = await supabase.from('leads').select('*').eq('vambe_contact_id', aiContactId).maybeSingle()
     if (byId) return byId as Lead
   }
-  const fromNumber = (data.fromNumber || data.from_number || '') as string
-  const toNumber = (data.toNumber || data.to_number || '') as string
+  // Extraer teléfono de TODOS los campos posibles que Vambe puede usar según
+  // el tipo de evento. message.received usa fromNumber/from_number, pero
+  // message.sent puede usar toNumber/to_number/destination/contact_phone_number/
+  // contact_phone, y a veces anidado en data.payload o data.contact.
+  const payload = (data.payload || {}) as Record<string, unknown>
+  const contact = (data.contact || {}) as Record<string, unknown>
+  const phoneCandidatesRaw: string[] = [
+    data.fromNumber, data.from_number, data.fromPhoneNumber,
+    data.toNumber, data.to_number, data.toPhoneNumber,
+    data.destination, data.destination_number,
+    data.contact_phone_number, data.contact_phone, data.phone, data.phoneNumber,
+    payload.fromNumber, payload.from_number, payload.toNumber, payload.to_number,
+    payload.contact_phone_number, payload.contact_phone, payload.phone,
+    contact.phone, contact.phoneNumber, contact.contact_phone_number,
+  ].filter(v => typeof v === 'string' && v.length > 0) as string[]
+
   // El número del lead es el que NO sea nuestro channel
   const channelPhone = (process.env.VAMBE_CHANNEL_PHONE || '').replace(/[+\s\-()]/g, '')
-  const candidatePhones = [fromNumber, toNumber]
+  const candidatePhones = phoneCandidatesRaw
     .map(p => p.replace(/[+\s\-()]/g, ''))
     .filter(p => p && p !== channelPhone)
   for (const phone of candidatePhones) {
@@ -190,8 +204,24 @@ async function findLead(supabase: Supabase, aiContactId: string | undefined, dat
     // SAFETY: si last10 < 10 dígitos, el LIKE %X% matchearía CUALQUIER lead.
     // Mejor saltarse este número que riesgo de contaminar la BD.
     if (last10.length < 10) continue
-    const { data: byPhone } = await supabase.from('leads').select('*').like('telefono', `%${last10}`).maybeSingle()
-    if (byPhone) return byPhone as Lead
+    // Usar .limit(1) en vez de maybeSingle() para evitar null cuando hay
+    // múltiples leads con el mismo last10 (ej: dos leads con el mismo phone
+    // por duplicación histórica). Tomamos el más reciente.
+    const { data: byPhones } = await supabase
+      .from('leads')
+      .select('*')
+      .like('telefono', `%${last10}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (byPhones && byPhones.length > 0) return byPhones[0] as Lead
+  }
+  // Diagnóstico: si llegamos aquí sin match, dejar rastro mínimo en logs
+  if (aiContactId || candidatePhones.length > 0) {
+    console.warn('[vambe webhook] findLead sin match', {
+      aiContactId,
+      candidatePhones: candidatePhones.slice(0, 3),
+      dataKeys: Object.keys(data).slice(0, 20),
+    })
   }
   return null
 }
@@ -304,6 +334,64 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     })
   }
 
+  // ── BUG FIX (3 jun 2026): cuando Vambe (el bot o un humano del equipo)
+  // envía un mensaje OUTBOUND, también debemos bumpear veces_contactado +
+  // resetear ultimo_contacto en el lead — igual que cuando Fer clickea
+  // "📨 Mensaje" desde /leads (que va por /api/leads/[id]/quick-action).
+  //
+  // Sin esto, los mensajes mandados por el bot Vambe (asistente Outbound
+  // proactivo, o envíos manuales del equipo desde Vambe UI) no cuentan
+  // como "contacto" en el CRM — el counter de días no se reinicia y el
+  // lead nunca avanza a 2do/3er contacto.
+  //
+  // Solo aplica para outbound (envíos del lado nuestro). Inbound son
+  // respuestas del cliente y NO deben bumpear veces_contactado.
+  // Y solo si NO es un retry/dedup (sameKind+recent) — esos ya están
+  // consolidados en la misma actividad.
+  if (!isInbound && !(sameKind && recent)) {
+    // FIX (3 jun 2026): evitar DOUBLE BUMP. Cuando Fer clickea "📨 Mensaje"
+    // en el CRM, /quick-action bumpea veces_contactado +1 y crea una activity
+    // template_sent. Luego Vambe nos manda webhook message.sent que vuelve a
+    // entrar aquí. Sin guard, el counter sube +2 en una sola acción de Fer
+    // (ej: 1er contacto → 3er contacto sin pasar por 2do).
+    //
+    // Lo mismo aplica al flow de aprobaciones (Outbound → Aprobar): el
+    // endpoint /api/aprobaciones/[id]/approve también bumpea +1 y crea
+    // template_sent. El webhook llega después y duplicaría el bump.
+    //
+    // Guard: si hay una actividad 'template_sent' para este lead en los
+    // últimos 5 min, asumimos que el bump ya lo hizo el endpoint que disparó
+    // el envío (quick-action o aprobaciones). Solo bumpeamos en el webhook
+    // si NO hay template_sent reciente — eso indica que el mensaje vino del
+    // bot Vambe proactivo o del equipo desde la UI de Vambe directamente.
+    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString()
+    const { data: recentTemplateSent } = await supabase
+      .from('lead_actividad')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('tipo', 'template_sent')
+      .gte('created_at', fiveMinAgo)
+      .limit(1)
+      .maybeSingle()
+    const alreadyBumpedByEndpoint = !!recentTemplateSent
+
+    if (!alreadyBumpedByEndpoint) {
+      if (lead.status === 'nuevo') {
+        await supabase.from('leads').update({
+          status: 'contactado',
+          status_changed_at: new Date().toISOString(),
+          veces_contactado: (lead.veces_contactado || 0) + 1,
+          ultimo_contacto: new Date().toISOString(),
+        }).eq('id', lead.id)
+      } else {
+        await supabase.from('leads').update({
+          veces_contactado: (lead.veces_contactado || 0) + 1,
+          ultimo_contacto: new Date().toISOString(),
+        }).eq('id', lead.id)
+      }
+    }
+  }
+
   // NOTA: REMOVIDO el auto-promote nuevo → contactado.
   // Fer pidió que los leads de Vambe se queden en 'nuevo' hasta que él
   // los mueva con una acción manual (Mensaje/Llamar) o el sistema lo haga
@@ -328,6 +416,207 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
         .update({ responded_at: new Date().toISOString() })
         .in('id', recipients.map(r => r.id))
     }
+
+    // Vambe 1: si el lead está en Asistencia Humana y no ha tenido actividad
+    // del lado del bot/equipo en >7 días, es un lead "abandonado" que vuelve.
+    // Alertamos a Slack para que Fer lo retome. (No reactivamos el bot
+    // automáticamente — eso requeriría mover stage en Vambe via API.)
+    if (lead.vambe_stage_id === STAGE_ATENCION_HUMANA) {
+      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+      const { data: lastOutbound } = await supabase
+        .from('lead_actividad')
+        .select('created_at')
+        .eq('lead_id', lead.id)
+        .or('tipo.eq.vambe_message,tipo.eq.atencion_humana_attended')
+        .like('descripcion', '📨%')   // solo mensajes outbound del bot
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const lastActivityAt = lastOutbound ? new Date((lastOutbound as { created_at: string }).created_at).getTime() : 0
+      const isStale = !lastActivityAt || (Date.now() - lastActivityAt > SEVEN_DAYS_MS)
+      if (isStale) {
+        // Idempotencia: no alertar más de una vez por día
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        const { data: recentAlert } = await supabase
+          .from('lead_actividad')
+          .select('id')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'lead_viejo_reactivado')
+          .gte('created_at', oneDayAgo)
+          .limit(1)
+          .maybeSingle()
+        if (!recentAlert) {
+          await alertLeadReactivated(supabase, lead, text).catch(e => {
+            console.error('[Vambe 1] alertLeadReactivated error', e)
+          })
+        }
+      }
+    }
+
+    // Vambe 5: si el lead tiene una llamada agendada dentro de las próximas 4h
+    // y acaba de responder, es probable que esté pidiendo reagendar (o avisando
+    // que no podrá). Disparamos alerta a Slack para que Fer pueda actuar.
+    // Idempotente por timestamp del lead (no alertar dos veces para la misma llamada).
+    if (lead.llamada_at && lead.status === 'llamada_agendada') {
+      const llamadaAt = new Date(lead.llamada_at).getTime()
+      const now = Date.now()
+      const FOUR_HOURS_MS = 4 * 60 * 60 * 1000
+      const isWithinReminderWindow = llamadaAt > now && (llamadaAt - now) <= FOUR_HOURS_MS
+      if (isWithinReminderWindow) {
+        // Idempotencia: no alertar si ya hay una alerta para esta llamada
+        const { data: existingAlert } = await supabase
+          .from('lead_actividad')
+          .select('id')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'reminder_response_alert')
+          .filter('metadata->>llamada_at', 'eq', lead.llamada_at)
+          .limit(1)
+          .maybeSingle()
+        if (!existingAlert) {
+          await alertReminderResponse(supabase, lead, text, lead.llamada_at).catch(e => {
+            console.error('[Vambe 5] alertReminderResponse error', e)
+          })
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Vambe 1: alerta a Slack cuando un lead viejo en Asistencia Humana vuelve a
+ * escribir. El bot no se reactiva automáticamente (no hay API pública de Vambe
+ * para mover stage), pero al menos Fer se entera y puede atenderlo.
+ */
+async function alertLeadReactivated(
+  supabase: Supabase,
+  lead: Lead,
+  message: string,
+): Promise<void> {
+  const webhookUrl = process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL
+    || await (async () => {
+      const { data } = await supabase.from('system_settings').select('value').eq('key', 'slack_alertas_vambe_webhook').maybeSingle()
+      return (data as { value?: string } | null)?.value
+    })()
+    || process.env.SLACK_ALERT_WEBHOOK_URL
+  if (!webhookUrl) return
+
+  const base = process.env.NEXT_PUBLIC_CRM_URL || 'https://crm-alarcon-production.up.railway.app'
+  const leadUrl = `${base}/leads/${lead.id}`
+
+  const blocks: unknown[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: '🔔 Lead viejo volvió a escribir', emoji: true },
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Lead:*\n${lead.nombre || lead.email || '(sin nombre)'}` },
+        { type: 'mrkdwn', text: `*Número:*\n${lead.telefono || '—'}` },
+      ],
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Estaba en Asistencia Humana sin actividad >7 días — ahora escribió:*\n> ${(message || '(sin texto)').slice(0, 500).replace(/\n/g, '\n> ')}` },
+    },
+    {
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: `${lead.empresa ? `🏢 ${lead.empresa}` : ''}${lead.vacante ? ` · 💼 ${lead.vacante}` : ''}` },
+      ],
+    },
+    {
+      type: 'actions',
+      elements: [
+        { type: 'button', text: { type: 'plain_text', text: 'Ver lead' }, url: leadUrl, style: 'primary' },
+      ],
+    },
+  ]
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `🔔 Lead viejo volvió: ${lead.nombre || lead.email}`, blocks }),
+    })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'lead_viejo_reactivado',
+      descripcion: '🔔 Lead viejo en Asistencia Humana volvió a escribir — alerta Slack',
+      metadata: { message: message.slice(0, 300) },
+    })
+  } catch (e) {
+    console.error('[Vambe 1] fetch error', e)
+  }
+}
+
+/**
+ * Vambe 5: alerta a Slack cuando un lead responde dentro de la ventana del
+ * reminder (4h antes de la llamada). Le da contexto a Fer para decidir si
+ * reagenda, confirma o no hace nada.
+ */
+async function alertReminderResponse(
+  supabase: Supabase,
+  lead: Lead,
+  message: string,
+  llamadaAt: string,
+): Promise<void> {
+  const webhookUrl = process.env.SLACK_ALERTAS_VAMBE_WEBHOOK_URL
+    || await (async () => {
+      const { data } = await supabase.from('system_settings').select('value').eq('key', 'slack_alertas_vambe_webhook').maybeSingle()
+      return (data as { value?: string } | null)?.value
+    })()
+    || process.env.SLACK_ALERT_WEBHOOK_URL
+  if (!webhookUrl) {
+    console.warn('[Vambe 5] no webhook configurado')
+    return
+  }
+
+  const base = process.env.NEXT_PUBLIC_CRM_URL || 'https://crm-alarcon-production.up.railway.app'
+  const leadUrl = `${base}/leads/${lead.id}`
+  const fmtTime = new Date(llamadaAt).toLocaleString('es-MX', {
+    timeZone: 'America/Mexico_City',
+    dateStyle: 'medium', timeStyle: 'short',
+  })
+
+  const blocks: unknown[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: '⏰ Lead respondió al reminder', emoji: true },
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Lead:*\n${lead.nombre || lead.email || '(sin nombre)'}` },
+        { type: 'mrkdwn', text: `*Llamada:*\n${fmtTime}` },
+      ],
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Mensaje del lead:*\n> ${(message || '(sin texto)').slice(0, 500).replace(/\n/g, '\n> ')}` },
+    },
+    {
+      type: 'actions',
+      elements: [
+        { type: 'button', text: { type: 'plain_text', text: 'Ver lead' }, url: leadUrl },
+      ],
+    },
+  ]
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `⏰ Lead respondió al reminder: ${lead.nombre || lead.email}`, blocks }),
+    })
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'reminder_response_alert',
+      descripcion: '⏰ Alerta Slack: lead respondió al reminder',
+      metadata: { llamada_at: llamadaAt, message: message.slice(0, 300) },
+    })
+  } catch (e) {
+    console.error('[Vambe 5] fetch error', e)
   }
 }
 
@@ -662,7 +951,7 @@ function extractDateFromMessages(messages: Array<{ message: string; created_at: 
 function shouldAdvanceStatus(current: Lead['status'], target: Lead['status']): boolean {
   const order: Lead['status'][] = [
     'nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada',
-    'presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente',
+    'presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente',
   ]
   if (target === 'descartado') return current !== 'descartado'
   const ci = order.indexOf(current)
@@ -802,7 +1091,7 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   // ── Alertas a Slack para eventos críticos ──
   // No bloqueamos el response — corre best-effort en paralelo.
-  fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted).catch(e => {
+  fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted, previousStageId).catch(e => {
     console.error('Slack alert error', e)
   })
 
@@ -813,8 +1102,41 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 }
 
 /** Dispara alertas a Slack según la stage que llegó. No-op si no hay webhook configurado. */
-async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean) {
+async function fireSlackAlertsForStageChange(newStageId: string, lead: Lead, promoted: boolean, previousStageId?: string) {
   if (newStageId === STAGE_ATENCION_HUMANA) {
+    // GUARD: Si el lead venía de un flujo confirmado (llamada agendada o Confirmados ✅),
+    // el bot la escaló por error — silenciamos la alerta SOS porque la "fricción" es solo
+    // que Fer debe llamar manualmente, no que la AI no pudo continuar.
+    //
+    // Detección por stage previo y por status interno (ambos en paralelo, defensivo):
+    //   - prev: Llamadas ☎️, Agendados Consultoría 📆, Confirmados ✅
+    //   - status: llamada_agendada / llamada_con_dapta / presentacion_enviada
+    const cameFromCallFlow =
+      previousStageId === STAGE_LLAMADA_COMERCIAL ||
+      previousStageId === STAGE_DEMO_AGENDADA ||
+      previousStageId === STAGE_DEMO_CONFIRMADA
+    const statusIsCallFlow =
+      lead.status === 'llamada_agendada' ||
+      lead.status === 'llamada_con_dapta' ||
+      lead.status === 'presentacion_enviada'
+
+    if (cameFromCallFlow || statusIsCallFlow) {
+      const supabase = createServiceClient()
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'vambe_alerta_silenciada',
+        descripcion: '🔇 SOS silenciado — lead venía confirmado / con llamada agendada (Vambe escaló por error)',
+        metadata: {
+          previous_stage_id: previousStageId,
+          new_stage_id: newStageId,
+          status: lead.status,
+          reason: cameFromCallFlow ? 'previous_stage_in_call_flow' : 'status_in_call_flow',
+        },
+      })
+      console.log(`[Vambe SOS guard] Lead ${lead.id} venía de flujo confirmado (prev=${previousStageId}, status=${lead.status}) — alerta silenciada`)
+      return
+    }
+
     // Crear ticket de atención humana + alerta a #alertas-vambe con resumen
     // del último mensaje y botones Atendido/Dismiss.
     const supabase = createServiceClient()

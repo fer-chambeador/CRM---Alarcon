@@ -25,12 +25,21 @@ type Turn = {
 }
 
 const SUGGESTIONS = [
-  '¿Cuántos leads cayeron este mes y de qué canales?',
-  '¿Qué canal tiene la mejor tasa de conversión?',
-  'Marca como descartado a los leads en "contactado" con más de 30 días sin moverse',
-  'Agrega nota al lead juan@empresa.com: "llamó pidiendo descuento"',
-  '¿Cuál es el pipeline cerrado de Instagram este mes?',
-  'Cambia el status de jose@mail.com a propuesta enviada',
+  // Reportes (NUEVO)
+  'Dame un reporte ejecutivo del mes con patrones detectados',
+  'Análisis del flow Dapta: qué % pasa de llamada exitosa a propuesta a pago',
+  'Reporte de canales: cuál convierte más por monto invertido',
+  // Outbound masivo
+  'Mándame outbound a todos los nuevos de Facebook que llevan ≥3 días sin contactar',
+  'Manda follow-up a los contactado que llevan 5 días sin moverse',
+  // Bulk updates
+  'Descarta a los leads en contactado con más de 30 días sin avance',
+  'Marca como espera de aprobación a los presentacion_enviada que llevan más de 48h',
+  // Listas filtradas
+  '¿Qué leads hot debo contactar hoy?',
+  'Lista los 10 leads con interés alto que aún no convierten',
+  // Análisis Dapta
+  '¿Cuántas llamadas de Daniela fueron exitosas esta semana? ¿qué outcomes detectó?',
 ]
 
 // Tiny markdown renderer — handles **bold**, `code`, *italic*, lists, line breaks. No external dep.
@@ -286,34 +295,103 @@ export default function AsistenteClient() {
                             <strong style={{ fontSize: 12.5, color: 'var(--text)' }}>{a.tool}</strong>
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text2)' }}>{a.result.summary}</div>
-                          {fileData && (
-                            <button
-                              onClick={() => {
-                                const blob = new Blob([fileData.content], { type: fileData.mime_type })
-                                const url = URL.createObjectURL(blob)
-                                const link = document.createElement('a')
-                                link.href = url
-                                link.download = fileData.filename
-                                document.body.appendChild(link)
-                                link.click()
-                                document.body.removeChild(link)
-                                setTimeout(() => URL.revokeObjectURL(url), 500)
-                              }}
-                              style={{
-                                marginTop: 10,
-                                background: 'linear-gradient(90deg, #22d68a, #00c8a0)',
-                                color: '#0a0a12', border: 'none',
-                                padding: '8px 16px', borderRadius: 8,
-                                fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                                fontFamily: 'var(--font)',
-                                display: 'inline-flex', alignItems: 'center', gap: 6,
-                              }}>
-                              ⇣ Descargar {fileData.filename}
-                              <span style={{ fontSize: 10.5, opacity: 0.7 }}>
-                                ({(fileData.size_bytes / 1024).toFixed(1)} KB)
-                              </span>
-                            </button>
-                          )}
+                          {fileData && (() => {
+                            const isMarkdown = fileData.mime_type === 'text/markdown'
+                              || fileData.filename.endsWith('.md')
+                              || /^reporte-/i.test(fileData.filename)
+                            const downloadName = isMarkdown
+                              ? fileData.filename.replace(/\.(md|markdown)$/i, '.pdf').replace(/^(reporte-[^.]+)$/i, '$1.pdf')
+                              : fileData.filename
+                            return (
+                              <button
+                                onClick={async () => {
+                                  // Audit: si es reporte markdown, generar PDF real en cliente con jsPDF.
+                                  // Si es CSV/JSON/TXT, descarga directa como antes.
+                                  if (isMarkdown) {
+                                    try {
+                                      const { jsPDF } = await import('jspdf')
+                                      const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
+                                      const pageW = pdf.internal.pageSize.getWidth()
+                                      const pageH = pdf.internal.pageSize.getHeight()
+                                      const margin = 50
+                                      const maxWidth = pageW - margin * 2
+                                      let y = margin
+                                      const lineGap = 4
+                                      const writeLine = (text: string, opts: { size?: number; bold?: boolean; gap?: number; color?: [number, number, number] }) => {
+                                        const size = opts.size || 11
+                                        pdf.setFont('Helvetica', opts.bold ? 'bold' : 'normal')
+                                        pdf.setFontSize(size)
+                                        if (opts.color) pdf.setTextColor(opts.color[0], opts.color[1], opts.color[2])
+                                        else pdf.setTextColor(20, 20, 30)
+                                        const lines = pdf.splitTextToSize(text, maxWidth)
+                                        for (const ln of lines) {
+                                          if (y + size + lineGap > pageH - margin) { pdf.addPage(); y = margin }
+                                          pdf.text(ln, margin, y)
+                                          y += size + lineGap
+                                        }
+                                        y += opts.gap || 2
+                                      }
+                                      const stripMd = (s: string) => s
+                                        .replace(/\*\*(.+?)\*\*/g, '$1')
+                                        .replace(/\*(.+?)\*/g, '$1')
+                                        .replace(/`(.+?)`/g, '$1')
+                                        .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+                                      // Header del reporte
+                                      writeLine('Reporte Chambas CRM', { size: 22, bold: true, gap: 4, color: [60, 30, 180] })
+                                      writeLine(`Generado: ${new Date().toLocaleString('es-MX', { dateStyle: 'long', timeStyle: 'short' })}`, { size: 9, color: [110, 110, 130], gap: 8 })
+                                      pdf.setDrawColor(200, 200, 220)
+                                      pdf.line(margin, y, pageW - margin, y); y += 12
+                                      for (const rawLine of fileData.content.split('\n')) {
+                                        const line = stripMd(rawLine)
+                                        if (!rawLine.trim()) { y += 6; continue }
+                                        if (rawLine.startsWith('### ')) writeLine(line.slice(4), { size: 13, bold: true, gap: 4, color: [40, 40, 90] })
+                                        else if (rawLine.startsWith('## ')) writeLine(line.slice(3), { size: 16, bold: true, gap: 6, color: [40, 40, 120] })
+                                        else if (rawLine.startsWith('# ')) writeLine(line.slice(2), { size: 19, bold: true, gap: 8, color: [40, 40, 150] })
+                                        else if (rawLine.startsWith('- ') || rawLine.startsWith('* ')) writeLine('• ' + line.slice(2), { size: 10, gap: 1 })
+                                        else if (/^\d+\. /.test(rawLine)) writeLine(line, { size: 10, gap: 1 })
+                                        else if (rawLine.startsWith('| ') || rawLine.startsWith('|---')) writeLine(line, { size: 9, gap: 0 })
+                                        else if (rawLine.startsWith('---')) { pdf.setDrawColor(220, 220, 230); pdf.line(margin, y, pageW - margin, y); y += 10 }
+                                        else writeLine(line, { size: 11, gap: 2 })
+                                      }
+                                      pdf.save(downloadName)
+                                    } catch (e) {
+                                      console.error('PDF generation failed', e)
+                                      // Fallback: descarga el markdown
+                                      const blob = new Blob([fileData.content], { type: fileData.mime_type })
+                                      const url = URL.createObjectURL(blob)
+                                      const link = document.createElement('a')
+                                      link.href = url; link.download = fileData.filename
+                                      document.body.appendChild(link); link.click(); document.body.removeChild(link)
+                                      setTimeout(() => URL.revokeObjectURL(url), 500)
+                                    }
+                                  } else {
+                                    const blob = new Blob([fileData.content], { type: fileData.mime_type })
+                                    const url = URL.createObjectURL(blob)
+                                    const link = document.createElement('a')
+                                    link.href = url
+                                    link.download = fileData.filename
+                                    document.body.appendChild(link)
+                                    link.click()
+                                    document.body.removeChild(link)
+                                    setTimeout(() => URL.revokeObjectURL(url), 500)
+                                  }
+                                }}
+                                style={{
+                                  marginTop: 10,
+                                  background: 'linear-gradient(90deg, #22d68a, #00c8a0)',
+                                  color: '#0a0a12', border: 'none',
+                                  padding: '8px 16px', borderRadius: 8,
+                                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                  fontFamily: 'var(--font)',
+                                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                                }}>
+                                {isMarkdown ? '⇣ Descargar PDF' : `⇣ Descargar ${fileData.filename}`}
+                                <span style={{ fontSize: 10.5, opacity: 0.7 }}>
+                                  ({(fileData.size_bytes / 1024).toFixed(1)} KB{isMarkdown ? ' md → PDF' : ''})
+                                </span>
+                              </button>
+                            )
+                          })()}
                           {a.result.affected && a.result.affected.length > 0 && (
                             <details style={{ marginTop: 6 }} open={isDryRun}>
                               <summary style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer' }}>

@@ -33,7 +33,13 @@ export async function POST(req: NextRequest) {
 
   if (payload.type === 'event_callback') {
     const event = payload.event
-    if (event.type !== 'message' || event.subtype || !event.text) {
+    // Aceptar mensajes de usuarios humanos (sin subtype) Y mensajes del bot
+    // "Chambas Alert" que envía con subtype='bot_message'. Sin esto, NINGÚN
+    // lead del onboarding (panel.chambas.ai) entra al CRM, porque todos llegan
+    // via el bot a canales #leads-sales / #check-in-entrevistas.
+    // Otros subtypes (channel_join, message_changed, etc.) se siguen ignorando.
+    const subtype = event.subtype
+    if (event.type !== 'message' || !event.text || (subtype && subtype !== 'bot_message')) {
       return NextResponse.json({ ok: true })
     }
 
@@ -62,18 +68,18 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Pago confirmado → convertir automáticamente ──
-    // REGLA NUEVA (Fer, 1 jun 2026): cualquier pago confirmado a partir del 1 de
-    // Junio 2026 marca el lead como 'cliente_recurrente' (no 'convertido'). Los
-    // pagos antes de esa fecha siguen siendo 'convertido' (no rebreak histórico).
-    const RECURRENTE_CUTOFF = new Date('2026-06-01T00:00:00-06:00').getTime() // CDMX
+    // REGLA (Fer, 2 jun 2026 — ACTUALIZADA, reemplaza la regla 1 jun):
+    // Cualquier pago confirmado marca el lead como 'convertido'. La
+    // promoción a 'cliente_recurrente' la hace el cron mensual
+    // /api/cron/promote-recurrentes que corre el día 1 de cada mes a las
+    // 00:05 CDMX — promueve los 'convertido' del mes ANTERIOR a
+    // 'cliente_recurrente'. Así el reporte del mes distingue
+    // clientes-nuevos-del-mes (status=convertido) de los que ya pagaron
+    // antes (status=cliente_recurrente).
     if (parsed.tipo_evento === 'pago_confirmado') {
       if (existing) {
-        const nowMs = Date.now()
-        const targetStatus: 'convertido' | 'cliente_recurrente' = nowMs >= RECURRENTE_CUTOFF
-          ? 'cliente_recurrente'
-          : 'convertido'
         await supabase.from('leads').update({
-          status: targetStatus,
+          status: 'convertido',
           plan: parsed.plan || existing.plan,
           nombre: parsed.nombre || existing.nombre,
           suscripcion_fecha: new Date().toISOString(),
@@ -82,10 +88,8 @@ export async function POST(req: NextRequest) {
         await supabase.from('lead_actividad').insert({
           lead_id: existing.id,
           tipo: 'slack_update',
-          descripcion: targetStatus === 'cliente_recurrente'
-            ? `💎 Pago confirmado — promovido a Cliente Recurrente (post-1jun2026) - Monto: $${parsed.monto} MXN`
-            : `Pago confirmado - Monto: $${parsed.monto} MXN`,
-          metadata: { monto: parsed.monto, plan: parsed.plan, target_status: targetStatus },
+          descripcion: `Pago confirmado - Monto: $${parsed.monto} MXN`,
+          metadata: { monto: parsed.monto, plan: parsed.plan, target_status: 'convertido' },
         })
       }
       return NextResponse.json({ ok: true })

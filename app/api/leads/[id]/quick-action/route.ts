@@ -63,20 +63,70 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         templateId: tpl.template_id,
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
       })
-      if (lead.status === 'nuevo') {
-        await supabase.from('leads').update({
-          status: 'contactado',
-          status_changed_at: new Date().toISOString(),
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-        }).eq('id', lead.id)
+      // BUG FIX (3 jun 2026 — 2da iteración tras caso gerardolara555):
+      // Vambe puede retornar HTTP 200 con un error en el body (sin lanzar).
+      // Si la respuesta NO indica éxito explícito, abortar antes de bumpear
+      // el lead. Sin esto, el CRM marca "Contactado" pero el cliente nunca
+      // recibe el mensaje, y Fer no sabe que falló.
+      type VambeSendResult = {
+        success?: boolean
+        ok?: boolean
+        status?: string
+        error?: string | { message?: string }
+        message?: string
+        data?: { status?: string; error?: string }
       }
-      await supabase.from('lead_actividad').insert({
+      const r = (result || {}) as VambeSendResult
+      const explicitFail =
+        r.success === false ||
+        r.ok === false ||
+        (typeof r.status === 'string' && /^(failed|error|rejected)/i.test(r.status)) ||
+        (typeof r.data?.status === 'string' && /^(failed|error|rejected)/i.test(r.data.status)) ||
+        !!r.error
+      if (explicitFail) {
+        const reason = typeof r.error === 'string' ? r.error
+          : (r.error as { message?: string })?.message
+          || r.message || r.data?.error || 'Vambe rechazó el envío sin lanzar HTTP error'
+        // Logear como actividad para que quede rastro del intento fallido
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'template_send_failed',
+          descripcion: `⚠️ Vambe NO envió el template (${tpl.template_name}): ${reason}`,
+          metadata: { source: 'leads_quick_action', template_id: tpl.template_id, template_name: tpl.template_name, vambe_response: r },
+        })
+        return NextResponse.json({ ok: false, error: `Vambe rechazó: ${reason}`, vambe_response: r }, { status: 502 })
+      }
+
+      // Orden CRÍTICO: insertar actividad PRIMERO, lead después.
+      // Si falla el insert, NO se actualiza el lead (no queda como
+      // "Contactado" fantasma sin registro de envío).
+      const { error: actErr } = await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'template_sent',
         descripcion: `📨 Vambe ${tpl.template_name} (manual desde /leads)`,
         metadata: { source: 'leads_quick_action', template_id: tpl.template_id, template_name: tpl.template_name },
       })
-      return NextResponse.json({ ok: true, action: 'message', result })
+      if (actErr) {
+        console.error('[quick-action] insert lead_actividad falló', actErr)
+        return NextResponse.json({ ok: false, error: `Mensaje enviado pero no se pudo registrar en CRM: ${actErr.message}` }, { status: 500 })
+      }
+      const updates: Record<string, unknown> = {
+        ultimo_contacto: new Date().toISOString(),
+        veces_contactado: (lead.veces_contactado || 0) + 1,
+      }
+      if (lead.status === 'nuevo') {
+        updates.status = 'contactado'
+        updates.status_changed_at = new Date().toISOString()
+      }
+      // Audit #5: retornar el lead actualizado para evitar el round-trip extra
+      // del frontend (que antes hacía GET /api/leads/[id] tras este POST).
+      const { data: updatedLead } = await supabase
+        .from('leads')
+        .update(updates)
+        .eq('id', lead.id)
+        .select('*')
+        .single()
+      return NextResponse.json({ ok: true, action: 'message', result, lead: updatedLead })
     } catch (e) {
       return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 })
     }
@@ -144,7 +194,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     error_message: tr.ok ? null : (tr.error || 'unknown'),
   })
   if (tr.ok) {
-    const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','convertido','cliente_recurrente'])
+    const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','liga_pago_enviada','convertido','cliente_recurrente'])
     if (!ADVANCED.has(lead.status)) {
       await supabase.from('leads').update({
         status: 'llamada_con_dapta',
@@ -158,5 +208,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       metadata: { source: 'leads_quick_action' },
     })
   }
-  return NextResponse.json({ ok: tr.ok, action: 'call', dapta: tr })
+  // Audit #5: incluir el lead actualizado para evitar 2do fetch del frontend
+  const { data: updatedLead } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', lead.id)
+    .single()
+  return NextResponse.json({ ok: tr.ok, action: 'call', dapta: tr, lead: updatedLead })
 }

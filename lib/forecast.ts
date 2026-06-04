@@ -18,6 +18,7 @@ export const STATUS_WIN_PROBABILITY: Record<Lead['status'], number> = {
   no_show_llamada: 0.05,
   presentacion_enviada: 0.50,
   espera_aprobacion: 0.80,
+  liga_pago_enviada: 0.90,  // ya tiene la liga en sus manos, falta solo que haga clic + pague
   convertido: 1.00,
   cliente_recurrente: 1.00,
   descartado: 0.00,

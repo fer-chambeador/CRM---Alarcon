@@ -131,14 +131,40 @@ export default function OutboundClient() {
   const approve = async (id: string, dapta_immediate = false) => {
     setBusy(s => ({ ...s, [id]: 'approve' }))
     try {
-      const res = await fetch(`/api/aprobaciones/${id}/approve`, {
+      let res = await fetch(`/api/aprobaciones/${id}/approve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dapta_immediate }),
       })
+      let body = await res.json().catch(() => ({}))
+
+      // Si el lead ya tiene llamada previa, pedimos password y reintentamos
+      // con force:true. Aplica solo al flujo dapta_call (los vambe_template
+      // nunca devuelven 'lead-already-called').
+      if (res.status === 409 && body.error === 'lead-already-called') {
+        const prev = body.previous_status || '?'
+        const password = window.prompt(
+          `Este lead ya tiene una llamada previa (status="${prev}").\n\nSi quieres VOLVER a llamarlo, escribe el password de re-llamada:`,
+          '',
+        )
+        if (!password) {
+          alert('Re-llamada cancelada — no se capturó password.')
+          return
+        }
+        res = await fetch(`/api/aprobaciones/${id}/approve`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ dapta_immediate, force: true, password }),
+        })
+        body = await res.json().catch(() => ({}))
+        if (res.status === 401 && body.error === 'force-password-required') {
+          alert('Password incorrecto. Pídeselo a Fer.')
+          return
+        }
+      }
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        alert('Falló: ' + (err.error || res.status))
+        alert('Falló: ' + (body.error || res.status))
       }
       await load()
     } finally {
@@ -157,13 +183,26 @@ export default function OutboundClient() {
     }
   }
 
-  const summary = useMemo(() => ({
-    vambe: data?.counts.vambe || 0,
-    dapta: data?.counts.dapta || 0,
-    total: data?.counts.total || 0,
-  }), [data])
+  // ── Filtro Mensajes: excluir leads con canal_adquisicion === 'Vambe' ──
+  // Por regla del user (2 jun 2026): los leads que llegan VIA Vambe ya
+  // tienen su propio flujo de conversación dentro de Vambe (templates +
+  // bot), no necesitan que les mandemos OTRO template outbound desde acá.
+  // El outbound de aprobaciones es solo para inbound de OTROS canales
+  // (Facebook, Recomendación, Calendar, Tpet, etc.) que pidan contacto
+  // proactivo. Cuando el funnel de no-Vambe esté agotado, esta pestaña
+  // se va a 0 — que es justamente la señal "ya está al día".
+  const mensajesFiltered = useMemo(
+    () => (data?.vambe || []).filter(a => a.leads?.canal_adquisicion !== 'Vambe'),
+    [data],
+  )
 
-  const rows = tab === 'mensajes' ? (data?.vambe || []) : (data?.dapta || [])
+  const summary = useMemo(() => ({
+    vambe: mensajesFiltered.length,
+    dapta: data?.counts.dapta || 0,
+    total: mensajesFiltered.length + (data?.counts.dapta || 0),
+  }), [data, mensajesFiltered])
+
+  const rows = tab === 'mensajes' ? mensajesFiltered : (data?.dapta || [])
 
   return (
     <div className={styles.root}>
@@ -334,10 +373,9 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   onReject: () => void
 }) {
   const a = apro
-  const label = colKey === 'edad' && tab === 'llamadas' ? 'Cuándo' : COL_LABELS[colKey]
   if (colKey === 'lead') {
     return (
-      <td className={styles.leadCell}>
+      <td>
         <div className={styles.leadName}>{a.leads?.nombre || a.leads?.email || '(sin nombre)'}</div>
         {a.leads?.email && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.email}</div>}
       </td>
@@ -345,18 +383,18 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   if (colKey === 'vacante') {
     return (
-      <td data-label={label}>
+      <td>
         {a.leads?.vacante && <div style={{ fontSize: 13 }}>{a.leads.vacante}</div>}
         {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
       </td>
     )
   }
   if (colKey === 'telefono') {
-    return <td data-label={label} className={styles.mono}>{a.leads?.telefono || '—'}</td>
+    return <td className={styles.mono}>{a.leads?.telefono || '—'}</td>
   }
   if (colKey === 'score') {
     return (
-      <td data-label={label} style={{ textAlign: 'center' }}>
+      <td style={{ textAlign: 'center' }}>
         <span style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           padding: '4px 10px', borderRadius: 999, minWidth: 56,
@@ -370,7 +408,7 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   if (colKey === 'edad') {
     return (
-      <td data-label={label} className={styles.muted} style={{ fontSize: 12 }}>
+      <td className={styles.muted} style={{ fontSize: 12 }}>
         {tab === 'mensajes'
           ? <>
             <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
@@ -385,18 +423,40 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   // acciones
   return (
-    <td data-label={label} onClick={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button className={styles.primaryBtn}
-          style={{ padding: '6px 12px', fontSize: 12, boxShadow: 'none' }}
+    <td onClick={e => e.stopPropagation()}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button
+          className={styles.primaryBtn}
           disabled={!!busy}
-          onClick={onApprove}>
-          {busy === 'approve' ? '⏳…' : tab === 'mensajes' ? '📨 Mandar' : '📞 Dapta'}
+          onClick={onApprove}
+          style={{
+            padding: '7px 14px',
+            fontSize: 12,
+            fontWeight: 600,
+            borderRadius: 999,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: '0 2px 8px -2px rgba(124,84,232,0.45)',
+            transition: 'transform 100ms ease, box-shadow 100ms ease, opacity 100ms ease',
+            opacity: busy ? 0.6 : 1,
+          }}>
+          {busy === 'approve' ? '⏳ Enviando…' : tab === 'mensajes' ? '📨 Mandar' : '📞 Llamar'}
         </button>
-        <button className={styles.btnSecondary}
-          style={{ padding: '6px 12px', fontSize: 12 }}
+        <button
+          className={styles.btnSecondary}
           disabled={!!busy}
-          onClick={onReject}>
+          onClick={onReject}
+          style={{
+            padding: '7px 14px',
+            fontSize: 12,
+            fontWeight: 500,
+            borderRadius: 999,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            opacity: busy ? 0.6 : 1,
+          }}>
           {busy === 'reject' ? '⏳…' : '✋ Manual'}
         </button>
       </div>

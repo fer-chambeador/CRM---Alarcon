@@ -10,6 +10,7 @@ import {
 } from '@/lib/dapta'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertLlamadaPidioLinkPago, alertLlamadaPidioPresentacion } from '@/lib/slackAlertDapta'
+import { handleStatusChangeForFollowUp } from '@/lib/followUp'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -164,6 +165,13 @@ export async function POST(req: NextRequest) {
       proximoPasoFinal = 'Llamada terminó sin cierre claro — escribir por WhatsApp para retomar y agendar.'
     }
   }
+  // IMPORTANTE: NO existe una columna 'proximo_paso' en la tabla `llamadas`.
+  // La UI lee el próximo paso desde `custom_analysis.proximo_paso` (JSONB).
+  // Por eso inyectamos el valor final ahí antes de persistir, en lugar de
+  // intentar un campo separado (que rompía el INSERT con error de schema cache).
+  if (proximoPasoFinal) {
+    customData.proximo_paso = proximoPasoFinal
+  }
 
   const fields: Record<string, unknown> = {
     dapta_call_id: daptaCallId,
@@ -179,7 +187,6 @@ export async function POST(req: NextRequest) {
     summary: f.summary,
     custom_analysis: customData,
     outcome: customData.outcome || null,
-    proximo_paso: proximoPasoFinal,
     sentimiento: customData.sentimiento || (f.userSentiment ? f.userSentiment.toLowerCase() : null),
     interes_real: customData.interes_real || null,
     error_message: status === 'no_answer' ? `disconnection_reason: ${disconnectionReason}` : null,
@@ -238,7 +245,7 @@ export async function POST(req: NextRequest) {
     const lc = leadCurrent as { status: string; notas: string | null } | null
     if (lc) {
       // No tumbamos status si ya está en una etapa MÁS avanzada (convertido, etc.)
-      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'convertido', 'cliente_recurrente'])
+      const ADVANCED = new Set(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
       const newStatus = ADVANCED.has(lc.status) ? lc.status : 'no_show_llamada'
       const noteLine = `[${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}] Vambe llamó pero lead no respondió`
       const newNotas = lc.notas && lc.notas.trim().length > 0
@@ -252,6 +259,105 @@ export async function POST(req: NextRequest) {
           status_changed_at: new Date().toISOString(),
         })
         .eq('id', leadId)
+    }
+  }
+
+  // ── 4.4) Audit #9: Si Daniela detectó pidio_link_pago, AVANZAR el lead a
+  //         'liga_pago_enviada' (si no está más adelante ya). Ahorra a Fer
+  //         el paso manual de cambiar status post-llamada: Daniela ya cerró
+  //         "te mando la liga", Fer la mandará por WhatsApp, el lead ya
+  //         debería estar en ese stage para mostrarse en el card correcto.
+  if (leadId && customData.outcome === 'pidio_link_pago') {
+    const { data: leadRow } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', leadId)
+      .maybeSingle()
+    const fullLead = leadRow as Lead | null
+    if (fullLead) {
+      const AHEAD = new Set<Lead['status']>(['liga_pago_enviada', 'convertido', 'cliente_recurrente'])
+      if (!AHEAD.has(fullLead.status)) {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'liga_pago_enviada',
+            status_changed_at: new Date().toISOString(),
+          })
+          .eq('id', leadId)
+        await supabase.from('lead_actividad').insert({
+          lead_id: leadId,
+          tipo: 'auto_status_advance',
+          descripcion: `💰 Auto-avance a 'Liga de pago enviada' (Daniela detectó pidio_link_pago)`,
+          metadata: { source: 'dapta_post_call', from: fullLead.status, to: 'liga_pago_enviada' },
+        })
+      }
+    }
+  }
+
+  // ── 4.5) Si Daniela detectó pidio_presentacion, AVANZAR el lead a
+  //         'presentacion_enviada' (si no está más adelante ya) + disparar
+  //         el follow-up de GCal +3 días. Esto cubre el caso en que el user
+  //         no toca el status manualmente — Daniela lo hace en automático.
+  if (leadId && customData.outcome === 'pidio_presentacion') {
+    const { data: leadRow } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', leadId)
+      .maybeSingle()
+    const fullLead = leadRow as Lead | null
+    if (fullLead) {
+      const AHEAD = new Set<Lead['status']>(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
+      if (!AHEAD.has(fullLead.status)) {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'presentacion_enviada',
+            status_changed_at: new Date().toISOString(),
+          })
+          .eq('id', leadId)
+        // Disparar follow-up — leemos versión actualizada del lead para que el
+        // título use el nombre/teléfono más reciente.
+        const updatedLead: Lead = { ...fullLead, status: 'presentacion_enviada' }
+        await handleStatusChangeForFollowUp(
+          supabase,
+          leadId,
+          updatedLead,
+          fullLead.status,
+          'presentacion_enviada',
+          fullLead.gcal_followup_event_id,
+        )
+      }
+
+      // Audit #10: si el interés era alto, crear aprobación pre-poblada
+      // en /outbound para que Fer mande la propuesta con 1 click en lugar
+      // de buscar el lead + escribir desde cero. Idempotente vía índice
+      // único parcial (uq_aprobaciones_pending_per_lead).
+      if (customData.interes_real === 'alto') {
+        // Buscar el template configurado para propuesta (cae al outbound default si no hay setting específico)
+        const { data: tplSetting } = await supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'outbound_template')
+          .maybeSingle()
+        const tplJson = (tplSetting as { value?: { template_id?: string; template_name?: string } } | null)?.value
+        const templateId = tplJson?.template_id || null
+        const templateName = tplJson?.template_name || 'outbound_primer_mensaje_sales'
+
+        if (templateId) {
+          await supabase.from('aprobaciones').insert({
+            tipo: 'vambe_template',
+            lead_id: leadId,
+            status: 'pending',
+            template_id: templateId,
+            template_name: templateName,
+            reason: `Daniela detectó 'pidió presentación' + interés ALTO en la llamada. Sugerido envío de seguimiento.`,
+            score_snapshot: null,
+            expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),  // expira en 7 días
+          }).select('id').maybeSingle()
+          // El insert puede fallar silenciosamente por el unique index si ya
+          // existe una pending — eso está bien, no queremos duplicar.
+        }
+      }
     }
   }
 

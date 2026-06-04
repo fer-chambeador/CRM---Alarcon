@@ -1702,9 +1702,112 @@ type MovementData = {
   sample_size: number
 }
 
+type DaptaMetrics = {
+  dapta_exitosas: number
+  dapta_convertidas: number
+  llamadas_agendadas: number
+  llamadas_manuales: number
+  conversiones_manuales: number  // deprecated alias — preferir llamadas_manuales
+  dapta_exitosa_leads?: number   // leads únicos con llamada Dapta exitosa
+  dapta_a_presentacion?: number  // de los exitosa, cuántos llegaron a presentación/liga_pago/convertido
+  vambe_outbound_msgs: number
+  outbound_pidio_llamada: number
+  outbound_convertidos: number
+  outbound_total_leads_unicos: number
+}
+
+type FunnelStage = { stage: string; label: string; count: number }
+type FunnelTiming = { from: string; to: string; medianDays: number | null; sampleSize: number }
+type FunnelData = {
+  total_leads: number
+  stages: FunnelStage[]
+  conversion: Array<{ stage: string; rate: number; label: string }>
+  timings: FunnelTiming[]
+}
+
+function FunnelSection({ data }: { data: FunnelData | null }) {
+  if (!data) {
+    return (
+      <section className={styles.section}>
+        <header className={styles.sectionHeader}>
+          <div>
+            <h3>Funnel completo</h3>
+            <span className={styles.sectionSubtitle}>Cargando…</span>
+          </div>
+        </header>
+      </section>
+    )
+  }
+  const max = data.stages[0]?.count || 1
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <div>
+          <h3>Funnel completo</h3>
+          <span className={styles.sectionSubtitle}>
+            Cuántos leads pasaron por cada etapa · % conversión a la siguiente · tiempo mediana entre etapas.
+          </span>
+        </div>
+      </header>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+        {data.stages.map((s, i) => {
+          const widthPct = max > 0 ? Math.max(2, (s.count / max) * 100) : 0
+          const conv = data.conversion[i]
+          const timing = i > 0 ? data.timings[i - 1] : null
+          const dropOff = i > 0 ? data.stages[i - 1].count - s.count : 0
+          const convPct = conv && i > 0 ? Math.round(conv.rate * 100) : null
+          return (
+            <div key={s.stage}>
+              {timing && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '4px 16px', fontSize: 11, color: 'var(--text3)',
+                  fontStyle: 'italic',
+                }}>
+                  <span>↓</span>
+                  <span>
+                    {convPct !== null ? `${convPct}% pasaron` : '—'}
+                    {dropOff > 0 ? ` · ${dropOff} se quedaron` : ''}
+                  </span>
+                  {timing.medianDays !== null && (
+                    <span>· tiempo: <strong style={{ color: '#a594ff' }}>{timing.medianDays.toFixed(1)}d</strong> mediana (n={timing.sampleSize})</span>
+                  )}
+                </div>
+              )}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                background: 'var(--glass)', border: '1px solid var(--border)',
+                borderRadius: 10, padding: '10px 16px',
+              }}>
+                <div style={{ minWidth: 180, fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                  {s.label}
+                </div>
+                <div style={{ flex: 1, position: 'relative', height: 24 }}>
+                  <div style={{
+                    position: 'absolute', left: 0, top: 0, bottom: 0,
+                    width: `${widthPct}%`,
+                    background: `linear-gradient(90deg, rgba(124,84,232,${0.4 - i * 0.04}), rgba(124,84,232,${0.2 - i * 0.025}))`,
+                    border: '1px solid rgba(167,139,250,0.45)',
+                    borderRadius: 6,
+                  }} />
+                </div>
+                <div style={{ minWidth: 60, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>
+                  {s.count}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [leads] = useState<Lead[]>(initialLeads)
   const [movement, setMovement] = useState<MovementData | null>(null)
+  const [daptaMetrics, setDaptaMetrics] = useState<DaptaMetrics | null>(null)
+  const [funnelData, setFunnelData] = useState<FunnelData | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>('mes')
 
   const scoped = useMemo(() => {
@@ -1765,6 +1868,36 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     return () => { cancelled = true }
   }, [dateRange])
 
+  // Fetch dapta + outbound metrics when range changes
+  useEffect(() => {
+    const { from, to } = dateRangeBounds(dateRange)
+    const qs = new URLSearchParams()
+    if (from) qs.set('from', from.toISOString())
+    if (to)   qs.set('to', to.toISOString())
+    let cancelled = false
+    setDaptaMetrics(null)
+    fetch(`/api/analytics/dapta?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then((j: DaptaMetrics) => { if (!cancelled) setDaptaMetrics(j) })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [dateRange])
+
+  // Fetch funnel
+  useEffect(() => {
+    const { from, to } = dateRangeBounds(dateRange)
+    const qs = new URLSearchParams()
+    if (from) qs.set('from', from.toISOString())
+    if (to)   qs.set('to', to.toISOString())
+    let cancelled = false
+    setFunnelData(null)
+    fetch(`/api/analytics/funnel?${qs}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then((j: FunnelData) => { if (!cancelled) setFunnelData(j) })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [dateRange])
+
   // tactics removidas — user pidió sin sugerencias en este rediseño
 
   return (
@@ -1801,6 +1934,93 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label="Tasa de conversión" value={fmtPct(stats.conversionRate)} sub={`${stats.cerrados} de ${stats.total - stats.descartados} (sin descartados)`} accentColor="#4ea8f5" />
             <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
+
+          {/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
+          <GroupHeader title="Daniela (Dapta)" subtitle="Llamadas de voz IA: exitosas, convertidas y agendadas en el rango." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard
+              label="Dapta exitosas"
+              value={daptaMetrics ? String(daptaMetrics.dapta_exitosas) : '…'}
+              sub="llamadas ≥ 3 min con análisis"
+              accentColor="#22d68a"
+            />
+            <KPICard
+              label="Dapta convertidas"
+              value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
+              sub="leads que cerraron tras llamar"
+              accentColor="#7c6af7"
+            />
+            <KPICard
+              label="Agendadas este periodo"
+              value={daptaMetrics ? String(daptaMetrics.llamadas_agendadas) : '…'}
+              sub="con scheduled_at en el rango"
+              accentColor="#4ea8f5"
+            />
+            <KPICard
+              label="Llamadas manuales (Fer)"
+              value={daptaMetrics ? String(daptaMetrics.llamadas_manuales ?? daptaMetrics.conversiones_manuales) : '…'}
+              sub="agendadas que no tomó Dapta"
+              accentColor="#f5c842"
+            />
+          </div>
+
+          {/* ── FUNNEL DAPTA · qué pasa después de una llamada exitosa ───── */}
+          <GroupHeader title="Funnel Dapta" subtitle="De los leads que tuvieron llamada exitosa con Daniela: cuántos avanzaron a presentación/link de pago y cuántos pagaron." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard
+              label="1. Llamada exitosa"
+              value={daptaMetrics ? String(daptaMetrics.dapta_exitosa_leads ?? 0) : '…'}
+              sub="leads únicos con Dapta ≥ 3 min"
+              accentColor="#22d68a"
+            />
+            <KPICard
+              label="2. Presentación o liga"
+              value={daptaMetrics ? String(daptaMetrics.dapta_a_presentacion ?? 0) : '…'}
+              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
+                ? `${Math.round(((daptaMetrics.dapta_a_presentacion ?? 0) / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% del paso 1`
+                : 'avanzaron a propuesta/pago'}
+              accentColor="#a594ff"
+            />
+            <KPICard
+              label="3. Pagaron"
+              value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
+              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
+                ? `${Math.round((daptaMetrics.dapta_convertidas / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% del paso 1`
+                : 'leads que cerraron'}
+              accentColor="#7c6af7"
+            />
+          </div>
+
+          {/* ── VAMBE · outbound ─────────────────────────────────────────── */}
+          <GroupHeader title="Vambe outbound" subtitle="Templates de WhatsApp salientes y embudo posterior." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+            <KPICard
+              label="Outbound enviados"
+              value={daptaMetrics ? String(daptaMetrics.vambe_outbound_msgs) : '…'}
+              sub={daptaMetrics ? `${daptaMetrics.outbound_total_leads_unicos} leads únicos` : '—'}
+              accentColor="#a594ff"
+            />
+            <KPICard
+              label="Pidieron llamada"
+              value={daptaMetrics ? String(daptaMetrics.outbound_pidio_llamada) : '…'}
+              sub={daptaMetrics && daptaMetrics.outbound_total_leads_unicos > 0
+                ? `${((daptaMetrics.outbound_pidio_llamada / daptaMetrics.outbound_total_leads_unicos) * 100).toFixed(0)}% del total outbound`
+                : '—'}
+              accentColor="#4ea8f5"
+            />
+            <KPICard
+              label="Outbound convertidos"
+              value={daptaMetrics ? String(daptaMetrics.outbound_convertidos) : '…'}
+              sub={daptaMetrics && daptaMetrics.outbound_total_leads_unicos > 0
+                ? `${((daptaMetrics.outbound_convertidos / daptaMetrics.outbound_total_leads_unicos) * 100).toFixed(1)}% conv. outbound`
+                : '—'}
+              accentColor="#22d68a"
+            />
+          </div>
+
+          {/* ── FUNNEL completo lead→pago ─────────────────────────────── */}
+          <GroupHeader title="Funnel de ventas" subtitle="Camino completo: lead nuevo → contactado → Daniela → pago. Conversión y tiempo entre etapas." />
+          <FunnelSection data={funnelData} />
 
           {/* Tabla principal con tabs (full width, sin sidebar) */}
           <TabsTable byCanal={byCanal} byVacante={byVacante} byPresupuesto={byPresupuesto} byEstado={byEstado} avgConvRate={stats.conversionRate} />

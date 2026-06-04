@@ -31,7 +31,7 @@ export type Lead = {
   telefono: string | null
   puesto: string | null
   canal_adquisicion: string | null
-  status: 'nuevo' | 'contactado' | 'llamada_con_dapta' | 'llamada_agendada' | 'no_show_llamada' | 'presentacion_enviada' | 'espera_aprobacion' | 'convertido' | 'cliente_recurrente' | 'descartado'
+  status: 'nuevo' | 'contactado' | 'llamada_con_dapta' | 'llamada_agendada' | 'no_show_llamada' | 'presentacion_enviada' | 'espera_aprobacion' | 'liga_pago_enviada' | 'convertido' | 'cliente_recurrente' | 'descartado'
   veces_contactado: number
   ultimo_contacto: string | null
   plan: string | null
@@ -49,6 +49,7 @@ export type Lead = {
   updated_at: string
   status_changed_at: string
   google_calendar_event_id: string | null
+  gcal_followup_event_id: string | null
   vambe_contact_id: string | null
   vambe_stage_id: string | null
   tipo_llamada: 'demo' | 'comercial' | null

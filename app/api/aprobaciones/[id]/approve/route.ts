@@ -4,6 +4,7 @@ import type { Lead } from '@/lib/supabase'
 import { sendTemplate } from '@/lib/vambe'
 import { triggerDaptaCall } from '@/lib/dapta'
 import { getOutboundTemplate } from '@/lib/systemSettings'
+import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -79,6 +80,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ ok: false, error: 'lead sin teléfono' }, { status: 400 })
   }
 
+  // ── Normalizar el teléfono (defensa en profundidad) ──
+  // Mismo fix que /api/dapta/trigger (2 jun 2026): si el lead viene con
+  // teléfono malformado (formato MX viejo +5201…, espacios, etc.) Vambe
+  // o Dapta no podrán contactarlo y la fila quedará stuck. Normalizamos
+  // antes y persistimos el canónico en lead.telefono.
+  const phoneNormalized = normalizeMexicanPhone(lead.telefono)
+  if (!phoneNormalized) {
+    await supabase.from('aprobaciones').update({
+      status: 'failed',
+      error_message: `Teléfono inválido: '${lead.telefono}'. Edítalo manualmente.`,
+      decided_at: new Date().toISOString(),
+    }).eq('id', a.id)
+    return NextResponse.json({ ok: false, error: 'telefono-no-valido', detail: `El teléfono '${lead.telefono}' no se pudo normalizar.` }, { status: 400 })
+  }
+  if (phoneNormalized !== lead.telefono) {
+    await supabase.from('leads').update({ telefono: phoneNormalized }).eq('id', lead.id)
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'field_change',
+      descripcion: `Teléfono normalizado: ${lead.telefono} → ${phoneNormalized}`,
+      metadata: { field: 'telefono', before: lead.telefono, after: phoneNormalized, source: 'aprobacion_approve_auto_normalize' },
+    })
+    lead.telefono = phoneNormalized
+  }
+
   // 2. Ejecutar según tipo
   try {
     if (a.tipo === 'vambe_template') {
@@ -102,57 +128,141 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
       })
 
+      // Audit #2: validar la response de Vambe ANTES de marcar approved.
+      // Vambe puede devolver HTTP 200 con success:false / error en body.
+      // Sin esto, marcamos aprobado y el lead "Contactado" sin que el cliente
+      // haya recibido el mensaje. Mismo guard que /quick-action.
+      type VambeSendResult = {
+        success?: boolean
+        ok?: boolean
+        status?: string
+        error?: string | { message?: string }
+        message?: string
+        data?: { status?: string; error?: string }
+      }
+      const vr = (result || {}) as VambeSendResult
+      const explicitFail =
+        vr.success === false ||
+        vr.ok === false ||
+        (typeof vr.status === 'string' && /^(failed|error|rejected)/i.test(vr.status)) ||
+        (typeof vr.data?.status === 'string' && /^(failed|error|rejected)/i.test(vr.data.status)) ||
+        !!vr.error
+      if (explicitFail) {
+        const reason = typeof vr.error === 'string' ? vr.error
+          : (vr.error as { message?: string })?.message
+          || vr.message || vr.data?.error || 'Vambe rechazó el envío sin lanzar HTTP error'
+        await supabase.from('aprobaciones').update({
+          status: 'failed',
+          result_metadata: { vambe_response: vr },
+          error_message: `Vambe rechazó: ${reason}`,
+          decided_at: new Date().toISOString(),
+        }).eq('id', a.id)
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'template_send_failed',
+          descripcion: `⚠️ Vambe NO envió template ${templateName}: ${reason}`,
+          metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, vambe_response: vr },
+        })
+        return NextResponse.json({ ok: false, error: `Vambe rechazó: ${reason}`, vambe_response: vr }, { status: 502 })
+      }
+
       // Marcar aprobación + lead
       await supabase.from('aprobaciones').update({
         status: 'approved',
         result_metadata: { vambe_response: result },
         decided_at: new Date().toISOString(),
       }).eq('id', a.id)
-      // Si el lead sigue en 'nuevo', avanzarlo a 'contactado'
-      if (lead.status === 'nuevo') {
-        await supabase.from('leads').update({
-          status: 'contactado',
-          status_changed_at: new Date().toISOString(),
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-        }).eq('id', lead.id)
+
+      // ── Actualizar lead: +1 contacto + reset counter de días + nota ──
+      // Regla del user (2 jun 2026): cada vez que se aprueba un Vambe
+      // template, el lead debe:
+      //   1. Incrementar veces_contactado +1 (sin importar el status — leads
+      //      en 1er, 2do, 3er contacto deben SIEMPRE subir un escalón).
+      //   2. Reiniciar el aging counter (ultimo_contacto = NOW).
+      //   3. Si el lead estaba en 'nuevo', avanzar a 'contactado' (status_changed_at).
+      //   4. Append nota "Ya se contactó con Vambe (timestamp)" para que el
+      //      user vea en la card del lead que fue una re-touch automatizado.
+      const nowIso = new Date().toISOString()
+      const timestampMx = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })
+      const newNoteLine = `[${timestampMx}] Ya se contactó con Vambe`
+      const newNotas = (lead.notas && lead.notas.trim().length > 0)
+        ? `${lead.notas}\n${newNoteLine}`
+        : newNoteLine
+      const leadUpdates: Record<string, unknown> = {
+        veces_contactado: (lead.veces_contactado || 0) + 1,
+        ultimo_contacto: nowIso,
+        notas: newNotas,
       }
+      if (lead.status === 'nuevo') {
+        leadUpdates.status = 'contactado'
+        leadUpdates.status_changed_at = nowIso
+      }
+      await supabase.from('leads').update(leadUpdates).eq('id', lead.id)
+
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'template_sent',
-        descripcion: `📨 Mensaje Vambe enviado: ${templateName}`,
-        metadata: { source: 'aprobacion', aprobacion_id: a.id, template_id: templateId, template_name: templateName },
+        descripcion: `📨 Mensaje Vambe enviado: ${templateName} (contacto #${(lead.veces_contactado || 0) + 1})`,
+        metadata: {
+          source: 'aprobacion',
+          aprobacion_id: a.id,
+          template_id: templateId,
+          template_name: templateName,
+          veces_contactado_after: (lead.veces_contactado || 0) + 1,
+        },
       })
 
       return NextResponse.json({ ok: true, tipo: 'vambe_template', result })
     }
 
     if (a.tipo === 'dapta_call') {
-      // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO ──
+      // ── REGLA DURA: 1 LLAMADA POR LEAD MÁXIMO (con bypass por password) ──
       // Aplica también al flujo de aprobaciones: si el lead ya tiene cualquier
       // otra llamada (no canceled), rechazamos para no marcar 2 veces. Esto
       // protege el caso donde Fer aprueba 2 items del mismo lead por error.
-      const { data: prevCall } = await supabase
-        .from('llamadas')
-        .select('id, status, created_at')
-        .eq('lead_id', lead.id)
-        .not('status', 'in', '(canceled)')
-        .order('created_at', { ascending: false })
-        .limit(1)
-      if (prevCall && prevCall.length > 0) {
-        const p = prevCall[0] as { id: string; status: string; created_at: string }
-        // Revertir el lock optimista — volver el aprobación a pending para que el
-        // user pueda decidir (rechazar manualmente o cancelar la llamada previa).
-        await supabase.from('aprobaciones').update({
-          status: 'pending',
-          decided_at: null,
-        }).eq('id', a.id)
-        return NextResponse.json({
-          ok: false,
-          error: 'lead-already-called',
-          detail: `Este lead ya tiene una llamada previa (status=${p.status}, llamada_id=${p.id}). Cancélala primero o rechaza esta aprobación.`,
-          previous_llamada_id: p.id,
-          previous_status: p.status,
-        }, { status: 409 })
+      //
+      // BYPASS: el frontend puede mandar { force: true, password: '1234' } en
+      // el body. Si el password matchea DAPTA_FORCE_CALL_PASSWORD (default
+      // '1234'), se permite re-llamar al lead.
+      const bodyTyped = body as { dapta_immediate?: boolean; force?: boolean; password?: string }
+      const forceCall = !!bodyTyped.force
+      if (forceCall) {
+        const passExpected = process.env.DAPTA_FORCE_CALL_PASSWORD || '1234'
+        if (bodyTyped.password !== passExpected) {
+          // Revertir el lock optimista
+          await supabase.from('aprobaciones').update({ status: 'pending', decided_at: null }).eq('id', a.id)
+          return NextResponse.json({
+            ok: false,
+            error: 'force-password-required',
+            detail: 'Para re-llamar a un lead con llamada previa necesitas el password correcto.',
+          }, { status: 401 })
+        }
+      }
+
+      if (!forceCall) {
+        const { data: prevCall } = await supabase
+          .from('llamadas')
+          .select('id, status, created_at')
+          .eq('lead_id', lead.id)
+          .not('status', 'in', '(canceled)')
+          .order('created_at', { ascending: false })
+          .limit(1)
+        if (prevCall && prevCall.length > 0) {
+          const p = prevCall[0] as { id: string; status: string; created_at: string }
+          // Revertir el lock optimista — volver el aprobación a pending para que el
+          // user pueda decidir (rechazar manualmente o cancelar la llamada previa).
+          await supabase.from('aprobaciones').update({
+            status: 'pending',
+            decided_at: null,
+          }).eq('id', a.id)
+          return NextResponse.json({
+            ok: false,
+            error: 'lead-already-called',
+            detail: `Este lead ya tiene una llamada previa (status=${p.status}, llamada_id=${p.id}). Captura el password para forzar re-llamar.`,
+            previous_llamada_id: p.id,
+            previous_status: p.status,
+          }, { status: 409 })
+        }
       }
 
       // Si dapta_immediate=true → llamar ya. Si no, agendar a lead.llamada_at - 5min.
@@ -199,7 +309,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
 
       // Mover lead a llamada_con_dapta (si no está ya en algo más avanzado)
-      const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','convertido','cliente_recurrente'])
+      const ADVANCED = new Set(['llamada_con_dapta','no_show_llamada','presentacion_enviada','espera_aprobacion','liga_pago_enviada','convertido','cliente_recurrente'])
       if (!ADVANCED.has(lead.status)) {
         await supabase.from('leads').update({
           status: 'llamada_con_dapta',
