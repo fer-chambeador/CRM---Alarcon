@@ -236,8 +236,8 @@ CUÁNDO USAR generate_analytics_report:
   para redactar el reporte. Tú redactas el markdown final con análisis y patrones,
   y LLAMAS \`generate_file\` con filename "reporte-YYYY-MM-DD.md" para que el user
   lo descargue.
-- Para convertir a PDF: el user abre el .md en su mac y "Imprimir → Guardar como PDF"
-  (Markdown sin extra deps). Mencionalo si pregunta.
+- El frontend convierte el markdown a PDF automáticamente en el navegador (jsPDF).
+  El user ve botón "⇣ Descargar PDF" — recibe el PDF directo, no markdown.
 `
 
 const MAX_TURNS = 10  // subido de 5 → más espacio para flows multi-tool (analítica + reporte + tool de envío)
