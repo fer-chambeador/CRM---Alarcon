@@ -261,7 +261,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' | 'aprobaciones' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' | 'aprobaciones' | 'follow-ups' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -284,6 +284,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
         {link('/leads', 'leads', 'Leads', '📋')}
         {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
         {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
+        {link('/follow-ups', 'follow-ups', 'Follow Ups', '📌')}
         {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
         {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
