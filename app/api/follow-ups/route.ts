@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIPO_OK = new Set(['llamada', 'mensaje', 'pago', 'presentacion', 'general'])
-const SOURCE_OK = new Set(['manual', 'gcal_import', 'auto_presentacion'])
+const SOURCE_OK = new Set(['manual', 'gcal_import', 'auto_presentacion', 'auto_post_call'])
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null)

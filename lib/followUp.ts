@@ -31,16 +31,46 @@ export async function handleStatusChangeForFollowUp(
 
   // Caso 1: transición HACIA presentacion_enviada → crear follow-up si NO existe ya.
   if (newStatus === TRIGGER && oldStatus !== TRIGGER && !oldEventId) {
+    // FIX (7 jun 2026): además del evento en GCal, también INSERT en la tabla
+    // follow_ups del CRM. Antes solo se creaba el evento en GCal y Fer tenía
+    // que clickear "Importar de Calendar" para que aparecieran en /follow-ups.
+    // Ahora aparecen automáticamente.
+    const fechaFollowUp = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    fechaFollowUp.setUTCHours(15, 0, 0, 0)  // 09:00 a.m. hora MX (UTC-6)
+    const titulo = `Follow Up presentación – ${fullLead.nombre || fullLead.email || fullLead.telefono || 'Lead'}`
+    const notas = `Generado automáticamente tras enviar presentación a ${fullLead.empresa || fullLead.nombre || fullLead.telefono}. Confirmar si revisaron y avanzar a liga de pago o re-engage.`
+
+    // Insert en follow_ups (no bloquea si falla — gcal sigue siendo source-of-truth)
+    await supabase.from('follow_ups').insert({
+      lead_id: leadId,
+      titulo,
+      notas,
+      fecha: fechaFollowUp.toISOString(),
+      tipo: 'presentacion',
+      source: 'auto_presentacion',
+    }).then(({ error }) => {
+      if (error && !String(error.message).includes('duplicate')) {
+        console.warn('[followUp] insert in follow_ups failed', error.message)
+      }
+    })
+
     try {
       const eventId = await createFollowUpReminder(supabase, fullLead, 3)
       if (eventId) {
         await supabase.from('leads')
           .update({ gcal_followup_event_id: eventId })
           .eq('id', leadId)
+        // Backfill el gcal_event_id en el follow_up que acabamos de crear
+        await supabase.from('follow_ups')
+          .update({ gcal_event_id: eventId })
+          .eq('lead_id', leadId)
+          .eq('source', 'auto_presentacion')
+          .is('gcal_event_id', null)
+          .eq('completado', false)
         await supabase.from('lead_actividad').insert({
           lead_id: leadId,
           tipo: 'followup_created',
-          descripcion: '📅 Follow-up agendado en Google Calendar (+3 días)',
+          descripcion: '📅 Follow-up agendado (CRM + Google Calendar +3 días)',
           metadata: { event_id: eventId, days_ahead: 3 },
         })
         return eventId
@@ -50,7 +80,7 @@ export async function handleStatusChangeForFollowUp(
       await supabase.from('lead_actividad').insert({
         lead_id: leadId,
         tipo: 'followup_error',
-        descripcion: `Falló creación de follow-up en GCal: ${msg}`,
+        descripcion: `Falló creación de follow-up en GCal (pero CRM follow_up sí se creó): ${msg}`,
         metadata: { error: msg },
       })
       return oldEventId
