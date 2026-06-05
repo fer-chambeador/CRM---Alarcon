@@ -47,6 +47,7 @@ export async function handleStatusChangeForFollowUp(
       notas,
       fecha: fechaFollowUp.toISOString(),
       tipo: 'presentacion',
+      prioridad: 'urgente',  // primer follow-up de presentación = urgente
       source: 'auto_presentacion',
     }).then(({ error }) => {
       if (error && !String(error.message).includes('duplicate')) {

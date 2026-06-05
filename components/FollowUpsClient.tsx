@@ -14,6 +14,8 @@ type LeadJoined = {
   status: string
 }
 
+type Prioridad = 'urgente' | 'normal' | 'baja'
+
 type FollowUp = {
   id: string
   lead_id: string | null
@@ -21,6 +23,7 @@ type FollowUp = {
   notas: string | null
   fecha: string
   tipo: string
+  prioridad: Prioridad
   completado: boolean
   completado_at: string | null
   source: string
@@ -29,6 +32,13 @@ type FollowUp = {
   updated_at: string
   lead: LeadJoined | null
 }
+
+// 3 secciones visuales que pidió Fer.
+const SECTIONS: Array<{ key: Prioridad; label: string; emoji: string; description: string; color: string }> = [
+  { key: 'urgente', label: 'Urgentes',        emoji: '🔥', description: 'Liga de pago, llamadas críticas, presentación >3 días sin respuesta', color: '#e85454' },
+  { key: 'normal',  label: 'Normales',        emoji: '📋', description: 'Propuestas en curso, llamadas reagendadas, seguimientos rutinarios',  color: '#7c5cff' },
+  { key: 'baja',    label: 'Poco potencial',  emoji: '🌑', description: 'Buzones repetidos, leads sin respuesta tras varios intentos',          color: '#5a6072' },
+]
 
 const TIPO_LABEL: Record<string, string> = {
   general: 'General',
@@ -200,40 +210,48 @@ export default function FollowUpsClient() {
               {loading ? 'Cargando…' : 'No hay follow ups con esos filtros.'}
             </div>
           ) : (
-            <div className={styles.section}>
-              <h2 className={styles.sectionTitle}>
-                Lista
-                <span className={styles.sectionCount}>{items.length}</span>
-              </h2>
-              {items.map(fu => {
-                const urg = fechaUrgencia(fu.fecha, fu.completado)
-                return (
-                  <div key={fu.id} className={styles.fuRow}>
-                    <input type="checkbox" className={styles.fuCheck} checked={fu.completado} onChange={e => toggleComplete(fu.id, e.target.checked)} />
-                    <div className={styles.fuBody} onClick={() => { setEditing(fu); setShowModal(true) }}>
-                      <div className={styles.fuHead}>
-                        <span className={clsx(styles.fuTitle, fu.completado && styles.completed)}>{fu.titulo}</span>
-                        <span className={clsx(styles.fuDate, urg === 'urgent' && styles.fuDateUrgent, urg === 'overdue' && styles.fuDateOverdue)}>
-                          {fmtFechaCorta(fu.fecha)}
-                        </span>
-                        <span className={styles.fuTipo}>{TIPO_LABEL[fu.tipo] || fu.tipo}</span>
-                      </div>
-                      {fu.lead && (
-                        <div className={styles.fuLead}>
-                          → <a href={`/leads/${fu.lead.id}`}>{fu.lead.nombre || fu.lead.empresa || fu.lead.email}</a>
-                          {fu.lead.telefono ? ` · ${fu.lead.telefono}` : ''}
+            SECTIONS.map(section => {
+              const sectionItems = items.filter(i => (i.prioridad || 'normal') === section.key)
+              if (sectionItems.length === 0) return null
+              return (
+                <div key={section.key} className={styles.section} style={{ borderLeft: `3px solid ${section.color}`, paddingLeft: 14, marginBottom: 28 }}>
+                  <h2 className={styles.sectionTitle} style={{ color: section.color }}>
+                    <span style={{ marginRight: 8 }}>{section.emoji}</span>
+                    {section.label}
+                    <span className={styles.sectionCount} style={{ background: section.color, color: 'white' }}>{sectionItems.length}</span>
+                  </h2>
+                  <div style={{ fontSize: 12, opacity: 0.6, marginTop: -8, marginBottom: 10 }}>{section.description}</div>
+                  {sectionItems.map(fu => {
+                    const urg = fechaUrgencia(fu.fecha, fu.completado)
+                    return (
+                      <div key={fu.id} className={styles.fuRow}>
+                        <input type="checkbox" className={styles.fuCheck} checked={fu.completado} onChange={e => toggleComplete(fu.id, e.target.checked)} />
+                        <div className={styles.fuBody} onClick={() => { setEditing(fu); setShowModal(true) }}>
+                          <div className={styles.fuHead}>
+                            <span className={clsx(styles.fuTitle, fu.completado && styles.completed)}>{fu.titulo}</span>
+                            <span className={clsx(styles.fuDate, urg === 'urgent' && styles.fuDateUrgent, urg === 'overdue' && styles.fuDateOverdue)}>
+                              {fmtFechaCorta(fu.fecha)}
+                            </span>
+                            <span className={styles.fuTipo}>{TIPO_LABEL[fu.tipo] || fu.tipo}</span>
+                          </div>
+                          {fu.lead && (
+                            <div className={styles.fuLead}>
+                              → <a href={`/leads/${fu.lead.id}`}>{fu.lead.nombre || fu.lead.empresa || fu.lead.email}</a>
+                              {fu.lead.telefono ? ` · ${fu.lead.telefono}` : ''}
+                            </div>
+                          )}
+                          {fu.notas && <div className={styles.fuNotas}>{fu.notas.length > 200 ? fu.notas.slice(0, 200) + '…' : fu.notas}</div>}
                         </div>
-                      )}
-                      {fu.notas && <div className={styles.fuNotas}>{fu.notas.length > 200 ? fu.notas.slice(0, 200) + '…' : fu.notas}</div>}
-                    </div>
-                    <div className={styles.fuActions}>
-                      <button className={styles.iconBtn} onClick={() => { setEditing(fu); setShowModal(true) }} title="Editar">✎</button>
-                      <button className={styles.iconBtn} onClick={() => deleteItem(fu.id)} title="Eliminar">🗑</button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+                        <div className={styles.fuActions}>
+                          <button className={styles.iconBtn} onClick={() => { setEditing(fu); setShowModal(true) }} title="Editar">✎</button>
+                          <button className={styles.iconBtn} onClick={() => deleteItem(fu.id)} title="Eliminar">🗑</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })
           )}
         </div>
 
@@ -253,6 +271,7 @@ function FollowUpModal({ initial, onClose, onSaved }: { initial: FollowUp | null
   const [titulo, setTitulo] = useState(initial?.titulo || '')
   const [notas, setNotas] = useState(initial?.notas || '')
   const [tipo, setTipo] = useState(initial?.tipo || 'general')
+  const [prioridad, setPrioridad] = useState<Prioridad>(initial?.prioridad || 'normal')
   const [fecha, setFecha] = useState(() => {
     if (initial?.fecha) {
       const d = new Date(initial.fecha)
@@ -272,7 +291,7 @@ function FollowUpModal({ initial, onClose, onSaved }: { initial: FollowUp | null
     setSaving(true)
     try {
       const fechaISO = new Date(fecha).toISOString()
-      const body = { titulo, notas: notas || null, fecha: fechaISO, tipo }
+      const body = { titulo, notas: notas || null, fecha: fechaISO, tipo, prioridad }
       const url = initial ? `/api/follow-ups/${initial.id}` : '/api/follow-ups'
       const method = initial ? 'PATCH' : 'POST'
       const res = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -306,6 +325,14 @@ function FollowUpModal({ initial, onClose, onSaved }: { initial: FollowUp | null
             <option value="mensaje">Mensaje</option>
             <option value="pago">Pago</option>
             <option value="presentacion">Presentación</option>
+          </select>
+        </div>
+        <div className={styles.modalField}>
+          <label>Prioridad</label>
+          <select value={prioridad} onChange={e => setPrioridad(e.target.value as Prioridad)}>
+            <option value="urgente">🔥 Urgente</option>
+            <option value="normal">📋 Normal</option>
+            <option value="baja">🌑 Poco potencial</option>
           </select>
         </div>
         <div className={styles.modalField}>

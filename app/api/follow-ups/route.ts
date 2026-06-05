@@ -16,19 +16,24 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const status = url.searchParams.get('status') || 'todos'
   const range = url.searchParams.get('range') || 'todos'
+  const prioridad = url.searchParams.get('prioridad') // urgente|normal|baja|todos
   const leadId = url.searchParams.get('lead_id')
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 500)
 
   const supabase = createServiceClient()
   let q = supabase
     .from('follow_ups')
-    .select('id, lead_id, titulo, notas, fecha, tipo, completado, completado_at, source, gcal_event_id, created_at, updated_at', { count: 'exact' })
+    .select('id, lead_id, titulo, notas, fecha, tipo, prioridad, completado, completado_at, source, gcal_event_id, created_at, updated_at', { count: 'exact' })
     .gte('created_at', '2000-01-01T00:00:00Z') // no-op para variar query string
     .order('fecha', { ascending: true })
     .limit(limit)
 
   if (status === 'pendientes') q = q.eq('completado', false)
   else if (status === 'completados') q = q.eq('completado', true)
+
+  if (prioridad && ['urgente', 'normal', 'baja'].includes(prioridad)) {
+    q = q.eq('prioridad', prioridad)
+  }
 
   if (leadId) q = q.eq('lead_id', leadId)
 
@@ -89,6 +94,14 @@ export async function GET(req: NextRequest) {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIPO_OK = new Set(['llamada', 'mensaje', 'pago', 'presentacion', 'general'])
 const SOURCE_OK = new Set(['manual', 'gcal_import', 'auto_presentacion', 'auto_post_call'])
+const PRIORIDAD_OK = new Set(['urgente', 'normal', 'baja'])
+
+// Heurística para auto-priorizar cuando el caller no manda explícitamente
+function autoPriorityFor(tipo: string): 'urgente' | 'normal' | 'baja' {
+  if (tipo === 'pago') return 'urgente'
+  if (tipo === 'presentacion') return 'urgente'  // primer follow-up de presentación = urgente
+  return 'normal'
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null)
@@ -115,6 +128,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `source inválido (${source})` }, { status: 400 })
   }
 
+  // Validar prioridad si viene; sino aplicar auto-heurística por tipo
+  let prioridad = body.prioridad as string | undefined
+  if (prioridad && !PRIORIDAD_OK.has(prioridad)) {
+    return NextResponse.json({ error: `prioridad inválida (${prioridad}). Debe ser: urgente | normal | baja` }, { status: 400 })
+  }
+  if (!prioridad) prioridad = autoPriorityFor(tipo)
+
   const supabase = createServiceClient()
   const row = {
     lead_id: body.lead_id || null,
@@ -122,6 +142,7 @@ export async function POST(req: NextRequest) {
     notas: body.notas ? String(body.notas).slice(0, 5000) : null,
     fecha: fechaDate.toISOString(),
     tipo,
+    prioridad,
     source,
     gcal_event_id: body.gcal_event_id || null,
   }

@@ -12,6 +12,7 @@ export const fetchCache = 'force-no-store'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIPO_OK = new Set(['llamada', 'mensaje', 'pago', 'presentacion', 'general'])
+const PRIORIDAD_OK = new Set(['urgente', 'normal', 'baja'])
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id
@@ -32,6 +33,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (body.tipo) {
     if (!TIPO_OK.has(body.tipo)) return NextResponse.json({ error: 'tipo inválido' }, { status: 400 })
     updates.tipo = body.tipo
+  }
+  if (body.prioridad) {
+    if (!PRIORIDAD_OK.has(body.prioridad)) return NextResponse.json({ error: 'prioridad inválida' }, { status: 400 })
+    updates.prioridad = body.prioridad
   }
   if (typeof body.completado === 'boolean') {
     updates.completado = body.completado
