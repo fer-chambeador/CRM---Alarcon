@@ -105,6 +105,14 @@ export async function POST(req: NextRequest) {
       })
 
       if (insertErr) {
+        // Race-condition guard: si otro worker ya insertó el mismo
+        // gcal_event_id entre nuestro check `existing` y este INSERT,
+        // el UNIQUE constraint (uq_follow_ups_gcal) devuelve 23505.
+        // En ese caso tratamos como skipped, no error.
+        if (insertErr.code === '23505' || /duplicate|unique/i.test(insertErr.message)) {
+          skipped++
+          continue
+        }
         errors.push({ event_id: ev.id, error: `insert: ${insertErr.message}` })
         continue
       }

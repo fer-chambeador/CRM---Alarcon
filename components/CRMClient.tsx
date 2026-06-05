@@ -194,13 +194,26 @@ function AddLeadModal({ onClose, onAdd }: { onClose: () => void; onAdd: (lead: L
   const save = useCallback(async () => {
     if (!form.email) { setError('El email es requerido'); return }
     setSaving(true)
-    const res = await fetch('/api/leads', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    })
-    const data = await res.json()
-    if (data.error) { setError(data.error); setSaving(false); return }
-    onAdd(data); onClose()
+    try {
+      const res = await fetch('/api/leads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json().catch(() => ({}))
+      // FIX (4 jun 2026): además de check data.error, verificar res.ok.
+      // Sin esto, si la red caía (5xx), el `setSaving(false)` nunca se
+      // llamaba y el botón quedaba "Guardando..." infinito.
+      if (!res.ok || (data && typeof data === 'object' && 'error' in data)) {
+        const msg = (data as { error?: unknown }).error
+        setError(typeof msg === 'string' ? msg : `HTTP ${res.status}`)
+        return
+      }
+      onAdd(data); onClose()
+    } catch (e) {
+      setError(`Error de red: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSaving(false)
+    }
   }, [form, onAdd, onClose])
 
   useEffect(() => {
@@ -271,24 +284,54 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
 
   const save = useCallback(async () => {
     setSaving(true)
-    const res = await fetch(`/api/leads/${lead.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...form,
-        estado: form.estado || null,
-        presupuesto: form.presupuesto || null,
-        vacante: form.vacante || null,
-        llamada_at: form.llamada_at ? new Date(form.llamada_at).toISOString() : null,
-        veces_contactado: contactos,
-      }),
-    })
-    onSave(await res.json()); setSaving(false); onClose()
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          estado: form.estado || null,
+          presupuesto: form.presupuesto || null,
+          vacante: form.vacante || null,
+          llamada_at: form.llamada_at ? new Date(form.llamada_at).toISOString() : null,
+          veces_contactado: contactos,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      // FIX (4 jun 2026): antes hacía onSave(data) + onClose() SIN validar
+      // res.ok. Si el backend retornaba 500/400, el modal cerraba con un
+      // objeto error como si fuera el lead, corrompiendo el state local y
+      // perdiendo los cambios silenciosamente.
+      if (!res.ok) {
+        const errMsg = (data && typeof data === 'object' && 'error' in data)
+          ? String((data as { error: unknown }).error)
+          : `HTTP ${res.status}`
+        alert(`Error al guardar: ${errMsg}`)
+        return  // mantener modal abierto + cambios visibles
+      }
+      onSave(data)
+      onClose()
+    } catch (e) {
+      alert(`Error de red al guardar: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSaving(false)
+    }
   }, [lead.id, form, contactos, onSave, onClose])
 
   const deleteLead = async () => {
     setDeleting(true)
-    await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
-    onDelete(lead.id); onClose()
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(`Error al eliminar: ${(data as { error?: string }).error || `HTTP ${res.status}`}`)
+        return
+      }
+      onDelete(lead.id); onClose()
+    } catch (e) {
+      alert(`Error de red al eliminar: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   useEffect(() => {

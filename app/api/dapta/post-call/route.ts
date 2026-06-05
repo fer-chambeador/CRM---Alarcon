@@ -57,17 +57,32 @@ export async function POST(req: NextRequest) {
   // ── 1) Resolver lead + llamada existente ──
   let llamadaId: string | null = null
   let leadId: string | null = null
+  // isRetry: true si este webhook es un reintento de uno ya procesado.
+  // Cuando Dapta reintenta el post-call (idempotencia HTTP), debemos UPDATE
+  // la fila (no daña) pero SKIP side effects: NO duplicar inserts en
+  // lead_actividad, NO mandar Slack 2x, NO auto-advance status 2x, NO
+  // crear follow-up duplicado. SECURITY (4 jun 2026).
+  let isRetry = false
 
   // (a) Si tenemos dapta_call_id, buscar llamada existente
   if (daptaCallId) {
     const { data: existing } = await supabase
       .from('llamadas')
-      .select('id, lead_id')
+      .select('id, lead_id, status, outcome')
       .eq('dapta_call_id', daptaCallId)
       .maybeSingle()
     if (existing) {
-      llamadaId = (existing as { id: string }).id
-      leadId = (existing as { lead_id: string }).lead_id
+      const ex = existing as { id: string; lead_id: string | null; status: string | null; outcome: string | null }
+      llamadaId = ex.id
+      leadId = ex.lead_id
+      // Si la llamada ya estaba en estado terminal con outcome resuelto,
+      // este post-call es un retry. Los terminal_statuses no deben volver
+      // a disparar side effects.
+      const TERMINAL = ['completed', 'failed', 'no_answer', 'voicemail', 'canceled']
+      if (ex.status && TERMINAL.includes(ex.status) && ex.outcome) {
+        isRetry = true
+        console.warn('[Dapta post-call] retry detectado para dapta_call_id', daptaCallId, '— skip side effects')
+      }
     }
   }
 
@@ -236,7 +251,7 @@ export async function POST(req: NextRequest) {
   // el lead debe quedar en 'no_show_llamada' con una nota explícita en su card.
   // Antes el lead se quedaba en 'llamada_con_dapta' y no había forma fácil de
   // saber que la llamada no se concretó.
-  if (leadId && status === 'no_answer') {
+  if (leadId && status === 'no_answer' && !isRetry) {
     const { data: leadCurrent } = await supabase
       .from('leads')
       .select('status, notas')
@@ -267,7 +282,7 @@ export async function POST(req: NextRequest) {
   //         el paso manual de cambiar status post-llamada: Daniela ya cerró
   //         "te mando la liga", Fer la mandará por WhatsApp, el lead ya
   //         debería estar en ese stage para mostrarse en el card correcto.
-  if (leadId && customData.outcome === 'pidio_link_pago') {
+  if (leadId && customData.outcome === 'pidio_link_pago' && !isRetry) {
     const { data: leadRow } = await supabase
       .from('leads')
       .select('*')
@@ -298,7 +313,7 @@ export async function POST(req: NextRequest) {
   //         'presentacion_enviada' (si no está más adelante ya) + disparar
   //         el follow-up de GCal +3 días. Esto cubre el caso en que el user
   //         no toca el status manualmente — Daniela lo hace en automático.
-  if (leadId && customData.outcome === 'pidio_presentacion') {
+  if (leadId && customData.outcome === 'pidio_presentacion' && !isRetry) {
     const { data: leadRow } = await supabase
       .from('leads')
       .select('*')
@@ -362,7 +377,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 5) Lead activity log ──
-  if (leadId && llamadaId) {
+  if (leadId && llamadaId && !isRetry) {
     await supabase.from('lead_actividad').insert({
       lead_id: leadId,
       tipo: 'dapta_call_completed',
@@ -379,7 +394,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 5) Slack alerts ──
-  if (leadId && llamadaId && savedLlamada) {
+  if (leadId && llamadaId && savedLlamada && !isRetry) {
     try {
       const { data: leadRow } = await supabase
         .from('leads')

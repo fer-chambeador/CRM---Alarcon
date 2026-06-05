@@ -16,6 +16,17 @@ import { sendTemplate, sendMessage, syncLeadToVambe } from './vambe'
 
 const STATUS_LIST = STATUS_ORDER as readonly string[]
 
+/**
+ * Escapa caracteres reservados de SQL LIKE (% _ \) para que un valor
+ * provisto por el LLM no se trate como comodín.
+ *
+ * SECURITY (4 jun 2026): sin este escape, un LLM que recibiera "canal=%"
+ * en `bulk_update_status(confirm=true)` actualizaría TODOS los leads.
+ */
+function escapeLike(s: string): string {
+  return String(s).replace(/[\\%_]/g, '\\$&')
+}
+
 // ─── Tool definitions (lo que se manda a Anthropic) ────────────────────
 export const TOOL_DEFINITIONS = [
   {
@@ -240,7 +251,7 @@ async function execUpdateLeadStatus(input: { lead_email: string; new_status: Lea
   }
   const { data: lead } = await supabase
     .from('leads').select('id, email, nombre, status')
-    .ilike('email', lead_email).single()
+    .ilike('email', escapeLike(lead_email)).single()
   if (!lead) return { ok: false, summary: `No se encontró lead con email ${lead_email}`, error: 'not_found' }
 
   // Usar el PATCH endpoint mismo en vez de update directo:
@@ -283,7 +294,7 @@ async function execBulkUpdateStatus(input: {
   // Query con filtros
   let q = supabase.from('leads').select('id, email, nombre, status, status_changed_at, canal_adquisicion, presupuesto')
   if (filter.current_status) q = q.eq('status', filter.current_status)
-  if (filter.canal) q = q.ilike('canal_adquisicion', `%${filter.canal}%`)
+  if (filter.canal) q = q.ilike('canal_adquisicion', `%${escapeLike(filter.canal)}%`)
   if (filter.presupuesto) q = q.eq('presupuesto', filter.presupuesto)
   const { data: candidates, error } = await q.limit(500)
   if (error) return { ok: false, summary: error.message, error: error.message }
@@ -340,7 +351,7 @@ async function execAddNote(input: { lead_email: string; note: string; mode?: 'ap
   const { lead_email, note, mode = 'append' } = input
   const { data: lead } = await supabase
     .from('leads').select('id, email, nombre, notas')
-    .ilike('email', lead_email).single()
+    .ilike('email', escapeLike(lead_email)).single()
   if (!lead) return { ok: false, summary: `No se encontró lead con email ${lead_email}`, error: 'not_found' }
 
   const stamp = new Date().toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })
@@ -374,7 +385,7 @@ async function execQueueVambeCalls(input: { lead_emails: string[]; prompt?: stri
 }
 
 async function findLeadByEmail(supabase: Supabase, email: string): Promise<Lead | null> {
-  const { data } = await supabase.from('leads').select('*').ilike('email', email).maybeSingle()
+  const { data } = await supabase.from('leads').select('*').ilike('email', escapeLike(email)).maybeSingle()
   return (data as Lead | null) ?? null
 }
 
@@ -606,7 +617,7 @@ async function execSendTemplateCampaign(input: SendTemplateCampaignInput, supaba
   let q = supabase.from('leads').select('*')
   if (input.segment?.status?.length) q = q.in('status', input.segment.status)
   if (input.segment?.canal?.length) q = q.in('canal_adquisicion', input.segment.canal)
-  if (input.segment?.vacante_contains) q = q.ilike('vacante', `%${input.segment.vacante_contains}%`)
+  if (input.segment?.vacante_contains) q = q.ilike('vacante', `%${escapeLike(input.segment.vacante_contains)}%`)
   const { data: leads } = await q
   let filtered = (leads || []) as Lead[]
 
@@ -720,7 +731,7 @@ async function execListLeadsFiltered(input: ListLeadsFilteredInput, supabase: Su
   const lim = Math.min(input.limit || 20, 30)
   let query = supabase.from('leads').select('*')
   if (input.status && input.status !== 'any') query = query.eq('status', input.status)
-  if (input.canal) query = query.ilike('canal_adquisicion', `%${input.canal}%`)
+  if (input.canal) query = query.ilike('canal_adquisicion', `%${escapeLike(input.canal)}%`)
   if (input.created_within_days) {
     const since = new Date(Date.now() - input.created_within_days * 86400_000).toISOString()
     query = query.gte('created_at', since)

@@ -33,13 +33,27 @@ export async function GET(req: NextRequest) {
   if (leadId) q = q.eq('lead_id', leadId)
 
   // Filtros de rango en hora MX
+  //
+  // FIX (4 jun 2026): antes esto era buggy en servidor con timezone != MX:
+  //   `new Date(now.toLocaleString('en-US', {timeZone:'America/Mexico_City'}))`
+  // parsea el string EN LA ZONA LOCAL DEL SERVIDOR, no en MX. Si Railway corre
+  // en UTC, startOfDayMx representaba medianoche UTC, no MX. Los filtros
+  // hoy/mañana/semana quedaban corridos 6 horas.
+  //
+  // AHORA: usamos Intl.DateTimeFormat con formatToParts para construir el
+  // string ISO de medianoche MX, independiente del timezone del servidor.
   const now = new Date()
-  const startOfDayMx = new Date(now.toLocaleString('en-US', { timeZone: 'America/Mexico_City' }))
-  startOfDayMx.setHours(0, 0, 0, 0)
-  const endOfTodayMx = new Date(startOfDayMx); endOfTodayMx.setHours(23, 59, 59, 999)
-  const startOfTomorrowMx = new Date(startOfDayMx); startOfTomorrowMx.setDate(startOfTomorrowMx.getDate() + 1)
-  const endOfTomorrowMx = new Date(endOfTodayMx); endOfTomorrowMx.setDate(endOfTomorrowMx.getDate() + 1)
-  const endOfWeekMx = new Date(startOfDayMx); endOfWeekMx.setDate(endOfWeekMx.getDate() + 7); endOfWeekMx.setHours(23, 59, 59, 999)
+  const mxFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  const todayMxStr = mxFormatter.format(now) // YYYY-MM-DD en hora MX
+  // MX es UTC-6 todo el año (sin DST desde 2022)
+  const startOfDayMx = new Date(`${todayMxStr}T00:00:00-06:00`)
+  const endOfTodayMx = new Date(`${todayMxStr}T23:59:59.999-06:00`)
+  const startOfTomorrowMx = new Date(startOfDayMx); startOfTomorrowMx.setUTCDate(startOfTomorrowMx.getUTCDate() + 1)
+  const endOfTomorrowMx = new Date(endOfTodayMx); endOfTomorrowMx.setUTCDate(endOfTomorrowMx.getUTCDate() + 1)
+  const endOfWeekMx = new Date(endOfTodayMx); endOfWeekMx.setUTCDate(endOfWeekMx.getUTCDate() + 7)
 
   if (range === 'hoy') {
     q = q.gte('fecha', startOfDayMx.toISOString()).lte('fecha', endOfTodayMx.toISOString())
@@ -72,19 +86,43 @@ export async function GET(req: NextRequest) {
   return res
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const TIPO_OK = new Set(['llamada', 'mensaje', 'pago', 'presentacion', 'general'])
+const SOURCE_OK = new Set(['manual', 'gcal_import', 'auto_presentacion'])
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null)
-  if (!body || !body.titulo || !body.fecha) {
+  if (!body || typeof body !== 'object' || !body.titulo || !body.fecha) {
     return NextResponse.json({ error: 'titulo y fecha son requeridos' }, { status: 400 })
   }
+  // Validar fecha
+  const fechaDate = new Date(body.fecha)
+  if (isNaN(fechaDate.getTime())) {
+    return NextResponse.json({ error: 'fecha inválida' }, { status: 400 })
+  }
+  // Validar lead_id si viene
+  if (body.lead_id && !UUID_RE.test(String(body.lead_id))) {
+    return NextResponse.json({ error: 'lead_id no es UUID válido' }, { status: 400 })
+  }
+  // Validar tipo si viene
+  const tipo = body.tipo || 'general'
+  if (!TIPO_OK.has(tipo)) {
+    return NextResponse.json({ error: `tipo inválido (${tipo}). Debe ser uno de: ${[...TIPO_OK].join(', ')}` }, { status: 400 })
+  }
+  // Validar source si viene
+  const source = body.source || 'manual'
+  if (!SOURCE_OK.has(source)) {
+    return NextResponse.json({ error: `source inválido (${source})` }, { status: 400 })
+  }
+
   const supabase = createServiceClient()
   const row = {
     lead_id: body.lead_id || null,
     titulo: String(body.titulo).slice(0, 500),
     notas: body.notas ? String(body.notas).slice(0, 5000) : null,
-    fecha: body.fecha,
-    tipo: body.tipo || 'general',
-    source: body.source || 'manual',
+    fecha: fechaDate.toISOString(),
+    tipo,
+    source,
     gcal_event_id: body.gcal_event_id || null,
   }
   const { data, error } = await supabase.from('follow_ups').insert(row).select().single()

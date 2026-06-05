@@ -376,19 +376,15 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     const alreadyBumpedByEndpoint = !!recentTemplateSent
 
     if (!alreadyBumpedByEndpoint) {
-      if (lead.status === 'nuevo') {
-        await supabase.from('leads').update({
-          status: 'contactado',
-          status_changed_at: new Date().toISOString(),
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-          ultimo_contacto: new Date().toISOString(),
-        }).eq('id', lead.id)
-      } else {
-        await supabase.from('leads').update({
-          veces_contactado: (lead.veces_contactado || 0) + 1,
-          ultimo_contacto: new Date().toISOString(),
-        }).eq('id', lead.id)
-      }
+      // ATOMIC FIX (4 jun 2026): antes el bump era read-modify-write,
+      // race-condition si llegaban 2 webhooks en paralelo (ambos leían
+      // el mismo valor y ambos hacían update al mismo +1 → un bump se
+      // perdía). Ahora usamos RPC bump_lead_contacto que hace el
+      // UPDATE atómico con veces_contactado = COALESCE(...,0) + 1.
+      await supabase.rpc('bump_lead_contacto', {
+        p_lead_id: lead.id,
+        p_set_contactado: lead.status === 'nuevo',
+      })
     }
   }
 
@@ -921,12 +917,17 @@ function extractDateFromMessages(messages: Array<{ message: string; created_at: 
     } else if (/\bhoy\b/i.test(text)) {
       // mantener mismo día
     } else {
-      // Detectar día de la semana
+      // Detectar día de la semana — palabras COMPLETAS, no prefijos.
+      // FIX (4 jun 2026): antes el key `mi` con `\\b${name}\\w*\\b` matcheaba
+      // "miércoles" pero también "mil", "minuto", "misma". Quitamos los
+      // prefijos ambiguos `mi`/`sab` y matcheamos solo palabras completas.
       const dayNames: Record<string, number> = {
-        domingo: 0, lunes: 1, martes: 2, mi: 3, miercoles: 3, jueves: 4, viernes: 5, sabado: 6, sab: 6,
+        domingo: 0, lunes: 1, martes: 2, miércoles: 3, miercoles: 3,
+        jueves: 4, viernes: 5, sábado: 6, sabado: 6,
       }
       for (const [name, dow] of Object.entries(dayNames)) {
-        if (new RegExp(`\\b${name}\\w*\\b`, 'i').test(text)) {
+        // Match exacto de la palabra (sin \w* después).
+        if (new RegExp(`\\b${name}\\b`, 'i').test(text)) {
           const currentDow = targetDate.getDay()
           const diff = (dow - currentDow + 7) % 7 || 7
           targetDate.setDate(targetDate.getDate() + diff)
