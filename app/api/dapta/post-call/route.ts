@@ -159,6 +159,20 @@ export async function POST(req: NextRequest) {
   const status = normalizeDaptaStatus(f.rawStatus, disconnectionReason, f.durationSeconds)
   const accionables = deriveAccionables(customData)
 
+  // FIX (7 jun 2026): Dapta a veces devuelve objeciones como string CSV
+  // ("caro, sin presupuesto") en lugar de array. Eso rompe el frontend
+  // (LlamadaDetailClient) que hace .map() sobre el campo — caso Lizbeth
+  // Chavez Santillan 525512887615 daba "Application error: client-side exception".
+  // Normalizamos a array al persistir para que todos los registros sean uniformes.
+  if (customData.objeciones != null && !Array.isArray(customData.objeciones)) {
+    if (typeof customData.objeciones === 'string') {
+      customData.objeciones = customData.objeciones
+        .split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean)
+    } else {
+      customData.objeciones = []
+    }
+  }
+
   // Next steps fallback: si Daniela no llenó proximo_paso o lo dejó vacío/null,
   // generamos uno automático según el outcome real para no dejar "—" en la UI.
   let proximoPasoFinal: string | null = null

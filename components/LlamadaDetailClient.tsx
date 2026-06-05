@@ -10,13 +10,27 @@ type CustomAnalysis = {
   puesto_buscado?: string | null
   zona_ubicacion?: string | null
   presupuesto_paquete?: string | null
-  objeciones?: string[] | null
+  // Dapta puede mandar objeciones como string CSV ("caro, sin presupuesto") O
+  // como array (["caro", "sin presupuesto"]). Tratamos ambos.
+  objeciones?: string[] | string | null
   usa_otra_plataforma?: string | null
   interes_real?: 'alto' | 'medio' | 'bajo' | null
   proximo_paso?: string | null
   resumen_detallado?: string | null
   agendar_seguimiento?: string | null
   sentimiento?: 'positivo' | 'neutral' | 'negativo' | null
+}
+
+// Normaliza objeciones a array sin importar cómo venga de Dapta.
+// Causaba 'client-side exception' cuando llegaba como string (Dapta a veces
+// devuelve "obj1, obj2, obj3" en lugar de array): .map() crasheaba.
+function normalizeObjeciones(raw: string[] | string | null | undefined): string[] {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim())
+  if (typeof raw === 'string') {
+    return raw.split(/[,;\n]/).map(s => s.trim()).filter(Boolean)
+  }
+  return []
 }
 
 type Llamada = {
@@ -225,14 +239,18 @@ export default function LlamadaDetailClient({ id }: { id: string }) {
                 {ca.proximo_paso}
               </div>
             )}
-            {ca.objeciones && ca.objeciones.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div className={styles.muted} style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Objeciones</div>
-                <div className={styles.objeciones}>
-                  {ca.objeciones.map((o, i) => <span key={i} className={styles.objChip}>{o}</span>)}
+            {(() => {
+              const objs = normalizeObjeciones(ca.objeciones)
+              if (objs.length === 0) return null
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div className={styles.muted} style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Objeciones</div>
+                  <div className={styles.objeciones}>
+                    {objs.map((o, i) => <span key={i} className={styles.objChip}>{o}</span>)}
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
 
           {/* Metadata */}
