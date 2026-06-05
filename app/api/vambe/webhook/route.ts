@@ -5,7 +5,7 @@ import { parseFormMessage, getMessages, type VambeWebhookEvent, type FormFields 
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
 import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
-import { alertAtencionHumanaVambe } from '@/lib/slackAlertVambe'
+import { alertAtencionHumanaVambe, alertNuevoMensajeVambe } from '@/lib/slackAlertVambe'
 
 // Stage UUIDs especiales para disparar alertas y triggers de negocio.
 // Si Vambe cambia los UUIDs, actualizar acá (o moverlo a env vars).
@@ -17,6 +17,19 @@ const STAGE_PERDIDOS          = '9a43e657-b5cc-4baf-a503-1e0b37b9b366'
 const STAGE_DEMO_AGENDADA     = '971fe009-72d1-44fb-932b-aa94adcec4db'  // Agendados Consultoría 📆
 const STAGE_DEMO_CONFIRMADA   = '2fc44415-960f-4dbd-b65b-1500636fc41a'  // Confirmados ✅
 const STAGE_LLAMADA_COMERCIAL = 'cd0ab574-c844-4346-bea3-4ddd084fcb92'  // Llamadas ☎️
+
+// Stage extra usado para alertas de "nuevo mensaje":
+const STAGE_CONTACTADOS_WA    = '5847352c-f983-4e8b-b635-b19797d031a8'  // Contactados via WhatsApp
+
+// Mapa stage_id → label + key para alertas de nuevo mensaje en Slack.
+// Solo los stages aquí listados disparan alerta de "nuevo mensaje" en inbound.
+const NUEVO_MENSAJE_STAGES: Record<string, { key: 'asistencia_humana' | 'confirmados' | 'llamadas' | 'contactados_whatsapp' | 'ganados'; label: string }> = {
+  [STAGE_ATENCION_HUMANA]:   { key: 'asistencia_humana',     label: 'Asistencia humana' },
+  [STAGE_DEMO_CONFIRMADA]:   { key: 'confirmados',           label: 'Confirmados ✅' },
+  [STAGE_LLAMADA_COMERCIAL]: { key: 'llamadas',              label: 'Llamadas ☎️' },
+  [STAGE_CONTACTADOS_WA]:    { key: 'contactados_whatsapp',  label: 'Contactados via WhatsApp' },
+  [STAGE_GANADOS]:           { key: 'ganados',               label: 'Ganados 🏆' },
+}
 
 function tipoLlamadaForStage(stageId: string): 'demo' | 'comercial' | null {
   if (stageId === STAGE_DEMO_AGENDADA || stageId === STAGE_DEMO_CONFIRMADA) return 'demo'
@@ -411,6 +424,47 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
         .from('vambe_campaign_recipients')
         .update({ responded_at: new Date().toISOString() })
         .in('id', recipients.map(r => r.id))
+    }
+
+    // ─── NUEVO (7-jun 2026): alerta general "nuevo mensaje" a Slack para
+    // los 5 stages clave que Fer quiere monitorear sin abrir Vambe.
+    // Stages: Asistencia humana, Confirmados ✅, Llamadas ☎️, Contactados WA, Ganados.
+    // Dedup: no alertar 2 veces para el mismo lead en <90 segundos
+    // (mensajes consecutivos del mismo lead se agrupan en una sola alerta).
+    if (lead.vambe_stage_id && NUEVO_MENSAJE_STAGES[lead.vambe_stage_id]) {
+      const stageInfo = NUEVO_MENSAJE_STAGES[lead.vambe_stage_id]
+      const ninetySecAgo = new Date(Date.now() - 90_000).toISOString()
+      const { data: recentNmAlert } = await supabase
+        .from('lead_actividad')
+        .select('id')
+        .eq('lead_id', lead.id)
+        .eq('tipo', 'nuevo_mensaje_alert')
+        .gte('created_at', ninetySecAgo)
+        .limit(1)
+        .maybeSingle()
+      if (!recentNmAlert) {
+        // Marcar PRIMERO (idempotencia ante doble-webhook) y luego enviar
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'nuevo_mensaje_alert',
+          descripcion: `🔔 Alerta Slack: nuevo mensaje en ${stageInfo.label}`,
+          metadata: {
+            stage_id: lead.vambe_stage_id,
+            stage_key: stageInfo.key,
+            stage_label: stageInfo.label,
+            text_preview: (text || '').slice(0, 200),
+          },
+        })
+        // Fire-and-forget para no bloquear el webhook (Vambe espera 200 OK rápido)
+        alertNuevoMensajeVambe({
+          lead,
+          message: text,
+          stageKey: stageInfo.key,
+          stageLabel: stageInfo.label,
+        }).catch(e => {
+          console.error('[nuevo-mensaje alert] error', e)
+        })
+      }
     }
 
     // Vambe 1: si el lead está en Asistencia Humana y no ha tenido actividad
