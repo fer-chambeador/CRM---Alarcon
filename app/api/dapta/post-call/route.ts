@@ -165,9 +165,9 @@ export async function POST(req: NextRequest) {
   // Chavez Santillan 525512887615 daba "Application error: client-side exception".
   // Normalizamos a array al persistir para que todos los registros sean uniformes.
   if (customData.objeciones != null && !Array.isArray(customData.objeciones)) {
-    if (typeof customData.objeciones === 'string') {
-      customData.objeciones = customData.objeciones
-        .split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean)
+    const raw = customData.objeciones as unknown
+    if (typeof raw === 'string') {
+      customData.objeciones = raw.split(/[,;\n]/).map((s: string) => s.trim()).filter(Boolean)
     } else {
       customData.objeciones = []
     }

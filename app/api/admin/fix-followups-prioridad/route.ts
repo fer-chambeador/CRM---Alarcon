@@ -24,7 +24,6 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = createServiceClient()
-  const now = new Date()
   const in3Days = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
 
   // Update tipo='pago' → urgente
