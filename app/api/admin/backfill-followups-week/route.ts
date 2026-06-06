@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   const created: Array<{ lead_id: string; titulo: string; nombre: string | null; outcome: string }> = []
   const skipped: Array<{ lead_id: string; reason: string }> = []
 
-  for (const r of byLead.values()) {
+  for (const r of Array.from(byLead.values())) {
     const leadObj = Array.isArray(r.leads) ? r.leads[0] : r.leads
     const nombre = leadObj?.nombre || null
     const telefono = leadObj?.telefono || null
