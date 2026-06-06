@@ -248,16 +248,16 @@ export default function LlamadasClient() {
                 <tbody>
                   {agendadas.map(l => (
                     <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/llamadas/${l.id}`)}>
-                      <td>
+                      <td data-label="Cuándo">
                         <div style={{ fontWeight: 600, color: '#b8a3ff' }}>{fmtDate(l.scheduled_at)}</div>
                         <div className={styles.muted} style={{ fontSize: 11 }}>en {fmtRelative(l.scheduled_at)}</div>
                       </td>
-                      <td>
+                      <td data-label="Lead">
                         <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
                         {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
                       </td>
-                      <td className={styles.mono}>{l.to_number}</td>
-                      <td className={styles.muted}>{l.triggered_by || '—'}</td>
+                      <td data-label="Teléfono" className={styles.mono}>{l.to_number}</td>
+                      <td data-label="Agendada por" className={styles.muted}>{l.triggered_by || '—'}</td>
                       <td onClick={e => e.stopPropagation()}>
                         <button className={styles.btnSecondary} style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => cancelScheduled(l.id)}>
                           Cancelar
@@ -339,22 +339,22 @@ function Row({ l, onClick }: { l: Llamada; onClick: () => void }) {
     : l.interes_real === 'bajo' ? styles.interesBajo : ''
   return (
     <tr onClick={onClick}>
-      <td className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
-      <td>
+      <td data-label="Fecha" className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
+      <td data-label="Lead">
         <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
         {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
       </td>
-      <td className={styles.mono}>{l.to_number}</td>
-      <td><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
-      <td>
+      <td data-label="Teléfono" className={styles.mono}>{l.to_number}</td>
+      <td data-label="Status"><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
+      <td data-label="Outcome">
         {l.outcome ? <span className={clsx(styles.outcomeChip, OUTCOME_CLASS[l.outcome] || styles.outcomeOtro)}>{OUTCOME_LABEL[l.outcome] || l.outcome}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td>
+      <td data-label="Interés">
         {l.interes_real ? <span className={interesClass}>{l.interes_real}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
-      <td style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
-      <td style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
+      <td data-label="Duración" className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
+      <td data-label="Resumen" style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
+      <td data-label="Próximo paso" style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
     </tr>
   )
 }

@@ -373,9 +373,10 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   onReject: () => void
 }) {
   const a = apro
+  const label = colKey === 'edad' && tab === 'llamadas' ? 'Cuándo' : COL_LABELS[colKey]
   if (colKey === 'lead') {
     return (
-      <td>
+      <td data-label={label}>
         <div className={styles.leadName}>{a.leads?.nombre || a.leads?.email || '(sin nombre)'}</div>
         {a.leads?.email && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.email}</div>}
       </td>
@@ -383,18 +384,18 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   if (colKey === 'vacante') {
     return (
-      <td>
+      <td data-label={label}>
         {a.leads?.vacante && <div style={{ fontSize: 13 }}>{a.leads.vacante}</div>}
         {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
       </td>
     )
   }
   if (colKey === 'telefono') {
-    return <td className={styles.mono}>{a.leads?.telefono || '—'}</td>
+    return <td data-label={label} className={styles.mono}>{a.leads?.telefono || '—'}</td>
   }
   if (colKey === 'score') {
     return (
-      <td style={{ textAlign: 'center' }}>
+      <td data-label={label} style={{ textAlign: 'center' }}>
         <span style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           padding: '4px 10px', borderRadius: 999, minWidth: 56,
@@ -408,7 +409,7 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   if (colKey === 'edad') {
     return (
-      <td className={styles.muted} style={{ fontSize: 12 }}>
+      <td data-label={label} className={styles.muted} style={{ fontSize: 12 }}>
         {tab === 'mensajes'
           ? <>
             <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
@@ -423,7 +424,7 @@ function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
   }
   // acciones
   return (
-    <td onClick={e => e.stopPropagation()}>
+    <td data-label={label} onClick={e => e.stopPropagation()}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button
           className={styles.primaryBtn}
