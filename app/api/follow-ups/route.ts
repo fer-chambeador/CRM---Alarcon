@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
   // Validar tipo si viene
   const tipo = body.tipo || 'general'
   if (!TIPO_OK.has(tipo)) {
-    return NextResponse.json({ error: `tipo inválido (${tipo}). Debe ser uno de: ${[...TIPO_OK].join(', ')}` }, { status: 400 })
+    return NextResponse.json({ error: `tipo inválido (${tipo}). Debe ser uno de: ${Array.from(TIPO_OK).join(', ')}` }, { status: 400 })
   }
   // Validar source si viene
   const source = body.source || 'manual'
