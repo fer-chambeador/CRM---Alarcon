@@ -256,6 +256,7 @@ export default function LlamadaDetailClient({ id }: { id: string }) {
           {/* Metadata */}
           <div className={styles.card}>
             <h3 className={styles.cardTitle}>Metadata</h3>
+            <FieldRow label="Llamó" value={llamada.dapta_call_id ? '🤖 Daniela (Dapta)' : '👤 Fer (manual)'} />
             <FieldRow label="Agente" value={llamada.agent_name || '—'} />
             <FieldRow label="Status" value={llamada.status} />
             <FieldRow label="Duración" value={fmtDuration(llamada.duration_seconds)} mono />

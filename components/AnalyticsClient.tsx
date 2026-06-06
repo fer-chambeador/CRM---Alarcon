@@ -1943,32 +1943,41 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           </div>
 
           {/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
-          <GroupHeader title="Daniela (Dapta)" subtitle="Llamadas de voz IA: exitosas, presentación, liga de pago y convertidas. Plus costos y ROI." />
+          <GroupHeader title="Daniela (Dapta)" subtitle="Funnel: leads contactados → pidieron presentación → pidieron liga → pagaron. Todos en leads únicos." />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
             <KPICard
-              label="Llamadas exitosas"
-              value={daptaMetrics ? String(daptaMetrics.dapta_exitosas) : '…'}
-              sub="llamadas ≥ 3 min con análisis"
+              label="Leads contactados"
+              value={daptaMetrics ? String(daptaMetrics.dapta_exitosa_leads ?? 0) : '…'}
+              sub={daptaMetrics ? `${daptaMetrics.dapta_exitosas ?? 0} llamadas ≥ 3 min` : 'llamadas ≥ 3 min con análisis'}
               accentColor="#22d68a"
             />
             <KPICard
-              label="Presentación enviada"
+              label="Pidieron presentación"
               value={daptaMetrics ? String(daptaMetrics.dapta_pidio_presentacion ?? 0) : '…'}
-              sub="outcome=pidio_presentacion"
+              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
+                ? `${Math.round(((daptaMetrics.dapta_pidio_presentacion ?? 0) / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% de leads contactados`
+                : 'outcome=pidio_presentacion'}
               accentColor="#a594ff"
             />
             <KPICard
-              label="Liga de pago"
+              label="Pidieron liga de pago"
               value={daptaMetrics ? String(daptaMetrics.dapta_pidio_link_pago ?? 0) : '…'}
-              sub="outcome=pidio_link_pago"
+              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
+                ? `${Math.round(((daptaMetrics.dapta_pidio_link_pago ?? 0) / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% de leads contactados`
+                : 'outcome=pidio_link_pago'}
               accentColor="#4ea8f5"
             />
             <KPICard
-              label="Convirtieron a pago"
+              label="Pagaron"
               value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
-              sub="leads que cerraron tras llamar"
+              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
+                ? `${Math.round((daptaMetrics.dapta_convertidas / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% conversión total`
+                : 'leads que cerraron tras llamar'}
               accentColor="#7c6af7"
             />
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6, marginLeft: 4 }}>
+            ℹ️ Los % son sobre <strong>leads contactados</strong>. Un mismo lead puede aparecer en presentación, liga y pagaron (es un funnel — los 3 últimos no son exclusivos).
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginTop: 14 }}>
             <KPICard

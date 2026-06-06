@@ -84,11 +84,32 @@ const STATUS = [
   { key: 'todos', label: 'Todos' },
 ] as const
 
+// Filtro por tipo de acción (etapa). Orden = importancia descendente.
+const TIPO_FILTERS = [
+  { key: 'todos',        label: 'Todos',            emoji: '📌' },
+  { key: 'pago',         label: 'Confirmar pago',   emoji: '💰' },
+  { key: 'presentacion', label: 'Confirmar revisión', emoji: '📋' },
+  { key: 'llamada',      label: 'Llamar',           emoji: '📞' },
+  { key: 'mensaje',      label: 'Mensaje',          emoji: '💬' },
+  { key: 'general',      label: 'General',          emoji: '✏️' },
+] as const
+
+// Prioridad por tipo dentro de una misma sección (pago > presentacion > etc).
+const TIPO_RANK: Record<string, number> = {
+  pago: 1,
+  presentacion: 2,
+  llamada: 3,
+  mensaje: 4,
+  general: 5,
+}
+
 export default function FollowUpsClient() {
   const [items, setItems] = useState<FollowUp[]>([])
   const [loading, setLoading] = useState(false)
   const [range, setRange] = useState<string>('todos')
   const [status, setStatus] = useState<string>('pendientes')
+  const [tipoFilter, setTipoFilter] = useState<string>('todos')
+  const [nextStepModal, setNextStepModal] = useState<FollowUp | null>(null)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<FollowUp | null>(null)
   const [importing, setImporting] = useState(false)
@@ -125,6 +146,11 @@ export default function FollowUpsClient() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ completado: newVal }),
     })
+    // Si se marcó como completado, abrimos modal para que Fer defina siguiente paso
+    if (newVal) {
+      const fu = items.find(i => i.id === id)
+      if (fu) setNextStepModal({ ...fu, completado: true })
+    }
     load()
   }
 
@@ -204,6 +230,26 @@ export default function FollowUpsClient() {
           ))}
         </div>
 
+        {/* Filtro por tipo de acción (NUEVO 7-jun-2026) */}
+        <div className={styles.filterBar} style={{ marginTop: 8 }}>
+          {TIPO_FILTERS.map(t => {
+            const count = t.key === 'todos'
+              ? items.length
+              : items.filter(i => (i.tipo || 'general') === t.key).length
+            return (
+              <button
+                key={t.key}
+                className={clsx(styles.filterChip, tipoFilter === t.key && styles.filterChipActive)}
+                onClick={() => setTipoFilter(t.key)}
+                title={`${t.label} (${count})`}
+              >
+                <span style={{ marginRight: 6 }}>{t.emoji}</span>{t.label}
+                {count > 0 && <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 11 }}>{count}</span>}
+              </button>
+            )
+          })}
+        </div>
+
         <div className={styles.listContainer}>
           {items.length === 0 ? (
             <div className={styles.emptyState}>
@@ -211,7 +257,17 @@ export default function FollowUpsClient() {
             </div>
           ) : (
             SECTIONS.map(section => {
-              const sectionItems = items.filter(i => (i.prioridad || 'normal') === section.key)
+              const sectionItems = items
+                .filter(i => (i.prioridad || 'normal') === section.key)
+                .filter(i => tipoFilter === 'todos' || (i.tipo || 'general') === tipoFilter)
+                .sort((a, b) => {
+                  // Orden: tipo (pago > presentacion > llamada > mensaje > general),
+                  // luego por fecha ascendente.
+                  const ra = TIPO_RANK[a.tipo || 'general'] ?? 99
+                  const rb = TIPO_RANK[b.tipo || 'general'] ?? 99
+                  if (ra !== rb) return ra - rb
+                  return new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
+                })
               if (sectionItems.length === 0) return null
               return (
                 <div key={section.key} className={styles.section} style={{ borderLeft: `3px solid ${section.color}`, paddingLeft: 14, marginBottom: 28 }}>
@@ -260,6 +316,14 @@ export default function FollowUpsClient() {
             initial={editing}
             onClose={() => { setShowModal(false); setEditing(null) }}
             onSaved={() => { setShowModal(false); setEditing(null); load() }}
+          />
+        )}
+
+        {nextStepModal && (
+          <NextStepModal
+            completedFollowUp={nextStepModal}
+            onClose={() => setNextStepModal(null)}
+            onDone={() => { setNextStepModal(null); load() }}
           />
         )}
       </main>
@@ -345,6 +409,198 @@ function FollowUpModal({ initial, onClose, onSaved }: { initial: FollowUp | null
             {saving ? 'Guardando…' : initial ? 'Guardar' : 'Crear'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Modal post-complete que aparece al marcar un follow up como hecho.
+ * Pregunta: ¿siguiente paso? convertir? descartar? sin acción?
+ */
+function NextStepModal({ completedFollowUp, onClose, onDone }: {
+  completedFollowUp: FollowUp
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [mode, setMode] = useState<'menu' | 'next' | 'convert' | 'discard'>('menu')
+  const [nextDate, setNextDate] = useState(() => {
+    const def = new Date(Date.now() + 2 * 24 * 3600_000)
+    def.setMinutes(0); def.setSeconds(0); def.setMilliseconds(0)
+    const off = def.getTimezoneOffset()
+    return new Date(def.getTime() - off * 60_000).toISOString().slice(0, 16)
+  })
+  const [nextTipo, setNextTipo] = useState<string>('general')
+  const [nextPrioridad, setNextPrioridad] = useState<Prioridad>('normal')
+  const [nextNotas, setNextNotas] = useState('')
+  const [discardReason, setDiscardReason] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const leadId = completedFollowUp.lead_id
+  const leadName = completedFollowUp.lead?.nombre || completedFollowUp.lead?.empresa || completedFollowUp.lead?.email || completedFollowUp.titulo
+
+  async function createNextFollowUp() {
+    if (!nextDate) return
+    setSaving(true)
+    try {
+      const fechaISO = new Date(nextDate).toISOString()
+      const body = {
+        lead_id: leadId,
+        titulo: `Continuación de "${completedFollowUp.titulo.slice(0, 80)}"`,
+        notas: nextNotas || `Generado tras completar el follow up anterior (${completedFollowUp.id.slice(0, 8)}).`,
+        fecha: fechaISO,
+        tipo: nextTipo,
+        prioridad: nextPrioridad,
+        source: 'manual',
+      }
+      const r = await fetch('/api/follow-ups', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      if (!r.ok) { alert('Error creando next step'); return }
+      onDone()
+    } finally { setSaving(false) }
+  }
+
+  async function markConverted() {
+    if (!leadId) { alert('Este follow up no tiene lead linkado'); return }
+    setSaving(true)
+    try {
+      await fetch(`/api/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'convertido' }),
+      })
+      onDone()
+    } finally { setSaving(false) }
+  }
+
+  async function markDiscarded() {
+    if (!leadId) { alert('Este follow up no tiene lead linkado'); return }
+    setSaving(true)
+    try {
+      await fetch(`/api/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'descartado', razon_descarte: discardReason || 'Sin razón especificada' }),
+      })
+      onDone()
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: 540 }}>
+        <h2 className={styles.modalTitle}>
+          ✅ Follow up marcado como hecho
+        </h2>
+        <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16 }}>
+          <strong>{leadName}</strong> — ¿qué sigue?
+        </div>
+
+        {mode === 'menu' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <button
+              className={styles.secondaryBtn}
+              style={{ padding: '14px 16px', textAlign: 'left', justifyContent: 'flex-start' }}
+              onClick={() => setMode('next')}
+            >
+              <strong>📅 Crear siguiente paso</strong>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>Define cuándo y qué hacer después</div>
+            </button>
+            <button
+              className={styles.secondaryBtn}
+              style={{ padding: '14px 16px', textAlign: 'left', justifyContent: 'flex-start', borderColor: '#22d68a' }}
+              onClick={() => setMode('convert')}
+            >
+              <strong style={{ color: '#22d68a' }}>✅ Lead convertido (pagó)</strong>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>Cierra el lead como ganado</div>
+            </button>
+            <button
+              className={styles.secondaryBtn}
+              style={{ padding: '14px 16px', textAlign: 'left', justifyContent: 'flex-start', borderColor: '#e85454' }}
+              onClick={() => setMode('discard')}
+            >
+              <strong style={{ color: '#e85454' }}>🚫 Lead descartado</strong>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>No avanza, especifica razón</div>
+            </button>
+            <button
+              className={styles.secondaryBtn}
+              style={{ padding: '10px 16px', textAlign: 'left', justifyContent: 'flex-start', opacity: 0.7 }}
+              onClick={onClose}
+            >
+              Sin acción · cerrar
+            </button>
+          </div>
+        )}
+
+        {mode === 'next' && (
+          <>
+            <div className={styles.modalField}>
+              <label>Cuándo</label>
+              <input type="datetime-local" value={nextDate} onChange={e => setNextDate(e.target.value)} autoFocus />
+            </div>
+            <div className={styles.modalField}>
+              <label>Acción</label>
+              <select value={nextTipo} onChange={e => setNextTipo(e.target.value)}>
+                <option value="llamada">📞 Llamar</option>
+                <option value="mensaje">💬 Mensaje WhatsApp</option>
+                <option value="presentacion">📋 Confirmar revisión</option>
+                <option value="pago">💰 Confirmar pago</option>
+                <option value="general">📌 General</option>
+              </select>
+            </div>
+            <div className={styles.modalField}>
+              <label>Prioridad</label>
+              <select value={nextPrioridad} onChange={e => setNextPrioridad(e.target.value as Prioridad)}>
+                <option value="urgente">🔥 Urgente</option>
+                <option value="normal">📋 Normal</option>
+                <option value="baja">🌑 Poco potencial</option>
+              </select>
+            </div>
+            <div className={styles.modalField}>
+              <label>Notas</label>
+              <textarea value={nextNotas} onChange={e => setNextNotas(e.target.value)} placeholder="Qué se acordó / qué hay que hacer" />
+            </div>
+            <div className={styles.modalFooter}>
+              <button className={styles.secondaryBtn} onClick={() => setMode('menu')}>← Volver</button>
+              <button className={styles.primaryBtn} onClick={createNextFollowUp} disabled={saving || !nextDate}>
+                {saving ? 'Creando…' : 'Crear next step'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {mode === 'convert' && (
+          <>
+            <div style={{ background: 'rgba(34,214,138,0.08)', border: '1px solid #22d68a40', borderRadius: 8, padding: '12px 14px', fontSize: 13, lineHeight: 1.5 }}>
+              El lead pasará a status <strong>Convertido</strong> y se borrará cualquier follow up pendiente de Google Calendar.
+            </div>
+            <div className={styles.modalFooter}>
+              <button className={styles.secondaryBtn} onClick={() => setMode('menu')}>← Volver</button>
+              <button className={styles.primaryBtn} onClick={markConverted} disabled={saving} style={{ background: '#22d68a' }}>
+                {saving ? 'Cerrando…' : '✅ Sí, convertido'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {mode === 'discard' && (
+          <>
+            <div className={styles.modalField}>
+              <label>Razón de descarte</label>
+              <textarea
+                value={discardReason}
+                onChange={e => setDiscardReason(e.target.value)}
+                placeholder="No interesado, no contestó, demasiado caro, etc"
+                autoFocus
+              />
+            </div>
+            <div className={styles.modalFooter}>
+              <button className={styles.secondaryBtn} onClick={() => setMode('menu')}>← Volver</button>
+              <button className={styles.primaryBtn} onClick={markDiscarded} disabled={saving} style={{ background: '#e85454' }}>
+                {saving ? 'Descartando…' : '🚫 Sí, descartar'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

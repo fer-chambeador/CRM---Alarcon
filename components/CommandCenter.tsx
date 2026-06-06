@@ -276,14 +276,17 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
       <span>↳ {label}</span>
     </Link>
   )
+  const onRecurrentes = active === 'recurrentes' || active === 'recurrentes-analitica'
   const onSettings = active === 'settings' || active === 'templates'
   return (
     <>
       <nav className={styles.sidebarNav}>
         {link('/leads', 'leads', 'Leads', '📋')}
-        {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
+        {/* {link('/outbound', 'aprobaciones', 'Outbound', '📨')} oculto 7-jun-2026 por pedido de Fer (no usado por ahora; la página sigue funcional, solo se quitó del sidebar) */}
         {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
         {link('/follow-ups', 'follow-ups', 'Follow Ups', '📌')}
+        {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
+        {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
         {link('/asistente', 'asistente', 'Asistente', '🧠')}
         {link('/settings', 'settings', 'Settings', '⚙️')}
@@ -299,6 +302,7 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
 const MOBILE_TABS = [
   { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
   { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
+  { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
   { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
   { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
 ] as const

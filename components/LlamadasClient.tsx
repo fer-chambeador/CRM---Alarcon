@@ -248,16 +248,16 @@ export default function LlamadasClient() {
                 <tbody>
                   {agendadas.map(l => (
                     <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/llamadas/${l.id}`)}>
-                      <td data-label="Cuándo">
+                      <td>
                         <div style={{ fontWeight: 600, color: '#b8a3ff' }}>{fmtDate(l.scheduled_at)}</div>
                         <div className={styles.muted} style={{ fontSize: 11 }}>en {fmtRelative(l.scheduled_at)}</div>
                       </td>
-                      <td data-label="Lead">
+                      <td>
                         <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
                         {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
                       </td>
-                      <td data-label="Teléfono" className={styles.mono}>{l.to_number}</td>
-                      <td data-label="Agendada por" className={styles.muted}>{l.triggered_by || '—'}</td>
+                      <td className={styles.mono}>{l.to_number}</td>
+                      <td className={styles.muted}>{l.triggered_by || '—'}</td>
                       <td onClick={e => e.stopPropagation()}>
                         <button className={styles.btnSecondary} style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => cancelScheduled(l.id)}>
                           Cancelar
@@ -288,6 +288,7 @@ export default function LlamadasClient() {
               <thead>
                 <tr>
                   <th>Fecha</th>
+                  <th>Llamó</th>
                   <th>Lead</th>
                   <th>Teléfono</th>
                   <th>Status</th>
@@ -300,7 +301,7 @@ export default function LlamadasClient() {
               </thead>
               <tbody>
                 {historico.length === 0 ? (
-                  <tr><td colSpan={9} className={styles.empty}>
+                  <tr><td colSpan={10} className={styles.empty}>
                     {loading ? 'Cargando llamadas…' : (agendadas.length > 0 ? 'Sin llamadas pasadas todavía — solo las agendadas arriba.' : 'Sin llamadas todavía. Dispará la primera con el botón de arriba.')}
                   </td></tr>
                 ) : (
@@ -337,24 +338,42 @@ function Row({ l, onClick }: { l: Llamada; onClick: () => void }) {
   const interesClass = l.interes_real === 'alto' ? styles.interesAlto
     : l.interes_real === 'medio' ? styles.interesMedio
     : l.interes_real === 'bajo' ? styles.interesBajo : ''
+  // Quién llamó: si tiene dapta_call_id → Daniela (Dapta), si no → Fer (manual)
+  const calledBy = l.dapta_call_id ? 'daniela' : 'fer'
   return (
     <tr onClick={onClick}>
-      <td data-label="Fecha" className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
-      <td data-label="Lead">
+      <td className={styles.muted}>{fmtDate(l.started_at || l.created_at)}</td>
+      <td>
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 8px',
+          borderRadius: 6,
+          fontSize: 11,
+          fontWeight: 600,
+          background: calledBy === 'daniela' ? 'rgba(124,106,247,0.15)' : 'rgba(245,200,66,0.15)',
+          color: calledBy === 'daniela' ? '#a594ff' : '#f5c842',
+          border: `1px solid ${calledBy === 'daniela' ? '#7c6af7' : '#f5c842'}40`,
+        }}>
+          {calledBy === 'daniela' ? '🤖 Daniela' : '👤 Fer'}
+        </span>
+      </td>
+      <td>
         <div className={styles.leadName}>{l.leads?.nombre || l.leads?.email || '—'}</div>
         {l.leads?.empresa && <div className={styles.muted}>{l.leads.empresa}</div>}
       </td>
-      <td data-label="Teléfono" className={styles.mono}>{l.to_number}</td>
-      <td data-label="Status"><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
-      <td data-label="Outcome">
+      <td className={styles.mono}>{l.to_number}</td>
+      <td><span className={clsx(styles.statusChip, STATUS_CLASS[l.status])}>{STATUS_LABEL[l.status]}</span></td>
+      <td>
         {l.outcome ? <span className={clsx(styles.outcomeChip, OUTCOME_CLASS[l.outcome] || styles.outcomeOtro)}>{OUTCOME_LABEL[l.outcome] || l.outcome}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td data-label="Interés">
+      <td>
         {l.interes_real ? <span className={interesClass}>{l.interes_real}</span> : <span className={styles.muted}>—</span>}
       </td>
-      <td data-label="Duración" className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
-      <td data-label="Resumen" style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
-      <td data-label="Próximo paso" style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
+      <td className={styles.mono}>{fmtDuration(l.duration_seconds)}</td>
+      <td style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>{l.summary ? l.summary.slice(0, 140) + (l.summary.length > 140 ? '…' : '') : <span className={styles.muted}>—</span>}</td>
+      <td style={{ maxWidth: 240, fontSize: 12 }}>{(l as unknown as { custom_analysis?: { proximo_paso?: string } }).custom_analysis?.proximo_paso || <span className={styles.muted}>—</span>}</td>
     </tr>
   )
 }
