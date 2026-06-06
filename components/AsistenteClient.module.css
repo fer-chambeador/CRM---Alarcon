@@ -271,18 +271,20 @@
   .main { overflow: visible; }
   .topBar { padding: 14px 16px; }
   .topBar h1 { font-size: 22px; }
-  .body { padding: 12px 14px 16px; gap: 16px; }
+  /* deja espacio al final para que el composer flotante no tape el último mensaje */
+  .body { padding: 12px 14px 88px; gap: 16px; }
   .suggestions { grid-template-columns: 1fr; }
   .userBubble, .assistantBubble { max-width: 100%; padding: 12px 14px; }
-  /* keep the composer reachable above the fixed bottom tab bar */
+  /* composer flotante, claramente por encima del tab bar (sin encimarse) */
   .composer {
     position: sticky;
-    bottom: calc(58px + env(safe-area-inset-bottom));
+    bottom: calc(70px + env(safe-area-inset-bottom));
     padding: 10px 14px 12px;
-    background: rgba(14,14,26,0.92);
+    border-radius: var(--radius-md);
+    background: rgba(14,14,26,0.95);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border-top: 1px solid var(--border);
+    border: 1px solid var(--border2);
     z-index: 50;
   }
   .input { font-size: 13.5px !important; padding: 10px 14px !important; }
