@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   // info" y finalmente a "pagaron".
   let qConv = supabase
     .from('llamadas')
-    .select('lead_id, leads:lead_id ( status )')
+    .select('lead_id, outcome, leads:lead_id ( status, monto )')
     .not('dapta_call_id', 'is', null)
     .eq('status', 'completed')
     .gte('duration_seconds', 180)
@@ -55,11 +55,15 @@ export async function GET(req: NextRequest) {
   const { data: convRows } = await qConv
   const rows = (convRows ?? []) as Array<{
     lead_id: string | null
-    leads: { status?: string } | { status?: string }[] | null
+    outcome: string | null
+    leads: { status?: string; monto?: number } | { status?: string; monto?: number }[] | null
   }>
   const exitosaLeadIds = new Set<string>()
   const presentacionOrPagoIds = new Set<string>()
   const convertedLeadIds = new Set<string>()
+  const pidio_presentacion_set = new Set<string>()
+  const pidio_link_pago_set = new Set<string>()
+  let totalVendidoDapta = 0
   // Stages "post-llamada" — el lead ya pasó del momento de la llamada
   const POST_PRES = new Set(['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada', 'convertido', 'cliente_recurrente'])
   const CERRADOS = new Set(['convertido', 'cliente_recurrente'])
@@ -67,13 +71,40 @@ export async function GET(req: NextRequest) {
     if (!r.lead_id) continue
     exitosaLeadIds.add(r.lead_id)
     const leadsField = r.leads
-    const s = Array.isArray(leadsField) ? leadsField[0]?.status : leadsField?.status
+    const leadObj = Array.isArray(leadsField) ? leadsField[0] : leadsField
+    const s = leadObj?.status
     if (s && POST_PRES.has(s)) presentacionOrPagoIds.add(r.lead_id)
-    if (s && CERRADOS.has(s))  convertedLeadIds.add(r.lead_id)
+    if (s && CERRADOS.has(s)) {
+      convertedLeadIds.add(r.lead_id)
+      // Sumar el monto del lead convertido (preferir monto registrado)
+      totalVendidoDapta += Number(leadObj?.monto) || 0
+    }
+    if (r.outcome === 'pidio_presentacion') pidio_presentacion_set.add(r.lead_id)
+    if (r.outcome === 'pidio_link_pago')    pidio_link_pago_set.add(r.lead_id)
   }
   const daptaExitosaLeadsUnicos = exitosaLeadIds.size
   const daptaAPresentacion = presentacionOrPagoIds.size
   const daptaConvertidas = convertedLeadIds.size
+  const daptaPidioPresentacion = pidio_presentacion_set.size
+  const daptaPidioLigaPago = pidio_link_pago_set.size
+
+  // ── 2.B. Total créditos gastados en Dapta.
+  // Como la columna `creditos` no se guarda en `llamadas`, lo estimamos por
+  // duración: empíricamente Dapta cobra ~6 créditos/segundo (~360/min).
+  // Ratio Dapta: 1100 créditos = $1 USD.
+  let qDur = supabase
+    .from('llamadas')
+    .select('duration_seconds')
+    .not('dapta_call_id', 'is', null)
+  if (from) qDur = qDur.gte('created_at', from)
+  qDur = qDur.lte('created_at', to)
+  const { data: durRows } = await qDur
+  const totalSec = ((durRows ?? []) as Array<{ duration_seconds?: number }>)
+    .reduce((a, r) => a + (Number(r.duration_seconds) || 0), 0)
+  const CRED_POR_SEGUNDO = 6
+  const totalCreditos = Math.round(totalSec * CRED_POR_SEGUNDO)
+  const totalGastadoUsd = totalCreditos / 1100
+  const totalGastadoMxn = totalGastadoUsd * 17  // ~17 MXN/USD aprox
 
   // ── 3. Llamadas agendadas (scheduled_at en rango) ──
   let qAgend = supabase
@@ -148,10 +179,18 @@ export async function GET(req: NextRequest) {
     dapta_convertidas: daptaConvertidas,
     llamadas_agendadas: llamadasAgendadas ?? 0,
     llamadas_manuales: llamadasManuales,
-    conversiones_manuales: llamadasManuales,  // deprecated alias para compatibilidad — usar llamadas_manuales en código nuevo
+    conversiones_manuales: llamadasManuales,
     // Funnel Dapta completo (leads únicos que tuvieron llamada exitosa Dapta)
     dapta_exitosa_leads: daptaExitosaLeadsUnicos,
     dapta_a_presentacion: daptaAPresentacion,
+    // Desglose por outcome (NUEVO — pidió por Fer 5-jun-2026)
+    dapta_pidio_presentacion: daptaPidioPresentacion,
+    dapta_pidio_link_pago: daptaPidioLigaPago,
+    // Créditos y monetización Dapta
+    total_creditos: totalCreditos,
+    total_gastado_usd: Number(totalGastadoUsd.toFixed(2)),
+    total_gastado_mxn: Number(totalGastadoMxn.toFixed(2)),
+    total_vendido_dapta: Number(totalVendidoDapta.toFixed(2)),
     vambe_outbound_msgs: vambeOutboundMsgs ?? 0,
     outbound_pidio_llamada: outboundPidioLlamada,
     outbound_convertidos: outboundConvertidos,

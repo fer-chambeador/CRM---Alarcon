@@ -2,8 +2,8 @@
  * Metas de pipeline cerrado. V1 hardcoded; cuando lo necesites movemos
  * estos números a una tabla de Supabase y los editás desde la UI.
  */
-export const WEEKLY_GOAL  = 50_000
-export const MONTHLY_GOAL = 200_000
+export const WEEKLY_GOAL  = 100_000
+export const MONTHLY_GOAL = 400_000  // Junio 2026: actualizado por Fer
 
 /**
  * Días hábiles del mes (lun-vie). Aprox. 22 al mes. Usamos esto para

@@ -1710,6 +1710,13 @@ type DaptaMetrics = {
   conversiones_manuales: number  // deprecated alias — preferir llamadas_manuales
   dapta_exitosa_leads?: number   // leads únicos con llamada Dapta exitosa
   dapta_a_presentacion?: number  // de los exitosa, cuántos llegaron a presentación/liga_pago/convertido
+  // NUEVO (7-jun-2026): desglose por outcome y monetización
+  dapta_pidio_presentacion?: number
+  dapta_pidio_link_pago?: number
+  total_creditos?: number
+  total_gastado_usd?: number
+  total_gastado_mxn?: number
+  total_vendido_dapta?: number
   vambe_outbound_msgs: number
   outbound_pidio_llamada: number
   outbound_convertidos: number
@@ -1936,30 +1943,58 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           </div>
 
           {/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
-          <GroupHeader title="Daniela (Dapta)" subtitle="Llamadas de voz IA: exitosas, convertidas y agendadas en el rango." />
+          <GroupHeader title="Daniela (Dapta)" subtitle="Llamadas de voz IA: exitosas, presentación, liga de pago y convertidas. Plus costos y ROI." />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
             <KPICard
-              label="Dapta exitosas"
+              label="Llamadas exitosas"
               value={daptaMetrics ? String(daptaMetrics.dapta_exitosas) : '…'}
               sub="llamadas ≥ 3 min con análisis"
               accentColor="#22d68a"
             />
             <KPICard
-              label="Dapta convertidas"
+              label="Presentación enviada"
+              value={daptaMetrics ? String(daptaMetrics.dapta_pidio_presentacion ?? 0) : '…'}
+              sub="outcome=pidio_presentacion"
+              accentColor="#a594ff"
+            />
+            <KPICard
+              label="Liga de pago"
+              value={daptaMetrics ? String(daptaMetrics.dapta_pidio_link_pago ?? 0) : '…'}
+              sub="outcome=pidio_link_pago"
+              accentColor="#4ea8f5"
+            />
+            <KPICard
+              label="Convirtieron a pago"
               value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
               sub="leads que cerraron tras llamar"
               accentColor="#7c6af7"
             />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginTop: 14 }}>
             <KPICard
-              label="Agendadas este periodo"
-              value={daptaMetrics ? String(daptaMetrics.llamadas_agendadas) : '…'}
-              sub="con scheduled_at en el rango"
-              accentColor="#4ea8f5"
+              label="Total gastado en llamadas"
+              value={daptaMetrics ? `$${(daptaMetrics.total_gastado_usd ?? 0).toFixed(2)} USD` : '…'}
+              sub={daptaMetrics ? `${daptaMetrics.total_creditos ?? 0} créditos · 1100 cred = $1 USD` : '—'}
+              accentColor="#e85454"
             />
             <KPICard
-              label="Llamadas manuales (Fer)"
-              value={daptaMetrics ? String(daptaMetrics.llamadas_manuales ?? daptaMetrics.conversiones_manuales) : '…'}
-              sub="agendadas que no tomó Dapta"
+              label="Total vendido por Dapta"
+              value={daptaMetrics ? fmtMoney(daptaMetrics.total_vendido_dapta ?? 0) : '…'}
+              sub="suma del monto de leads convertidos vía Dapta"
+              accentColor="#22d68a"
+            />
+            <KPICard
+              label="ROI Dapta"
+              value={daptaMetrics && (daptaMetrics.total_gastado_mxn ?? 0) > 0
+                ? `${(((daptaMetrics.total_vendido_dapta ?? 0) - (daptaMetrics.total_gastado_mxn ?? 0)) / (daptaMetrics.total_gastado_mxn ?? 1)).toFixed(0)}x`
+                : '…'}
+              sub={daptaMetrics ? `gasto ≈ $${(daptaMetrics.total_gastado_mxn ?? 0).toFixed(0)} MXN @ 17/USD` : '—'}
+              accentColor="#a594ff"
+            />
+            <KPICard
+              label="Agendadas / manuales"
+              value={daptaMetrics ? `${daptaMetrics.llamadas_agendadas} · ${daptaMetrics.llamadas_manuales ?? daptaMetrics.conversiones_manuales}` : '…'}
+              sub="total agendadas · manuales Fer"
               accentColor="#f5c842"
             />
           </div>
