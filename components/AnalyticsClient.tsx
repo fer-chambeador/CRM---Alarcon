@@ -1999,33 +1999,6 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             />
           </div>
 
-          {/* ── FUNNEL DAPTA · qué pasa después de una llamada exitosa ───── */}
-          <GroupHeader title="Funnel Dapta" subtitle="De los leads que tuvieron llamada exitosa con Daniela: cuántos avanzaron a presentación/link de pago y cuántos pagaron." />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-            <KPICard
-              label="1. Llamada exitosa"
-              value={daptaMetrics ? String(daptaMetrics.dapta_exitosa_leads ?? 0) : '…'}
-              sub="leads únicos con Dapta ≥ 3 min"
-              accentColor="#22d68a"
-            />
-            <KPICard
-              label="2. Presentación o liga"
-              value={daptaMetrics ? String(daptaMetrics.dapta_a_presentacion ?? 0) : '…'}
-              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
-                ? `${Math.round(((daptaMetrics.dapta_a_presentacion ?? 0) / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% del paso 1`
-                : 'avanzaron a propuesta/pago'}
-              accentColor="#a594ff"
-            />
-            <KPICard
-              label="3. Pagaron"
-              value={daptaMetrics ? String(daptaMetrics.dapta_convertidas) : '…'}
-              sub={daptaMetrics && (daptaMetrics.dapta_exitosa_leads ?? 0) > 0
-                ? `${Math.round((daptaMetrics.dapta_convertidas / (daptaMetrics.dapta_exitosa_leads ?? 1)) * 100)}% del paso 1`
-                : 'leads que cerraron'}
-              accentColor="#7c6af7"
-            />
-          </div>
-
           {/* ── VAMBE · outbound ─────────────────────────────────────────── */}
           <GroupHeader title="Vambe outbound" subtitle="Templates de WhatsApp salientes y embudo posterior." />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>

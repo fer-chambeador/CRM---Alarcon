@@ -13,10 +13,11 @@ export const revalidate = 0
  *  - passCounts: cuántos leads pasaron por cada stage en el rango
  *  - transitions: tiempo promedio/mediana entre stages consecutivos
  *
- * Nota: para `transitions` levantamos TODOS los cambios de status del lead
- * (no filtramos por rango) porque para medir un tránsito Contactado→Propuesta
- * necesitamos los dos timestamps. El filtro de rango se aplica al RESULTADO
- * (cuándo ocurrió el segundo cambio).
+ * FIX (7-jun-2026): antes `transitions` solo cubría leads que tuvieron status
+ * change DENTRO del rango, lo que daba muy pocos casos (7-9). Ahora pulla
+ * TODOS los status changes históricos y calcula promedios globales para los
+ * 4 saltos principales del funnel. El filtro de rango sigue aplicando a
+ * passCounts (cuántos leads pasaron por cada stage en el mes).
  */
 export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
@@ -38,28 +39,23 @@ export async function GET(req: NextRequest) {
     if (s) inRange.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
   }
 
-  // Para transitions y advance: TODOS los cambios de los leads que tuvieron
-  // movimiento en el rango (optimización para no traer todo).
-  const leadIds = Array.from(new Set(inRange.map(r => r.lead_id)))
-  let transitions: ReturnType<typeof transitionStats> = []
-  let advance: Record<Lead['status'], ForwardAdvance> | Record<string, never> = {}
-  if (leadIds.length > 0) {
-    const { data: allRows, error: e2 } = await supabase
-      .from('lead_actividad')
-      .select('lead_id, descripcion, created_at')
-      .eq('tipo', 'status_change')
-      .in('lead_id', leadIds)
-      .limit(50000)
-    if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
-    const allParsed: StatusChangeRow[] = []
-    for (const r of (allRows || []) as Array<{ lead_id: string; descripcion: string | null; created_at: string }>) {
-      const s = parseStatusFromDesc(r.descripcion)
-      if (s) allParsed.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
-    }
-    transitions = transitionStats(allParsed)
-    const advMap = forwardAdvanceByStage(allParsed)
-    advance = Object.fromEntries(advMap.entries()) as Record<Lead['status'], ForwardAdvance>
+  // Para transitions y advance: TODOS los cambios de status históricos
+  // (sin filtro por rango), para tener máxima muestra estadística.
+  const { data: allRows, error: e2 } = await supabase
+    .from('lead_actividad')
+    .select('lead_id, descripcion, created_at')
+    .eq('tipo', 'status_change')
+    .limit(100000)
+  if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
+  const allParsed: StatusChangeRow[] = []
+  for (const r of (allRows || []) as Array<{ lead_id: string; descripcion: string | null; created_at: string }>) {
+    const s = parseStatusFromDesc(r.descripcion)
+    if (s) allParsed.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
   }
+  const transitions = transitionStats(allParsed)
+  const advMap = forwardAdvanceByStage(allParsed)
+  const advance: Record<Lead['status'], ForwardAdvance> | Record<string, never> =
+    Object.fromEntries(advMap.entries()) as Record<Lead['status'], ForwardAdvance>
 
   return NextResponse.json({
     range: { from: fromISO, to: toISO },
