@@ -308,6 +308,12 @@ export async function createFollowUpReminder(
     description: descLines.join('\n'),
     start: { date: startDate },
     end:   { date: endDate },
+    // FIX (8-jun-2026): transparent = NO bloquea calendario.
+    // Si dejábamos opaque (default), Vambe / Calendly / Cal.com veían el día
+    // como "busy" y rechazaban agendar llamadas — caso Sandra Monjaras
+    // +5214281123167. Estos son recordatorios, no eventos que ocupen tiempo.
+    transparency: 'transparent',
+    visibility: 'private',
     // Recordatorios populares 1 día antes + el mismo día a las 9am
     reminders: {
       useDefault: false,
