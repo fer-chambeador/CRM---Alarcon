@@ -15,6 +15,7 @@ import {
 import { phoneToState, ALL_STATES } from '@/lib/lada'
 import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
 import type { Presupuesto } from '@/lib/budget'
+import { canReactivateVambe3d, daysSinceContact } from '@/lib/leadVambe'
 import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
 import { daysInCurrentStage, agingBucket, AGING_COLOR, fmtAgingShort } from '@/lib/velocity'
 import { goalForPeriod, goalLabel } from '@/lib/goal'
@@ -281,6 +282,37 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [reactivating, setReactivating] = useState(false)
+
+  // Reactivar lead Vambe con plantilla outbound >3d.
+  // Confirma con el user antes (texto literal que pidió Fer), llama al endpoint
+  // server-side que re-valida y manda por Vambe sendMessage(). El endpoint tiene
+  // anti-doble-click de 2 min — el state local solo bloquea el botón mientras
+  // está la request en vuelo. Al éxito refresca el lead con onSave (mismo patrón
+  // que Guardar) para que la tabla refleje veces_contactado/ultimo_contacto.
+  const reactivateVambe3d = async () => {
+    if (reactivating) return
+    if (!confirm('¿Quieres mandar la plantilla vambe outbound >3 días?')) return
+    setReactivating(true)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/reactivate-vambe-3d`, { method: 'POST' })
+      const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; lead?: Lead }
+      if (!res.ok || !data.ok) {
+        alert(`No se pudo enviar la plantilla: ${explainError(data.error, res.status)}`)
+        return
+      }
+      if (data.lead) {
+        onSave(data.lead)  // refresca tabla
+        // Bump local contactos counter para que el badge se vea actualizado si
+        // el modal sigue abierto (aunque normalmente onSave + onClose lo cierran)
+        setContactos((data.lead.veces_contactado || contactos) as number)
+      }
+    } catch (e) {
+      alert(`Error de red al enviar plantilla: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setReactivating(false)
+    }
+  }
 
   const save = useCallback(async () => {
     setSaving(true)
@@ -456,6 +488,24 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
             <span className={styles.shortcutHint}>⌘S guardar · Esc cerrar</span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
+            {/* Botón "Reactivar Vambe >3d" — solo si lead es canal Vambe y lleva
+                ≥3 días sin contacto. Confirma con texto literal antes de enviar. */}
+            {canReactivateVambe3d(lead) && (() => {
+              const d = daysSinceContact(lead)
+              const dayLabel = d === null ? '—' : `${Math.floor(d)}d`
+              return (
+                <button onClick={reactivateVambe3d} disabled={reactivating}
+                  style={{
+                    background: reactivating ? 'rgba(124, 84, 232, 0.4)' : 'linear-gradient(135deg, #7c54e8, #5e3dd1)',
+                    color: 'white', border: 'none', cursor: reactivating ? 'wait' : 'pointer',
+                    padding: '8px 14px', borderRadius: 8,
+                    fontSize: 13, fontWeight: 700,
+                  }}
+                  title={`Manda la plantilla de reactivación por Vambe — ${dayLabel} sin contacto`}>
+                  {reactivating ? 'Enviando…' : `🔁 Reactivar Vambe (${dayLabel})`}
+                </button>
+              )
+            })()}
             <button className={styles.cancelBtn} onClick={onClose}>Cancelar</button>
             <button className={styles.saveBtn} onClick={save} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</button>
           </div>

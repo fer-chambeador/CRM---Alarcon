@@ -6,6 +6,7 @@ import { Sidebar } from './CommandCenter'
 import styles from './LeadDetailClient.module.css'
 import { STATUS_LABELS, statusColor, fmtMoney } from '@/lib/status'
 import type { Lead } from '@/lib/supabase'
+import { canReactivateVambe3d, daysSinceContact } from '@/lib/leadVambe'
 import { format, formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
 
@@ -42,6 +43,35 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
   const [lead, setLead] = useState<Lead | null>(null)
   const [activity, setActivity] = useState<Actividad[]>([])
   const [loading, setLoading] = useState(true)
+  const [reactivating, setReactivating] = useState(false)
+
+  // Reactivar lead Vambe con plantilla outbound >3d. Confirma con el user,
+  // postea al endpoint, refresca el lead y timeline. Anti-doble: el endpoint
+  // tiene su propio guard de 2 min — el state local solo bloquea el botón
+  // mientras hay request en vuelo.
+  const reactivateVambe3d = async () => {
+    if (!lead || reactivating) return
+    if (!confirm('¿Quieres mandar la plantilla vambe outbound >3 días?')) return
+    setReactivating(true)
+    try {
+      const res = await fetch(`/api/leads/${leadId}/reactivate-vambe-3d`, { method: 'POST' })
+      const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; lead?: Lead }
+      if (!res.ok || !data.ok) {
+        alert(`No se pudo enviar la plantilla: ${data.error || `HTTP ${res.status}`}`)
+        return
+      }
+      if (data.lead) setLead(data.lead)
+      // Refrescar timeline para mostrar la actividad recién insertada
+      try {
+        const a = await fetch(`/api/leads/${leadId}/actividad`).then(r => r.ok ? r.json() : [])
+        if (Array.isArray(a)) setActivity(a)
+      } catch { /* no-op: timeline puede recargarse en el próximo render */ }
+    } catch (e) {
+      alert(`Error de red al enviar plantilla: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setReactivating(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -152,6 +182,27 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
                   title={contactId ? 'Abre el chat en Vambe' : 'Abre el pipeline de Vambe filtrado por el teléfono'}>
                   💬 Ir al chat ↗
                 </a>
+              )
+            })()}
+            {/* Botón "Reactivar Vambe >3d" — solo aparece si lead vino por Vambe
+                y lleva >=3 días sin contacto. Manda un mensaje plantilla por
+                Vambe sendMessage() (texto plano) con confirmación. El endpoint
+                /api/leads/[id]/reactivate-vambe-3d valida server-side. */}
+            {canReactivateVambe3d(lead) && (() => {
+              const d = daysSinceContact(lead)
+              const dayLabel = d === null ? 'sin contacto registrado' : `hace ${Math.floor(d)}d`
+              return (
+                <button onClick={reactivateVambe3d} disabled={reactivating}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    background: reactivating ? 'rgba(124, 84, 232, 0.4)' : 'linear-gradient(135deg, #7c54e8, #5e3dd1)',
+                    color: 'white', border: 'none', cursor: reactivating ? 'wait' : 'pointer',
+                    padding: '8px 16px', borderRadius: 8,
+                    fontSize: 13, fontWeight: 700,
+                  }}
+                  title={`Manda la plantilla de reactivación (>3d) por Vambe — ${dayLabel}`}>
+                  {reactivating ? 'Enviando…' : `🔁 Reactivar Vambe (${dayLabel})`}
+                </button>
               )
             })()}
           </div>
