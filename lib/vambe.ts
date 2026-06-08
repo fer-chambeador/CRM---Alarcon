@@ -269,17 +269,61 @@ export async function listPipelines(): Promise<{ pipelines: VambePipeline[]; raw
   return { pipelines, raw }
 }
 
-// ─── Send raw message (no template) ─────────────────────────────────────
+// ─── Get web-whatsapp channel (incluye phoneId del canal QR) ───────────
+/**
+ * Obtiene el canal `web-whatsapp` (QR / WhatsApp Web) registrado en Vambe.
+ * El `phoneId` que retorna se usa para enviar mensajes raw vía
+ * /api/public/web-whatsapp-message/send/{phoneId}/message.
+ *
+ * Cachea en memory por proceso porque Vambe no lo cambia entre llamadas.
+ */
+type VambeChannel = { id?: string; phoneId?: string; phone_id?: string; phone?: string; [k: string]: unknown }
+let _webWhatsappChannelCache: VambeChannel | null = null
+export async function getWebWhatsappChannel(): Promise<VambeChannel> {
+  if (_webWhatsappChannelCache) return _webWhatsappChannelCache
+  const raw = await vambeFetch('GET', '/api/public/channels/web-whatsapp') as
+    | VambeChannel
+    | { channel?: VambeChannel; data?: VambeChannel }
+  const ch = (raw && typeof raw === 'object' && 'channel' in raw && raw.channel)
+    ? raw.channel
+    : (raw && typeof raw === 'object' && 'data' in raw && raw.data)
+      ? raw.data
+      : raw as VambeChannel
+  _webWhatsappChannelCache = ch
+  return ch
+}
+
+// ─── Send raw message (free-form, sin template) ─────────────────────────
+/**
+ * Envía un mensaje raw por WhatsApp QR (canal `web-whatsapp`).
+ *
+ * Doc: https://docs.vambe.me/api-reference/publicweb-whatsapp-message/send-a-message
+ * Endpoint: POST /api/public/web-whatsapp-message/send/{phoneId}/message
+ *
+ * NOTE: el path correcto NO es `/web-whatsapp/message/send` (404). El correcto
+ * es `/web-whatsapp-message/send/{phoneId}/message`. `phoneId` lo conseguimos
+ * llamando antes a /api/public/channels/web-whatsapp.
+ *
+ * Si la cuenta de Vambe NO tiene canal `web-whatsapp` configurado (solo
+ * WhatsApp Business via Meta), este endpoint dará 404 y debes usar
+ * `sendTemplate` con un template aprobado.
+ */
 export async function sendMessage(params: {
   phone: string
   message: string
+  stageId?: string
 }): Promise<unknown> {
-  const channelPhone = process.env.VAMBE_CHANNEL_PHONE
-  if (!channelPhone) throw new Error('VAMBE_CHANNEL_PHONE no configurada')
-  return vambeFetch('POST', '/api/public/web-whatsapp/message/send', {
+  const channel = await getWebWhatsappChannel()
+  const phoneId = channel.phoneId || channel.phone_id || channel.id
+  if (!phoneId) {
+    throw new Error('Vambe no devolvió phoneId del canal web-whatsapp (revisa /api/public/channels/web-whatsapp)')
+  }
+  // x-api-key va como QUERY param en este endpoint (no header) — así dicen los docs.
+  return vambeFetch('POST', `/api/public/web-whatsapp-message/send/${encodeURIComponent(phoneId)}/message`, {
+    headerKey: false,
+    query: { stage: params.stageId },
     body: {
-      from_phone_number: channelPhone,
-      to_phone_number: normalizePhone(params.phone),
+      phone_number: normalizePhone(params.phone),
       message: params.message,
     },
   })
