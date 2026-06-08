@@ -45,8 +45,14 @@ function explainError(rawError: string | number | undefined, status: number | un
   if (e.includes('already-called') || e.includes('llamada ya disparada')) {
     return 'Este lead ya tiene una llamada en curso o reciente. Cancela o espera a que termine.'
   }
+  // Vambe channel sin phoneId — mostramos el error completo (que incluye las keys
+  // que devolvió Vambe) para poder diagnosticar qué campo usar. NO mencionamos
+  // Dapta porque este endpoint solo habla con Vambe.
+  if (e.includes('web-whatsapp') || e.includes('phoneid')) {
+    return `Vambe: ${rawError}. Probablemente tu cuenta no tiene canal WhatsApp QR conectado, solo Business API → necesitas un template aprobado.`
+  }
   if (status === 502) {
-    return `Vambe/Dapta no respondió bien: ${rawError || 'sin detalles'}. Reintenta en 30s; si sigue, revisa Settings → Webhooks.`
+    return `Vambe no respondió bien: ${rawError || 'sin detalles'}. Reintenta en 30s; si sigue, revisa Settings → Webhooks.`
   }
   if (status === 500 || status === 503) {
     return `Error del servidor: ${rawError || 'desconocido'}. Reintenta. Si sigue, avisa al equipo de tech.`
