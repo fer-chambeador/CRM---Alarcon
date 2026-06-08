@@ -277,17 +277,41 @@ export async function listPipelines(): Promise<{ pipelines: VambePipeline[]; raw
  *
  * Cachea en memory por proceso porque Vambe no lo cambia entre llamadas.
  */
-type VambeChannel = { id?: string; phoneId?: string; phone_id?: string; phone?: string; [k: string]: unknown }
+type VambeChannel = {
+  id?: string
+  phoneId?: string
+  phone_id?: string
+  phone?: string
+  phone_number?: string
+  channel_phone_number?: string
+  identifier?: string
+  channel_id?: string
+  channelId?: string
+  [k: string]: unknown
+}
 let _webWhatsappChannelCache: VambeChannel | null = null
 export async function getWebWhatsappChannel(): Promise<VambeChannel> {
   if (_webWhatsappChannelCache) return _webWhatsappChannelCache
   const raw = await vambeFetch('GET', '/api/public/channels/web-whatsapp') as Record<string, unknown>
   // Vambe a veces devuelve el channel directo, a veces wrap en { channel } o { data }.
-  // Tomamos el primer nodo que parece canal (objeto). Cast explícito al final.
   const nested = (raw?.channel ?? raw?.data) as Record<string, unknown> | undefined
   const ch = (nested && typeof nested === 'object' ? nested : raw) as VambeChannel
   _webWhatsappChannelCache = ch
   return ch
+}
+
+/**
+ * Extrae el phoneId del channel response, probando todos los campos comunes
+ * que Vambe puede devolver. Si no encuentra ninguno, retorna null.
+ */
+function pickPhoneId(ch: VambeChannel): string | null {
+  return (ch.phoneId
+    || ch.phone_id
+    || ch.channelId
+    || ch.channel_id
+    || ch.identifier
+    || ch.id
+    || null) as string | null
 }
 
 // ─── Send raw message (free-form, sin template) ─────────────────────────
@@ -311,9 +335,14 @@ export async function sendMessage(params: {
   stageId?: string
 }): Promise<unknown> {
   const channel = await getWebWhatsappChannel()
-  const phoneId = channel.phoneId || channel.phone_id || channel.id
+  const phoneId = pickPhoneId(channel)
   if (!phoneId) {
-    throw new Error('Vambe no devolvió phoneId del canal web-whatsapp (revisa /api/public/channels/web-whatsapp)')
+    // Loggeamos la shape completa al server log + incluímos en el error para
+    // que veamos en el toast del frontend qué keys devolvió Vambe y poder
+    // ajustar `pickPhoneId()` con el campo correcto.
+    const keys = Object.keys(channel || {})
+    console.error('[vambe] channel web-whatsapp sin phoneId. Keys recibidas:', keys, 'Channel:', channel)
+    throw new Error(`Vambe channel web-whatsapp sin phoneId. Keys: [${keys.join(', ')}]. Sample: ${JSON.stringify(channel).slice(0, 300)}`)
   }
   // x-api-key va como QUERY param en este endpoint (no header) — así dicen los docs.
   return vambeFetch('POST', `/api/public/web-whatsapp-message/send/${encodeURIComponent(phoneId)}/message`, {
