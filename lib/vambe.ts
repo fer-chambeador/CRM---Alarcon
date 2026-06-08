@@ -281,14 +281,11 @@ type VambeChannel = { id?: string; phoneId?: string; phone_id?: string; phone?: 
 let _webWhatsappChannelCache: VambeChannel | null = null
 export async function getWebWhatsappChannel(): Promise<VambeChannel> {
   if (_webWhatsappChannelCache) return _webWhatsappChannelCache
-  const raw = await vambeFetch('GET', '/api/public/channels/web-whatsapp') as
-    | VambeChannel
-    | { channel?: VambeChannel; data?: VambeChannel }
-  const ch = (raw && typeof raw === 'object' && 'channel' in raw && raw.channel)
-    ? raw.channel
-    : (raw && typeof raw === 'object' && 'data' in raw && raw.data)
-      ? raw.data
-      : raw as VambeChannel
+  const raw = await vambeFetch('GET', '/api/public/channels/web-whatsapp') as Record<string, unknown>
+  // Vambe a veces devuelve el channel directo, a veces wrap en { channel } o { data }.
+  // Tomamos el primer nodo que parece canal (objeto). Cast explícito al final.
+  const nested = (raw?.channel ?? raw?.data) as Record<string, unknown> | undefined
+  const ch = (nested && typeof nested === 'object' ? nested : raw) as VambeChannel
   _webWhatsappChannelCache = ch
   return ch
 }
