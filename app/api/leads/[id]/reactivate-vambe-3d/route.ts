@@ -149,9 +149,16 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       ultimo_contacto: new Date().toISOString(),
       veces_contactado: (lead.veces_contactado || 0) + 1,
     }
-    // No movemos status — el lead sigue en su etapa Lanzamiento hasta que
-    // responda al quick reply (Outbound se encarga del cambio de etapa
-    // via función "Cambiar etapa a Llamadas 📞" o "Cambiar etapa a Perdidos").
+    // FIX (8-jun-2026, Fer): "se actualiza a '1er contacto' pero no cambia de
+    // Nuevo a Contactado". Si el lead estaba en status 'nuevo' y le mandamos
+    // el template, ya hubo un contacto outbound → debe moverse a 'contactado'.
+    // Mismo comportamiento que /quick-action 'message' (line 135-138).
+    // NO movemos a etapas más avanzadas (eso lo hace el Outbound asistente
+    // cuando el lead responde al quick reply).
+    if (lead.status === 'nuevo') {
+      updates.status = 'contactado'
+      updates.status_changed_at = new Date().toISOString()
+    }
 
     const { data: updatedLead } = await supabase
       .from('leads')
