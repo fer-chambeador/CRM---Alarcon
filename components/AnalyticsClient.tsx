@@ -1557,25 +1557,24 @@ function TiemposConversionTimeline({ movement, cycle }: {
   movement: MovementData | null
   cycle: ReturnType<typeof cycleStats>
 }) {
-  // Saltos del funnel COMPLETO (8-jun-2026): antes solo 4 saltos brincaban etapas
-  // intermedias importantes (Dapta, llamada agendada, liga de pago). Ahora
-  // listamos los 7 saltos del flujo real:
-  //   nuevo → contactado → llamada_con_dapta → llamada_agendada
-  //         → presentacion_enviada → espera_aprobacion → liga_pago_enviada → convertido
-  // Si una transición no tiene casos en el rango, se muestra "sin datos" en vez
-  // de ocultarla — así el funcionamiento del funnel queda explícito.
-  const JUMPS: Array<{ from: Lead['status']; to: Lead['status']; fromLabel: string; toLabel: string; fromIcon: string; toIcon: string }> = [
-    { from: 'nuevo',                 to: 'contactado',           fromIcon: '✨', toIcon: '📞', fromLabel: 'Nuevo',                toLabel: 'Contactado'           },
-    { from: 'contactado',            to: 'llamada_con_dapta',    fromIcon: '📞', toIcon: '🤖', fromLabel: 'Contactado',           toLabel: 'Llamada con Dapta'    },
-    { from: 'llamada_con_dapta',     to: 'llamada_agendada',     fromIcon: '🤖', toIcon: '📅', fromLabel: 'Llamada con Dapta',    toLabel: 'Llamada agendada'     },
-    { from: 'llamada_agendada',      to: 'presentacion_enviada', fromIcon: '📅', toIcon: '📨', fromLabel: 'Llamada agendada',     toLabel: 'Propuesta enviada'    },
-    { from: 'presentacion_enviada',  to: 'espera_aprobacion',    fromIcon: '📨', toIcon: '⏳', fromLabel: 'Propuesta enviada',    toLabel: 'Espera de aprobación' },
-    { from: 'espera_aprobacion',     to: 'liga_pago_enviada',    fromIcon: '⏳', toIcon: '💳', fromLabel: 'Espera de aprobación', toLabel: 'Liga de pago enviada' },
-    { from: 'liga_pago_enviada',     to: 'convertido',           fromIcon: '💳', toIcon: '✅', fromLabel: 'Liga de pago enviada', toLabel: 'Convertido'           },
+  // 4 saltos LÓGICOS del funnel definidos por Fer (9-jun-2026). NO son
+  // consecutivos — el último "Propuesta enviada → Convertido" engloba leads
+  // que pasaron por espera_aprobacion y/o liga_pago_enviada antes de cerrar.
+  // Los datos vienen de `movement.funnel` (calculado en backend con
+  // funnelTransitionStats, que busca primera ocurrencia de from y luego
+  // primera ocurrencia de to sin importar status intermedios).
+  const JUMPS: Array<{ from: Lead['status']; to: Lead['status']; fromLabel: string; toLabel: string; fromIcon: string; toIcon: string; subtitle?: string }> = [
+    { from: 'nuevo',                 to: 'contactado',           fromIcon: '✨', toIcon: '📞', fromLabel: 'Nuevo',             toLabel: 'Contactado'        },
+    { from: 'contactado',            to: 'llamada_agendada',     fromIcon: '📞', toIcon: '📅', fromLabel: 'Contactado',        toLabel: 'Llamada agendada'  },
+    { from: 'llamada_agendada',      to: 'presentacion_enviada', fromIcon: '📅', toIcon: '📨', fromLabel: 'Llamada agendada',  toLabel: 'Propuesta enviada' },
+    { from: 'presentacion_enviada',  to: 'convertido',           fromIcon: '📨', toIcon: '✅', fromLabel: 'Propuesta enviada', toLabel: 'Convertido', subtitle: 'incluye espera de aprobación + liga de pago' },
   ]
 
   const rows = JUMPS.map(j => {
-    const stat = movement?.transitions.find(t => t.from === j.from && t.to === j.to)
+    // Buscar primero en `funnel` (saltos lógicos del backend), fallback a
+    // `transitions` (consecutivos) si funnel no está disponible (deploy viejo).
+    const stat = movement?.funnel?.find(t => t.from === j.from && t.to === j.to)
+      || movement?.transitions.find(t => t.from === j.from && t.to === j.to)
     return {
       ...j,
       avgDays: stat?.avgDays ?? null,
@@ -1624,7 +1623,12 @@ function TiemposConversionTimeline({ movement, cycle }: {
             {/* To */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 18 }}>{r.toIcon}</span>
-              <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{r.toLabel}</span>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{r.toLabel}</span>
+                {r.subtitle && (
+                  <span style={{ fontSize: 10.5, color: 'var(--text3)', fontStyle: 'italic', marginTop: 1 }}>{r.subtitle}</span>
+                )}
+              </div>
             </div>
             {/* Días */}
             <div style={{ textAlign: 'right', minWidth: 130 }}>
@@ -1707,6 +1711,7 @@ function VelocidadCierreCard({ cycle }: { cycle: ReturnType<typeof cycleStats> }
 type MovementData = {
   passCounts: StagePassCount[]
   transitions: TransitionStats[]
+  funnel?: TransitionStats[]   // saltos lógicos del funnel (no consecutivos)
   advance: Partial<Record<Lead['status'], ForwardAdvance>>
   sample_size: number
 }

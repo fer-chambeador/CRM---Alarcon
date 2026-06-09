@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { parseStatusFromDesc, passCounts, transitionStats, forwardAdvanceByStage, type StatusChangeRow, type ForwardAdvance } from '@/lib/statusHistory'
+import { parseStatusFromDesc, passCounts, transitionStats, funnelTransitionStats, forwardAdvanceByStage, type StatusChangeRow, type ForwardAdvance } from '@/lib/statusHistory'
 import type { Lead } from '@/lib/supabase'
+
+/**
+ * Saltos lógicos del funnel definidos por Fer (9-jun-2026):
+ * Estos saltos no son estrictamente consecutivos — el #4 engloba
+ * presentacion_enviada → espera_aprobacion → liga_pago_enviada → convertido.
+ */
+const FUNNEL_JUMPS: Array<{ from: Lead['status']; to: Lead['status'] }> = [
+  { from: 'nuevo',                to: 'contactado'           },
+  { from: 'contactado',           to: 'llamada_agendada'     },
+  { from: 'llamada_agendada',     to: 'presentacion_enviada' },
+  { from: 'presentacion_enviada', to: 'convertido'           },
+]
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -53,6 +65,9 @@ export async function GET(req: NextRequest) {
     if (s) allParsed.push({ lead_id: r.lead_id, to_status: s, changed_at: r.created_at })
   }
   const transitions = transitionStats(allParsed)
+  // Saltos lógicos del funnel (no consecutivos) — para "Tiempos de conversión"
+  // donde un paso del funnel engloba múltiples status técnicos.
+  const funnel = funnelTransitionStats(allParsed, FUNNEL_JUMPS)
   const advMap = forwardAdvanceByStage(allParsed)
   const advance: Record<Lead['status'], ForwardAdvance> | Record<string, never> =
     Object.fromEntries(advMap.entries()) as Record<Lead['status'], ForwardAdvance>
@@ -61,6 +76,7 @@ export async function GET(req: NextRequest) {
     range: { from: fromISO, to: toISO },
     passCounts: passCounts(inRange),
     transitions,
+    funnel,
     advance,
     sample_size: inRange.length,
   })

@@ -184,3 +184,64 @@ export function transitionStats(rows: StatusChangeRow[]): TransitionStats[] {
   // Ordenar por count desc (las transiciones más frecuentes primero).
   return out.sort((a, b) => b.count - a.count)
 }
+
+/**
+ * Saltos LÓGICOS del funnel — no estrictamente consecutivos.
+ *
+ * Diferencia con `transitionStats`: aquella solo cuenta pares directos
+ * (status[i] → status[i+1]). Si un lead va `presentacion_enviada →
+ * espera_aprobacion → liga_pago_enviada → convertido`, la transición
+ * `presentacion_enviada → convertido` NO se cuenta ahí.
+ *
+ * Esta función cuenta saltos del funnel ignorando intermedios. Para cada
+ * par {from, to}, busca por lead la PRIMERA vez que tocó `from` y la
+ * PRIMERA vez (posterior) que tocó `to`. Si ambas existen y to > from,
+ * registra los días entre las dos.
+ *
+ * Útil cuando los pasos lógicos del funnel "engloban" varios status
+ * técnicos. Ej: Fer define el funnel como Nuevo→Contactado→Llamada
+ * agendada→Propuesta enviada→Convertido, pero "Convertido" puede pasar
+ * por espera_aprobacion + liga_pago_enviada antes — todos esos llegan
+ * al funnel paso 4.
+ */
+export function funnelTransitionStats(
+  rows: StatusChangeRow[],
+  jumps: Array<{ from: Lead['status']; to: Lead['status'] }>
+): TransitionStats[] {
+  const byLead = new Map<string, StatusChangeRow[]>()
+  for (const r of rows) {
+    const arr = byLead.get(r.lead_id) || []
+    arr.push(r)
+    byLead.set(r.lead_id, arr)
+  }
+  // Ordenar cada lead por tiempo asc.
+  for (const arr of Array.from(byLead.values())) {
+    arr.sort((a, b) => a.changed_at.localeCompare(b.changed_at))
+  }
+
+  const out: TransitionStats[] = []
+  for (const { from, to } of jumps) {
+    const days: number[] = []
+    for (const arr of Array.from(byLead.values())) {
+      // Primera ocurrencia de `from`
+      const idxFrom = arr.findIndex(r => r.to_status === from)
+      if (idxFrom === -1) continue
+      // Primera ocurrencia de `to` DESPUÉS de la primera `from`
+      const idxTo = arr.findIndex((r, i) => i > idxFrom && r.to_status === to)
+      if (idxTo === -1) continue
+      const t1 = new Date(arr[idxFrom].changed_at).getTime()
+      const t2 = new Date(arr[idxTo].changed_at).getTime()
+      const d = (t2 - t1) / DAY_MS
+      if (d >= 0) days.push(d)
+    }
+    out.push({
+      from,
+      to,
+      label: `${STATUS_LABELS[from]} → ${STATUS_LABELS[to]}`,
+      count: days.length,
+      avgDays: days.length ? days.reduce((a, b) => a + b, 0) / days.length : 0,
+      medianDays: median(days),
+    })
+  }
+  return out
+}
