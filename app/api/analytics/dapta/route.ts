@@ -159,21 +159,34 @@ export async function GET(req: NextRequest) {
   let outboundPidioLlamada = 0
   let outboundConvertidos = 0
   if (outboundLeadIds.length > 0) {
-    const { data: outboundLeadsData } = await supabase
-      .from('leads')
-      .select('id, status')
-      .in('id', outboundLeadIds)
+    // FIX (9-jun-2026, Fer): cuando outboundLeadIds creció a >~400 con el fix
+    // de contar reactivate_3d_sent, el .in('id', [...UUIDs]) excedía el
+    // límite de tamaño de URL de Supabase (~16KB) y devolvía null silencioso
+    // → los counters se quedaban en 0 (de ahí el "0 pidieron llamada / 0
+    // convertidos" aunque la DB sí tenía 46 y 9). Solución: chunking de 100
+    // ids por query y concatenar resultados.
+    const CHUNK_SIZE = 100
+    const allLeads: Array<{ id: string; status: string }> = []
+    for (let i = 0; i < outboundLeadIds.length; i += CHUNK_SIZE) {
+      const chunk = outboundLeadIds.slice(i, i + CHUNK_SIZE)
+      const { data: chunkData } = await supabase
+        .from('leads')
+        .select('id, status')
+        .in('id', chunk)
+      if (chunkData) allLeads.push(...(chunkData as Array<{ id: string; status: string }>))
+    }
     const POST_LLAMADA = new Set([
       'llamada_agendada',
       'llamada_con_dapta',
       'no_show_llamada',
       'presentacion_enviada',
       'espera_aprobacion',
+      'liga_pago_enviada',
       'convertido',
       'cliente_recurrente',
     ])
     const CERRADOS = new Set(['convertido', 'cliente_recurrente'])
-    for (const l of ((outboundLeadsData ?? []) as Array<{ id: string; status: string }>)) {
+    for (const l of allLeads) {
       if (POST_LLAMADA.has(l.status)) outboundPidioLlamada++
       if (CERRADOS.has(l.status))     outboundConvertidos++
     }
