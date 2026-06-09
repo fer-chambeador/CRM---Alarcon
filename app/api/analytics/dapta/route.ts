@@ -130,10 +130,15 @@ export async function GET(req: NextRequest) {
   const llamadasManuales = Math.max(0, (llamadasAgendadas ?? 0) - (daptaDisparadas ?? 0))
 
   // ── 5. Vambe outbound mensajes enviados ──
+  // FIX (9-jun-2026, Fer): antes solo contábamos `template_sent` (los disparados
+  // por el botón "Mensaje" de la tabla). Faltaba `reactivate_3d_sent` (los del
+  // nuevo botón "Reactivar Vambe >3d" con la plantilla aprobada por Meta).
+  // Ambos son envíos outbound de Vambe — los contamos juntos.
+  const OUTBOUND_TIPOS = ['template_sent', 'reactivate_3d_sent']
   let qMsgs = supabase
     .from('lead_actividad')
     .select('id', { count: 'exact', head: true })
-    .eq('tipo', 'template_sent')
+    .in('tipo', OUTBOUND_TIPOS)
   if (from) qMsgs = qMsgs.gte('created_at', from)
   qMsgs = qMsgs.lte('created_at', to)
   const { count: vambeOutboundMsgs } = await qMsgs
@@ -142,7 +147,7 @@ export async function GET(req: NextRequest) {
   let qOutboundActs = supabase
     .from('lead_actividad')
     .select('lead_id')
-    .eq('tipo', 'template_sent')
+    .in('tipo', OUTBOUND_TIPOS)
     .not('lead_id', 'is', null)
   if (from) qOutboundActs = qOutboundActs.gte('created_at', from)
   qOutboundActs = qOutboundActs.lte('created_at', to)
