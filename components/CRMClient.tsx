@@ -500,7 +500,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 ≥3 días sin contacto. Confirma con texto literal antes de enviar. */}
             {canReactivateVambe3d(lead) && (() => {
               const d = daysSinceContact(lead)
-              const dayLabel = d === null ? '—' : `${Math.floor(d)}d`
+              const dayLabel = d === null ? null : `${Math.floor(d)}d`
               return (
                 <button onClick={reactivateVambe3d} disabled={reactivating}
                   style={{
@@ -509,8 +509,8 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                     padding: '8px 14px', borderRadius: 8,
                     fontSize: 13, fontWeight: 700,
                   }}
-                  title={`Manda la plantilla de reactivación por Vambe — ${dayLabel} sin contacto`}>
-                  {reactivating ? 'Enviando…' : `🔁 Reactivar Vambe (${dayLabel})`}
+                  title={`Manda la plantilla de reactivación por Vambe${dayLabel ? ` — ${dayLabel} sin contacto` : ' (nunca contactado)'}`}>
+                  {reactivating ? 'Enviando…' : (dayLabel ? `🔁 Reactivar Vambe (${dayLabel})` : '🔁 Reactivar Vambe')}
                 </button>
               )
             })()}
@@ -1045,11 +1045,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           // sin contacto). Mismo botón en la tabla — sin escondidos.
                           const isReactivar = canReactivateVambe3d(lead)
                           const d = daysSinceContact(lead)
-                          const dayLabel = d === null ? '—' : `${Math.floor(d)}d`
+                          const dayLabel = d === null ? null : `${Math.floor(d)}d`
                           return (
                             <button
                               title={!lead.telefono ? 'lead sin teléfono'
-                                : isReactivar ? `Mandar plantilla de reactivación Vambe (${dayLabel} sin contacto)`
+                                : isReactivar ? `Mandar plantilla de reactivación Vambe${dayLabel ? ` (${dayLabel} sin contacto)` : ' (nunca contactado)'}`
                                 : `Mandar mensaje Vambe a ${lead.telefono}`}
                               disabled={!lead.telefono}
                               onClick={async () => {
@@ -1080,7 +1080,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                                 padding: '4px 10px', borderRadius: 6,
                                 fontSize: 11, fontWeight: 600, cursor: 'pointer',
                                 opacity: lead.telefono ? 1 : 0.4,
-                              }}>{isReactivar ? `🔁 Reactivar Vambe (${dayLabel})` : '📨 Mensaje'}</button>
+                              }}>{isReactivar ? (dayLabel ? `🔁 Reactivar Vambe (${dayLabel})` : '🔁 Reactivar Vambe') : '📨 Mensaje'}</button>
                           )
                         })()}
                         <button

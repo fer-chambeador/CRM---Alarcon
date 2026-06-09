@@ -190,7 +190,7 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
                 /api/leads/[id]/reactivate-vambe-3d valida server-side. */}
             {canReactivateVambe3d(lead) && (() => {
               const d = daysSinceContact(lead)
-              const dayLabel = d === null ? 'sin contacto registrado' : `hace ${Math.floor(d)}d`
+              const dayLabel = d === null ? null : `hace ${Math.floor(d)}d`
               return (
                 <button onClick={reactivateVambe3d} disabled={reactivating}
                   style={{
@@ -200,8 +200,8 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
                     padding: '8px 16px', borderRadius: 8,
                     fontSize: 13, fontWeight: 700,
                   }}
-                  title={`Manda la plantilla de reactivación (>3d) por Vambe — ${dayLabel}`}>
-                  {reactivating ? 'Enviando…' : `🔁 Reactivar Vambe (${dayLabel})`}
+                  title={`Manda la plantilla de reactivación (>3d) por Vambe${dayLabel ? ` — ${dayLabel}` : ' (sin contacto registrado)'}`}>
+                  {reactivating ? 'Enviando…' : (dayLabel ? `🔁 Reactivar Vambe (${dayLabel})` : '🔁 Reactivar Vambe')}
                 </button>
               )
             })()}
