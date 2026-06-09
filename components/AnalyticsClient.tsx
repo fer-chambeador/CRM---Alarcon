@@ -1557,12 +1557,21 @@ function TiemposConversionTimeline({ movement, cycle }: {
   movement: MovementData | null
   cycle: ReturnType<typeof cycleStats>
 }) {
-  // Saltos principales del funnel
+  // Saltos del funnel COMPLETO (8-jun-2026): antes solo 4 saltos brincaban etapas
+  // intermedias importantes (Dapta, llamada agendada, liga de pago). Ahora
+  // listamos los 7 saltos del flujo real:
+  //   nuevo → contactado → llamada_con_dapta → llamada_agendada
+  //         → presentacion_enviada → espera_aprobacion → liga_pago_enviada → convertido
+  // Si una transición no tiene casos en el rango, se muestra "sin datos" en vez
+  // de ocultarla — así el funcionamiento del funnel queda explícito.
   const JUMPS: Array<{ from: Lead['status']; to: Lead['status']; fromLabel: string; toLabel: string; fromIcon: string; toIcon: string }> = [
     { from: 'nuevo',                 to: 'contactado',           fromIcon: '✨', toIcon: '📞', fromLabel: 'Nuevo',                toLabel: 'Contactado'           },
-    { from: 'contactado',            to: 'presentacion_enviada', fromIcon: '📞', toIcon: '📨', fromLabel: 'Contactado',           toLabel: 'Propuesta enviada'    },
+    { from: 'contactado',            to: 'llamada_con_dapta',    fromIcon: '📞', toIcon: '🤖', fromLabel: 'Contactado',           toLabel: 'Llamada con Dapta'    },
+    { from: 'llamada_con_dapta',     to: 'llamada_agendada',     fromIcon: '🤖', toIcon: '📅', fromLabel: 'Llamada con Dapta',    toLabel: 'Llamada agendada'     },
+    { from: 'llamada_agendada',      to: 'presentacion_enviada', fromIcon: '📅', toIcon: '📨', fromLabel: 'Llamada agendada',     toLabel: 'Propuesta enviada'    },
     { from: 'presentacion_enviada',  to: 'espera_aprobacion',    fromIcon: '📨', toIcon: '⏳', fromLabel: 'Propuesta enviada',    toLabel: 'Espera de aprobación' },
-    { from: 'espera_aprobacion',     to: 'convertido',           fromIcon: '⏳', toIcon: '✅', fromLabel: 'Espera de aprobación', toLabel: 'Convertido'           },
+    { from: 'espera_aprobacion',     to: 'liga_pago_enviada',    fromIcon: '⏳', toIcon: '💳', fromLabel: 'Espera de aprobación', toLabel: 'Liga de pago enviada' },
+    { from: 'liga_pago_enviada',     to: 'convertido',           fromIcon: '💳', toIcon: '✅', fromLabel: 'Liga de pago enviada', toLabel: 'Convertido'           },
   ]
 
   const rows = JUMPS.map(j => {
