@@ -309,9 +309,11 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
       }
       if (data.lead) {
         onSave(data.lead)  // refresca tabla
-        // Bump local contactos counter para que el badge se vea actualizado si
-        // el modal sigue abierto (aunque normalmente onSave + onClose lo cierran)
+        // Bump local state para que el modal abierto refleje los cambios sin
+        // tener que cerrar+abrir. FIX (9-jun-2026, Fer): antes el form.status
+        // se quedaba en el viejo aunque la DB diga 'contactado'.
         setContactos((data.lead.veces_contactado || contactos) as number)
+        setForm(f => ({ ...f, status: (data.lead as Lead).status }))
       }
     } catch (e) {
       alert(`Error de red al enviar plantilla: ${e instanceof Error ? e.message : String(e)}`)
@@ -1037,30 +1039,50 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                     <td className={styles.timeCell}>{formatFecha(lead.created_at)}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          title={lead.telefono ? `Mandar mensaje Vambe a ${lead.telefono}` : 'lead sin teléfono'}
-                          disabled={!lead.telefono}
-                          onClick={async () => {
-                            // Audit #6: removido el confirm nativo — anti-doble-click ya está
-                            // en el endpoint (2 min) y el confirm sumaba 1 click sin agregar safety real.
-                            const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
-                              method: 'POST',
-                              headers: { 'content-type': 'application/json' },
-                              body: JSON.stringify({ action: 'message' }),
-                            })
-                            const data = await res.json()
-                            if (!data.ok) { alert(explainError(data.error, res.status)); return }
-                            // Audit #5: el endpoint ahora devuelve el lead actualizado,
-                            // no necesitamos el segundo fetch.
-                            if (data.lead && data.lead.id) handleSave(data.lead as Lead)
-                          }}
-                          style={{
-                            background: 'linear-gradient(135deg, #22d68a, #1ab574)',
-                            color: 'white', border: 'none',
-                            padding: '4px 10px', borderRadius: 6,
-                            fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                            opacity: lead.telefono ? 1 : 0.4,
-                          }}>📨 Mensaje</button>
+                        {(() => {
+                          // 9-jun-2026 (Fer): el botón "Mensaje" se transforma en
+                          // "Reactivar Vambe" cuando el lead aplica (canal Vambe + ≥3d
+                          // sin contacto). Mismo botón en la tabla — sin escondidos.
+                          const isReactivar = canReactivateVambe3d(lead)
+                          const d = daysSinceContact(lead)
+                          const dayLabel = d === null ? '—' : `${Math.floor(d)}d`
+                          return (
+                            <button
+                              title={!lead.telefono ? 'lead sin teléfono'
+                                : isReactivar ? `Mandar plantilla de reactivación Vambe (${dayLabel} sin contacto)`
+                                : `Mandar mensaje Vambe a ${lead.telefono}`}
+                              disabled={!lead.telefono}
+                              onClick={async () => {
+                                if (isReactivar) {
+                                  if (!confirm('¿Quieres mandar la plantilla vambe outbound >3 días?')) return
+                                  const res = await fetch(`/api/leads/${lead.id}/reactivate-vambe-3d`, { method: 'POST' })
+                                  const data = await res.json().catch(() => ({}))
+                                  if (!res.ok || !data.ok) { alert(explainError(data.error, res.status)); return }
+                                  if (data.lead?.id) handleSave(data.lead as Lead)
+                                  return
+                                }
+                                // Audit #6: removido el confirm nativo — anti-doble-click ya está
+                                // en el endpoint (2 min) y el confirm sumaba 1 click sin agregar safety real.
+                                const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
+                                  method: 'POST',
+                                  headers: { 'content-type': 'application/json' },
+                                  body: JSON.stringify({ action: 'message' }),
+                                })
+                                const data = await res.json()
+                                if (!data.ok) { alert(explainError(data.error, res.status)); return }
+                                if (data.lead && data.lead.id) handleSave(data.lead as Lead)
+                              }}
+                              style={{
+                                background: isReactivar
+                                  ? 'linear-gradient(135deg, #7c54e8, #5e3dd1)'  // morado para reactivar
+                                  : 'linear-gradient(135deg, #22d68a, #1ab574)', // verde para mensaje normal
+                                color: 'white', border: 'none',
+                                padding: '4px 10px', borderRadius: 6,
+                                fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                opacity: lead.telefono ? 1 : 0.4,
+                              }}>{isReactivar ? `🔁 Reactivar Vambe (${dayLabel})` : '📨 Mensaje'}</button>
+                          )
+                        })()}
                         <button
                           title={lead.telefono ? `Disparar llamada Daniela a ${lead.telefono}` : 'lead sin teléfono'}
                           disabled={!lead.telefono}
