@@ -1,21 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
-import { sendMessage } from '@/lib/vambe'
+import { sendTemplate } from '@/lib/vambe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
 /**
+ * Template Vambe `reactivacion_3d_chambasai` aprobado por Meta (8-jun-2026).
+ * Copy fijo: "Hola Lic, te escribí hace unos días sobre ChambasAI 👋 No te
+ * preocupes si andas a mil — solo dime: ¿sigues buscando personal? Si es así
+ * podemos ayudarte a reclutar por solo $1160" + 2 quick reply buttons:
+ *  - "Sí necesito personal"
+ *  - "Ya no, muchas gracias"
+ *
+ * El template_id se puede sobrescribir con env var REACTIVATION_3D_TEMPLATE_ID
+ * por si Vambe regenera el ID en el futuro (raro pero por si).
+ */
+const REACTIVATION_3D_TEMPLATE_ID = process.env.REACTIVATION_3D_TEMPLATE_ID
+  || '8f364ab3-9dea-4892-85b2-f1b0a9ff3fca'
+
+/**
  * POST /api/leads/[id]/reactivate-vambe-3d
  *
- * Manda un mensaje de reactivación a leads que:
- *  - tienen canal Vambe (vambe_contact_id NOT NULL o canal_adquisicion incluye 'vambe')
+ * Manda el template `reactivacion_3d_chambasai` a leads que:
+ *  - canal_adquisicion contiene "vambe" (STRICT — no whatsapp ni otros)
  *  - llevan >= 3 días sin contacto
- *
- * El mensaje es texto plano enviado por Vambe sendMessage() (no template).
- * Soft-coded el copy aquí para iteración rápida sin tener que crear template
- * de Vambe aprobado por Meta.
+ *  - status no terminal
  *
  * Botón en CRM (LeadDetailClient + LeadModal) confirma con el user antes
  * de llamar este endpoint.
@@ -35,13 +46,15 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: 'lead sin teléfono' }, { status: 400 })
   }
 
-  // ── Validar que sea lead de Vambe ─────────────────────────────────
+  // ── Validar que sea lead de Vambe (STRICT) ────────────────────────
+  // Fer (8-jun-2026): "esa plantilla solo se puede detonar a leads que vengan
+  // de Vambe". Antes el check era laxo (vambe_contact_id OR whatsapp), ahora
+  // solo aceptamos canal_adquisicion que contenga 'vambe'.
   const canal = (lead.canal_adquisicion || '').toLowerCase()
-  const isVambe = !!lead.vambe_contact_id || canal.includes('vambe') || canal.includes('whatsapp')
-  if (!isVambe) {
+  if (!canal.includes('vambe')) {
     return NextResponse.json({
       ok: false,
-      error: 'lead no es de canal Vambe — botón solo aplica a leads que vinieron por Vambe/WhatsApp',
+      error: 'lead no es de canal Vambe — la plantilla reactivacion_3d_chambasai solo aplica a leads que vinieron por Vambe',
     }, { status: 422 })
   }
 
@@ -86,19 +99,15 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   }
   const lockId = (lockRow as { id: string }).id
 
-  // ── Construir mensaje ─────────────────────────────────────────────
-  // Copy alineado con la reactivación automática de Vambe (etapa Lanzamiento),
-  // sin "o ya lo resolviste" y sin emoji bullet. Sustituye {nombre} con primer
-  // nombre real si lo tenemos.
-  const primerNombre = (lead.nombre || '').trim().split(/\s+/)[0] || ''
-  const saludo = primerNombre ? `Hola ${primerNombre}` : 'Hola'
-  const message = `${saludo} 👋 Te escribí hace unos días sobre ChambasAI pero no he sabido de ti. ¿Sigues buscando personal? Con un sí/no me alineo.`
-
-  // ── Enviar via Vambe ──────────────────────────────────────────────
+  // ── Enviar template aprobado por Meta ─────────────────────────────
+  // El copy del template es FIJO en Vambe (aprobado por Meta). NO lleva
+  // variables — empieza con "Hola Lic" (no personalizado). Los 2 quick reply
+  // buttons "Sí necesito personal" / "Ya no, muchas gracias" están definidos
+  // en el template y los maneja el asistente Outbound (ver prompt).
   try {
-    const result = await sendMessage({
+    const result = await sendTemplate({
       phone: lead.telefono,
-      message,
+      templateId: REACTIVATION_3D_TEMPLATE_ID,
     })
 
     // Validar respuesta — Vambe puede devolver 200 con error en body
@@ -124,7 +133,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       await supabase.from('lead_actividad').update({
         tipo: 'reactivate_3d_failed',
         descripcion: `⚠️ Vambe NO envió la plantilla outbound >3d: ${reason}`,
-        metadata: { source: 'leads_reactivate_3d', vambe_response: r, message },
+        metadata: { source: 'leads_reactivate_3d', vambe_response: r, template_id: REACTIVATION_3D_TEMPLATE_ID },
       }).eq('id', lockId)
       return NextResponse.json({ ok: false, error: `Vambe rechazó: ${reason}`, vambe_response: r }, { status: 502 })
     }
@@ -132,15 +141,17 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     // Send OK
     await supabase.from('lead_actividad').update({
       tipo: 'reactivate_3d_sent',
-      descripcion: `📨 Plantilla Vambe outbound >3d (manual desde CRM)`,
-      metadata: { source: 'leads_reactivate_3d', message },
+      descripcion: `📨 Plantilla Vambe reactivacion_3d_chambasai (manual desde CRM)`,
+      metadata: { source: 'leads_reactivate_3d', template_id: REACTIVATION_3D_TEMPLATE_ID, template_name: 'reactivacion_3d_chambasai' },
     }).eq('id', lockId)
 
     const updates: Record<string, unknown> = {
       ultimo_contacto: new Date().toISOString(),
       veces_contactado: (lead.veces_contactado || 0) + 1,
     }
-    // No movemos status — el lead sigue en su etapa. Solo registramos contacto.
+    // No movemos status — el lead sigue en su etapa Lanzamiento hasta que
+    // responda al quick reply (Outbound se encarga del cambio de etapa
+    // via función "Cambiar etapa a Llamadas 📞" o "Cambiar etapa a Perdidos").
 
     const { data: updatedLead } = await supabase
       .from('leads')
@@ -152,7 +163,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({
       ok: true,
       action: 'reactivate_3d',
-      message_sent: message,
+      template_id: REACTIVATION_3D_TEMPLATE_ID,
       lead: updatedLead,
     })
   } catch (e) {
@@ -160,7 +171,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     await supabase.from('lead_actividad').update({
       tipo: 'reactivate_3d_failed',
       descripcion: `⚠️ Excepción al enviar plantilla outbound >3d: ${errMsg}`,
-      metadata: { source: 'leads_reactivate_3d', error: errMsg, message },
+      metadata: { source: 'leads_reactivate_3d', error: errMsg, template_id: REACTIVATION_3D_TEMPLATE_ID },
     }).eq('id', lockId)
     return NextResponse.json({ ok: false, error: errMsg }, { status: 502 })
   }

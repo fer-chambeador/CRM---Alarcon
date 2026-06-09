@@ -10,14 +10,20 @@ import type { Lead } from './supabase'
  */
 
 /**
- * ¿Este lead vino por Vambe / WhatsApp?
- * - vambe_contact_id no null → ya tiene contacto en Vambe (lo más seguro)
- * - canal_adquisicion contiene 'vambe' o 'whatsapp' → fallback por canal
+ * ¿Este lead vino por Vambe?
+ * Validación estricta: SOLO leads con canal_adquisicion = "Vambe" (case-insensitive)
+ * son elegibles para el botón Reactivar Vambe >3d. El template de WhatsApp
+ * `reactivacion_3d_chambasai` está aprobado por Meta para este caso de uso
+ * específico — leads que llegaron originalmente vía Vambe (formulario Meta ads
+ * → conversación AI). NO se dispara a leads de Slack, Instagram, manual, etc.
+ *
+ * Antes incluía OR con `vambe_contact_id` y `canal_adquisicion contiene whatsapp`,
+ * pero eso era demasiado laxo. Fer aclaró (8-jun-2026): "esa plantilla solo se
+ * puede detonar a leads que vengan de Vambe".
  */
-export function isVambeLead(lead: Pick<Lead, 'vambe_contact_id' | 'canal_adquisicion'>): boolean {
-  if (lead.vambe_contact_id) return true
+export function isVambeLead(lead: Pick<Lead, 'canal_adquisicion'>): boolean {
   const canal = (lead.canal_adquisicion || '').toLowerCase()
-  return canal.includes('vambe') || canal.includes('whatsapp')
+  return canal.includes('vambe')
 }
 
 /**
@@ -40,7 +46,7 @@ export function daysSinceContact(lead: Pick<Lead, 'ultimo_contacto'>): number | 
  *
  * El endpoint server-side re-valida lo mismo.
  */
-export function canReactivateVambe3d(lead: Pick<Lead, 'vambe_contact_id' | 'canal_adquisicion' | 'ultimo_contacto' | 'telefono' | 'status'>): boolean {
+export function canReactivateVambe3d(lead: Pick<Lead, 'canal_adquisicion' | 'ultimo_contacto' | 'telefono' | 'status'>): boolean {
   if (!isVambeLead(lead)) return false
   if (!lead.telefono) return false
   // Status terminal — no tiene sentido reactivar
