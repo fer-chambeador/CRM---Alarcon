@@ -23,6 +23,24 @@ export function createServiceClient() {
   return createClient(url, serviceKey)
 }
 
+// Supabase (PostgREST) capa las respuestas a 1000 filas por request.
+// Este helper pagina con .range() hasta traer todo.
+// IMPORTANTE: el factory debe construir una query NUEVA en cada llamada.
+export async function fetchAllRows<T>(
+  buildPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  batchSize = 1000,
+): Promise<T[]> {
+  const all: T[] = []
+  for (let from = 0; ; from += batchSize) {
+    const { data, error } = await buildPage(from, from + batchSize - 1)
+    if (error) throw new Error(`fetchAllRows: ${error.message}`)
+    const page = data ?? []
+    all.push(...page)
+    if (page.length < batchSize) break
+  }
+  return all
+}
+
 export type Lead = {
   id: string
   email: string

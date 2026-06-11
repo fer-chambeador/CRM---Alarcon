@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createServiceClient, fetchAllRows } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -62,28 +62,44 @@ export async function GET(req: NextRequest) {
   const to = url.searchParams.get('to') || new Date().toISOString()
   const supabase = createServiceClient()
 
-  // 1. Pull leads en el rango.
-  let qLeads = supabase
-    .from('leads')
-    .select('id, status, created_at, status_changed_at')
-    .lte('created_at', to)
-  if (from) qLeads = qLeads.gte('created_at', from)
-  const { data: leadsData, error: leadsErr } = await qLeads.limit(2000)
-  if (leadsErr) return NextResponse.json({ error: leadsErr.message }, { status: 500 })
-
-  const leads = (leadsData ?? []) as Array<{ id: string; status: string; created_at: string; status_changed_at: string | null }>
+  // 1. Pull leads en el rango (paginado — Supabase capa a 1000 por request).
+  type LeadRow = { id: string; status: string; created_at: string; status_changed_at: string | null }
+  let leads: LeadRow[]
+  try {
+    leads = await fetchAllRows<LeadRow>((rFrom, rTo) => {
+      let q = supabase
+        .from('leads')
+        .select('id, status, created_at, status_changed_at')
+        .lte('created_at', to)
+      if (from) q = q.gte('created_at', from)
+      return q.order('created_at', { ascending: true }).range(rFrom, rTo)
+    })
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'leads fetch failed' }, { status: 500 })
+  }
   const leadIds = leads.map(l => l.id)
 
   // 2. Pull lead_actividad status_change events para esos leads.
-  let acts: Array<{ lead_id: string; metadata: Record<string, unknown> | null; created_at: string }> = []
+  type ActRow = { lead_id: string; metadata: Record<string, unknown> | null; created_at: string }
+  const acts: ActRow[] = []
   if (leadIds.length > 0) {
-    const { data: actsData } = await supabase
-      .from('lead_actividad')
-      .select('lead_id, metadata, created_at')
-      .in('lead_id', leadIds)
-      .eq('tipo', 'status_change')
-      .order('created_at', { ascending: true })
-    acts = (actsData ?? []) as typeof acts
+    // Chunkear ids (URLs muy largas truenan con miles de ids) y paginar
+    // cada chunk (cap de 1000 filas por request de Supabase).
+    const CHUNK = 400
+    for (let i = 0; i < leadIds.length; i += CHUNK) {
+      const idsChunk = leadIds.slice(i, i + CHUNK)
+      const chunkActs = await fetchAllRows<ActRow>((rFrom, rTo) =>
+        supabase
+          .from('lead_actividad')
+          .select('lead_id, metadata, created_at')
+          .in('lead_id', idsChunk)
+          .eq('tipo', 'status_change')
+          .order('created_at', { ascending: true })
+          .range(rFrom, rTo),
+      )
+      acts.push(...chunkActs)
+    }
+    acts.sort((a, b) => a.created_at.localeCompare(b.created_at))
   }
 
   // 3. Agrupar transiciones por lead.
