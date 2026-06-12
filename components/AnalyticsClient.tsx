@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { type Lead } from '@/lib/supabase'
 import { startOfDay, startOfWeek, startOfMonth, endOfMonth, subMonths, format, eachDayOfInterval } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -1825,7 +1826,19 @@ function FunnelSection({ data }: { data: FunnelData | null }) {
 }
 
 export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[] }) {
-  const [leads] = useState<Lead[]>(initialLeads)
+  // Prop directo (no useState): así router.refresh() sí actualiza los datos.
+  const leads = initialLeads
+  const router = useRouter()
+
+  // Auto-refresh: la página es server-rendered y quedaba congelada con los
+  // datos del momento de carga (ej: "hoy" clavado mientras llegaban más leads).
+  // Refresca cada 60s y al volver el foco a la pestaña.
+  useEffect(() => {
+    const id = setInterval(() => router.refresh(), 60_000)
+    const onFocus = () => router.refresh()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus) }
+  }, [router])
   const [movement, setMovement] = useState<MovementData | null>(null)
   const [daptaMetrics, setDaptaMetrics] = useState<DaptaMetrics | null>(null)
   const [funnelData, setFunnelData] = useState<FunnelData | null>(null)
