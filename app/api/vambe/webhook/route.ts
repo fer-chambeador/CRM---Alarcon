@@ -253,6 +253,12 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
   if (isInbound) {
     const form = parseFormMessage(text)
     if (form && aiContactId) {
+      // Desde 11-jun-2026 el form de Vambe ya no trae `phone` — lo tomamos
+      // del payload del mensaje de WhatsApp (fromNumber = el contacto).
+      if (!form.telefono) {
+        const contactPhone = extractContactPhone(data, true)
+        if (contactPhone) form.telefono = contactPhone
+      }
       await stashPendingForm(supabase, aiContactId, form, data)
       return
     }
@@ -671,6 +677,41 @@ async function alertReminderResponse(
 }
 
 /**
+ * Extrae el teléfono del CONTACTO desde el payload del webhook.
+ * Necesario desde el 11-jun-2026: el formulario de Vambe dejó de incluir
+ * el campo `phone`, pero el número real siempre viaja en el evento de
+ * WhatsApp (fromNumber en inbound, toNumber en outbound, phone en tickets).
+ * Prioriza campos según dirección para no capturar el número del canal.
+ */
+function extractContactPhone(data: Record<string, unknown>, isInbound: boolean): string | null {
+  const payload = (data.payload || {}) as Record<string, unknown>
+  const contact = (data.contact || {}) as Record<string, unknown>
+  const inboundFirst = [
+    data.fromNumber, data.from_number, data.fromPhoneNumber, payload.fromNumber, payload.from_number,
+  ]
+  const outboundFirst = [
+    data.toNumber, data.to_number, data.toPhoneNumber, payload.toNumber, payload.to_number,
+  ]
+  const generic = [
+    data.contact_phone_number, data.contact_phone, data.phone, data.phoneNumber,
+    payload.contact_phone_number, payload.contact_phone, payload.phone,
+    contact.phone, contact.phoneNumber, contact.contact_phone_number,
+  ]
+  const ordered = (isInbound ? [...inboundFirst, ...generic, ...outboundFirst] : [...outboundFirst, ...generic, ...inboundFirst])
+    .filter(v => typeof v === 'string' && (v as string).length > 0) as string[]
+
+  const channelPhone = (process.env.VAMBE_CHANNEL_PHONE || '').replace(/[+\s\-()]/g, '')
+  for (const raw of ordered) {
+    const digits = raw.replace(/[+\s\-()]/g, '')
+    if (digits.length < 10) continue
+    if (channelPhone && digits.slice(-10) === channelPhone.slice(-10)) continue
+    const normalized = normalizeMexicanPhone(raw)
+    if (normalized) return normalized
+  }
+  return null
+}
+
+/**
  * Guarda los datos del formulario en vambe_pending_leads sin crear lead todavía.
  * El lead se materializa en `leads` cuando la stage avanza a "Interesado".
  */
@@ -707,6 +748,13 @@ async function promotePendingLead(
 
   const form = (pending?.form_data || null) as FormFields | null
   if (!form) return { lead: null, created: false, form: null }
+
+  // Defensa extra: si el form quedó sin teléfono (Vambe lo quitó del
+  // formulario el 11-jun-2026), intentar extraerlo del evento crudo.
+  if (!form.telefono && pending?.raw_event) {
+    const contactPhone = extractContactPhone(pending.raw_event as Record<string, unknown>, true)
+    if (contactPhone) form.telefono = contactPhone
+  }
 
   // 2) Buscar lead existente (email > vambe_contact_id > teléfono)
   let lead: Lead | null = null
