@@ -686,6 +686,11 @@ async function alertReminderResponse(
 function extractContactPhone(data: Record<string, unknown>, isInbound: boolean): string | null {
   const payload = (data.payload || {}) as Record<string, unknown>
   const contact = (data.contact || {}) as Record<string, unknown>
+  // BUG FIX (15-jun-2026): Vambe trae el teléfono real del contacto en
+  // `ai_contact.phone` cuando llega un evento de stage.changed o ticket.*.
+  // Antes no lo buscábamos ahí y todos los leads promovidos por stage
+  // (sin pasar por message.received con fromNumber) entraban sin teléfono.
+  const aiContact = (data.ai_contact || data.aiContact || {}) as Record<string, unknown>
   const inboundFirst = [
     data.fromNumber, data.from_number, data.fromPhoneNumber, payload.fromNumber, payload.from_number,
   ]
@@ -696,6 +701,7 @@ function extractContactPhone(data: Record<string, unknown>, isInbound: boolean):
     data.contact_phone_number, data.contact_phone, data.phone, data.phoneNumber,
     payload.contact_phone_number, payload.contact_phone, payload.phone,
     contact.phone, contact.phoneNumber, contact.contact_phone_number,
+    aiContact.phone, aiContact.phoneNumber, aiContact.platform_contact_username,
   ]
   const ordered = (isInbound ? [...inboundFirst, ...generic, ...outboundFirst] : [...outboundFirst, ...generic, ...inboundFirst])
     .filter(v => typeof v === 'string' && (v as string).length > 0) as string[]

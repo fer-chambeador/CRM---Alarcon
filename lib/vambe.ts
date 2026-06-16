@@ -539,7 +539,15 @@ function parseKeyValueLines(text: string): FormFields | null {
     if (!v) continue
     if (k === 'fullname' || k === 'nombre' || k === 'name') out.nombre = v
     else if (k === 'email' || k === 'correo') out.email = v.toLowerCase()
-    else if (k === 'phone' || k === 'telefono' || k === 'celular' || k === 'whatsapp') out.telefono = v
+    // BUG FIX (15-jun-2026): Vambe cambió el label del campo a "Phone number:"
+    // que norm() reduce a "phonenumber" (sin separadores). Agregamos esa key
+    // + variantes con guión bajo + "número/numero" (por si vuelve a cambiar).
+    // Sin esto, todos los leads de Vambe entraban al CRM sin teléfono.
+    else if (
+      k === 'phone' || k === 'phonenumber' || k === 'phone_number' ||
+      k === 'telefono' || k === 'celular' || k === 'whatsapp' ||
+      k === 'numero' || k === 'numerodetelefono' || k === 'numerodecelular'
+    ) out.telefono = v
     else if (k.includes('puesto') && k.includes('reclutar')) out.vacante = v
     else if (k.includes('vacante') && (k.includes('mes') || k.includes('publica'))) out.vacantes_por_mes = v
     else if (k.includes('invierte') || k.includes('presupuesto')) out.presupuesto = mapPresupuesto(v)
