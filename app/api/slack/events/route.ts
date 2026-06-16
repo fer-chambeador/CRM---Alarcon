@@ -39,11 +39,62 @@ export async function POST(req: NextRequest) {
     // via el bot a canales #leads-sales / #check-in-entrevistas.
     // Otros subtypes (channel_join, message_changed, etc.) se siguen ignorando.
     const subtype = event.subtype
-    if (event.type !== 'message' || !event.text || (subtype && subtype !== 'bot_message')) {
+    if (event.type !== 'message' || (subtype && subtype !== 'bot_message')) {
       return NextResponse.json({ ok: true })
     }
 
-    const parsed = parseSlackMessage(event.text)
+    // BUG FIX (15-jun-2026, regresión): el bot "Chambas Alert" en #canirac
+    // envía mensajes con el contenido en `event.attachments[].text` y/o
+    // `event.blocks` (mrkdwn sections), no en `event.text` que puede llegar
+    // vacío. Si solo miramos event.text, perdemos TODOS los leads que ese
+    // bot pushea (Mr Rib Eye, etc.). Combinamos las 3 fuentes.
+    function extractFromBlocks(blocks: unknown): string {
+      if (!Array.isArray(blocks)) return ''
+      const out: string[] = []
+      for (const block of blocks as Array<Record<string, unknown>>) {
+        const text = block.text as { text?: string } | undefined
+        if (text?.text) out.push(text.text)
+        const fields = block.fields as Array<{ text?: string }> | undefined
+        if (Array.isArray(fields)) for (const f of fields) if (f?.text) out.push(f.text)
+        const elements = block.elements as Array<Record<string, unknown>> | undefined
+        if (Array.isArray(elements)) {
+          for (const el of elements) {
+            const elText = el.text as { text?: string } | string | undefined
+            if (typeof elText === 'string') out.push(elText)
+            else if (elText?.text) out.push(elText.text)
+          }
+        }
+      }
+      return out.join('\n')
+    }
+    function extractFromAttachments(att: unknown): string {
+      if (!Array.isArray(att)) return ''
+      const out: string[] = []
+      for (const a of att as Array<Record<string, unknown>>) {
+        if (typeof a.text === 'string') out.push(a.text)
+        if (typeof a.pretext === 'string') out.push(a.pretext)
+        if (typeof a.fallback === 'string') out.push(a.fallback)
+        const fields = a.fields as Array<{ title?: string; value?: string }> | undefined
+        if (Array.isArray(fields)) {
+          for (const f of fields) {
+            if (f.title || f.value) out.push(`${f.title || ''}: ${f.value || ''}`)
+          }
+        }
+        if (Array.isArray(a.blocks)) out.push(extractFromBlocks(a.blocks))
+      }
+      return out.join('\n')
+    }
+
+    const candidates = [
+      typeof event.text === 'string' ? event.text : '',
+      extractFromAttachments(event.attachments),
+      extractFromBlocks(event.blocks),
+    ].filter(Boolean)
+    const fullText = candidates.join('\n').trim()
+
+    if (!fullText) return NextResponse.json({ ok: true, reason: 'no text' })
+
+    const parsed = parseSlackMessage(fullText)
     if (!parsed || !parsed.email) return NextResponse.json({ ok: true })
 
     const supabase = createServiceClient()

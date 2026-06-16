@@ -73,15 +73,28 @@ export function parseSlackMessage(text: string): ParsedLead | null {
   if (normalized.toLowerCase().includes('compa') && normalized.toLowerCase().includes('creada')) {
     const email = extractEmail(normalized)
     if (!email) return null
-    const telefono = normalized.match(/Tel[eé]fono:\s*(.+)/)?.[1]?.trim() || null
-    const puesto = normalized.match(/Rol en la empresa:\s*(.+)/)?.[1]?.trim() || null
-    const canalRaw = normalized.match(/Canal de adquisici[oó]n:\s*(.+)/)?.[1]?.trim() || null
+    // BUG FIX (15-jun-2026): el mensaje de #canirac llega TODO en una línea
+    // sin newlines (campos separados por múltiples espacios). Los regex
+    // `(.+)` greedy se tragaban todo el resto del texto incluyendo los
+    // siguientes campos. Insertamos `\n` antes de cada label conocido para
+    // que `(.+)` se detenga en el siguiente campo.
+    const LABELS = [
+      'Usuario', 'Tel[eé]fono', 'Rol en la empresa', 'Canal de adquisici[oó]n',
+      'Nombre de la empresa', 'Puesto', 'Presupuesto de reclutamiento',
+    ]
+    let preprocessed = normalized
+    for (const label of LABELS) {
+      preprocessed = preprocessed.replace(new RegExp(`(\\s|^)(${label})\\s*:`, 'g'), `\n$2:`)
+    }
+    const telefono = preprocessed.match(/Tel[eé]fono:\s*([^\n]+)/)?.[1]?.trim() || null
+    const puesto = preprocessed.match(/Rol en la empresa:\s*([^\n]+)/)?.[1]?.trim() || null
+    const canalRaw = preprocessed.match(/Canal de adquisici[oó]n:\s*([^\n]+)/)?.[1]?.trim() || null
     const canal = normalizeCanal(canalRaw)
-    const empresa = normalized.match(/Nombre de la empresa:\s*(.+)/)?.[1]?.trim() || null
-    const presupuestoRaw = normalized.match(/Presupuesto de reclutamiento:\s*(.+)/)?.[1]?.trim() || null
+    const empresa = preprocessed.match(/Nombre de la empresa:\s*([^\n]+)/)?.[1]?.trim() || null
+    const presupuestoRaw = preprocessed.match(/Presupuesto de reclutamiento:\s*([^\n]+)/)?.[1]?.trim() || null
     const presupuesto = normalizePresupuesto(presupuestoRaw)
     // "Puesto:" = vacante que el cliente quiere reclutar (NO confundir con "Rol en la empresa")
-    const vacanteMatch = normalized.match(/Puesto:\s*([^\n]+)/)
+    const vacanteMatch = preprocessed.match(/Puesto:\s*([^\n]+)/)
     const vacante = vacanteMatch?.[1]?.trim() || null
     if (puesto && puesto.toLowerCase().includes('soy candidato')) return null
     return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null, presupuesto, vacante }
