@@ -1198,6 +1198,50 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   await supabase.from('leads').update(updates).eq('id', lead.id)
 
+  // ── Dedupe de eventos en Google Calendar (prevención de llamadas duplicadas) ──
+  // Cuando un lead reagenda en Vambe, el bot crea un evento nuevo en GCal
+  // pero el evento previo NO se borra automáticamente (Vambe no le pasa el
+  // event_id viejo al webhook). Para evitar que el calendario quede con 2+
+  // llamadas para el mismo lead, busco eventos futuros que matcheen al lead
+  // (por teléfono o nombre) y dejo solo el que corresponde a `llamada_at`.
+  // Best-effort, no bloquea el response si falla.
+  if (llamadaAtSaved && mappedStatus === 'llamada_agendada') {
+    try {
+      const leadForDedupe = {
+        nombre: lead.nombre,
+        telefono: lead.telefono,
+      }
+      const { dedupeFutureCallEventsForLead } = await import('@/lib/googleCalendar')
+      const dedupe = await dedupeFutureCallEventsForLead(
+        supabase,
+        leadForDedupe,
+        llamadaAtSaved,
+      )
+      if (dedupe.deleted.length > 0) {
+        // Guardar el event_id "canónico" en el lead (el winner)
+        if (dedupe.keptEventId) {
+          await supabase.from('leads')
+            .update({ google_calendar_event_id: dedupe.keptEventId })
+            .eq('id', lead.id)
+        }
+        await supabase.from('lead_actividad').insert({
+          lead_id: lead.id,
+          tipo: 'llamada_cancelada_reagendada',
+          descripcion: `🧹 Dedupe GCal: borrado ${dedupe.deleted.length} evento(s) previo(s) — kept ${dedupe.keptEventId?.slice(0, 8) || 'none'}`,
+          metadata: {
+            source: 'vambe_stage_changed',
+            new_llamada_at: llamadaAtSaved,
+            kept_event_id: dedupe.keptEventId,
+            deleted_event_ids: dedupe.deleted,
+            total_found: dedupe.totalFound,
+          },
+        })
+      }
+    } catch (e) {
+      console.error('[vambe webhook] dedupe GCal failed:', e)
+    }
+  }
+
   // ── Alertas a Slack para eventos críticos ──
   // No bloqueamos el response — corre best-effort en paralelo.
   fireSlackAlertsForStageChange(newStageId, { ...lead, ...updates } as Lead, promoted, previousStageId).catch(e => {

@@ -715,3 +715,117 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
   }
   return result
 }
+
+// ─── Dedupe de eventos de llamada (anti-duplicados Vambe) ───────────────
+//
+// Contexto del bug: cuando un lead reagenda con el bot Vambe, Vambe crea
+// un evento nuevo en GCal pero el evento viejo NO se borra (Vambe no le
+// pasa el `event_id` previo al webhook stage.changed, y el CRM tampoco
+// llama a syncLeadToCalendar desde el webhook — solo actualiza
+// `llamada_at` en DB). Resultado: 2+ eventos visibles en GCal para el
+// mismo lead, confunde a quien lee la agenda.
+//
+// Las funciones de abajo permiten al webhook (o a un cron) listar todos
+// los eventos futuros del calendario que matcheen a un lead (por teléfono
+// o nombre) y borrar los que NO correspondan a la `llamada_at` actual
+// del lead — dejando un solo evento "canónico" por lead.
+
+type GCalListedEvent = {
+  id: string
+  summary?: string
+  description?: string
+  start?: { dateTime?: string; date?: string }
+  end?: { dateTime?: string; date?: string }
+  status?: string
+}
+
+/**
+ * Lista eventos futuros de Calendar que matcheen al lead por teléfono
+ * o nombre (usando el query `q` de la Calendar API que busca en title +
+ * description). Excluye eventos cancelled.
+ */
+export async function listFutureEventsForLead(
+  supabase: Supabase,
+  lead: Pick<Lead, 'nombre' | 'telefono'>,
+  options: { fromIso?: string; maxResults?: number } = {},
+): Promise<GCalListedEvent[]> {
+  const fromIso = options.fromIso || new Date().toISOString()
+  const maxResults = options.maxResults || 50
+  // Preferimos buscar por teléfono — es más único que el nombre.
+  const q = (lead.telefono || lead.nombre || '').trim()
+  if (!q) return []
+  const params = new URLSearchParams({
+    q,
+    timeMin: fromIso,
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: String(maxResults),
+  })
+  try {
+    const result = await calendarFetch(supabase, 'GET', `/calendars/{calendarId}/events?${params}`)
+    const items = ((result as { items?: GCalListedEvent[] })?.items || [])
+      .filter(e => e.status !== 'cancelled')
+    return items
+  } catch (e) {
+    console.error('[listFutureEventsForLead] failed:', e)
+    return []
+  }
+}
+
+/**
+ * Para un lead que acaba de agendar una nueva llamada con `keepLlamadaAt`,
+ * lista todos los eventos futuros que matchean (por teléfono o nombre),
+ * identifica el "winner" (evento cuyo start está dentro de 2 min de
+ * `keepLlamadaAt`) y borra todos los demás.
+ *
+ * Si no hay winner (por timing: Vambe creó el evento DESPUÉS del webhook),
+ * NO borra nada — preferimos mantener todos los eventos que arriesgar
+ * borrar el nuevo. La próxima reagendada lo limpia.
+ *
+ * Devuelve {keptEventId, deleted, totalFound}.
+ */
+export async function dedupeFutureCallEventsForLead(
+  supabase: Supabase,
+  lead: Pick<Lead, 'nombre' | 'telefono'>,
+  keepLlamadaAt: string,
+  options: { toleranceMs?: number } = {},
+): Promise<{ keptEventId: string | null; deleted: string[]; totalFound: number }> {
+  const TOLERANCE_MS = options.toleranceMs ?? 2 * 60_000  // 2 minutos default
+  const events = await listFutureEventsForLead(supabase, lead)
+  if (events.length === 0) return { keptEventId: null, deleted: [], totalFound: 0 }
+
+  const targetMs = new Date(keepLlamadaAt).getTime()
+
+  // Encontrar el evento más cercano al `keepLlamadaAt` dentro de tolerancia
+  let winner: GCalListedEvent | null = null
+  let winnerDelta = Infinity
+  for (const ev of events) {
+    const startStr = ev.start?.dateTime || ev.start?.date
+    if (!startStr) continue
+    const delta = Math.abs(new Date(startStr).getTime() - targetMs)
+    if (delta < winnerDelta && delta <= TOLERANCE_MS) {
+      winner = ev
+      winnerDelta = delta
+    }
+  }
+
+  // Si no encontramos winner, NO borramos nada — el evento nuevo
+  // probablemente todavía no fue creado por Vambe. Salimos seguros.
+  if (!winner) {
+    return { keptEventId: null, deleted: [], totalFound: events.length }
+  }
+
+  // Borrar todos los eventos del lead que NO sean el winner
+  const deleted: string[] = []
+  for (const ev of events) {
+    if (ev.id === winner.id) continue
+    try {
+      await deleteCalendarEvent(supabase, ev.id)
+      deleted.push(ev.id)
+    } catch (e) {
+      console.error(`[dedupeFutureCallEventsForLead] no se pudo borrar ${ev.id}:`, e)
+    }
+  }
+
+  return { keptEventId: winner.id, deleted, totalFound: events.length }
+}
