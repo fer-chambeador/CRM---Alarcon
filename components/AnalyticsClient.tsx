@@ -1584,8 +1584,18 @@ function TiemposConversionTimeline({ movement, cycle }: {
     }
   })
 
-  // Total estimado: suma de promedios de cada salto que sí tenemos
+  // Total estimado: suma de promedios de cada salto que sí tenemos.
+  // Esto representa cuánto tarda un lead "típico" en recorrer TODO el funnel.
+  // Lo usamos como el "Tiempo TOTAL" porque cycle.avgDays (created_at →
+  // status_changed_at sobre todos los cierres) baja artificialmente cuando
+  // hay leads "express" que entraron ya convertidos vía Slack webhook de pago
+  // — leads con ciclo ~0 que distorsionan el promedio y rompen la suma con
+  // los componentes mostrados arriba.
   const totalEstimado = rows.reduce((s, r) => s + (r.avgDays || 0), 0)
+  const totalEstimadoMediana = rows.reduce((s, r) => s + (r.medianDays || 0), 0)
+  // Bottleneck: salto con menor count (la cohorte más chica define el funnel real)
+  const minCount = rows.reduce((m, r) => (r.count > 0 && r.count < m) ? r.count : m, Infinity)
+  const totalCount = minCount === Infinity ? 0 : minCount
 
   // Formato amigable: si <1 día, mostrar "<1 día (mismo día)"
   const fmtDays = (d: number) => {
@@ -1662,22 +1672,27 @@ function TiemposConversionTimeline({ movement, cycle }: {
         <div>
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>Tiempo TOTAL para cerrar una venta</div>
           <div style={{ fontSize: 13.5, color: 'var(--text)' }}>
-            De <strong>Nuevo</strong> a <strong>Convertido</strong> tarda en promedio
+            De <strong>Nuevo</strong> a <strong>Convertido</strong>, sumando los 4 saltos del funnel
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          {cycle.count > 0
+          {totalEstimado > 0
             ? <>
                 <div style={{
                   fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800,
                   color: '#22d68a', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-                }}>{cycle.avgDays >= 1 ? cycle.avgDays.toFixed(1) + ' días' : fmtDays(cycle.avgDays)}</div>
+                }}>{totalEstimado >= 1 ? totalEstimado.toFixed(1) + ' días' : fmtDays(totalEstimado)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
-                  promedio · {cycle.count} cierres
-                  {cycle.medianDays !== cycle.avgDays && <> · mediana {fmtDays(cycle.medianDays)}</>}
+                  suma de promedios de cada etapa
+                  {totalEstimadoMediana > 0 && totalEstimadoMediana !== totalEstimado && (
+                    <> · mediana suma {fmtDays(totalEstimadoMediana)}</>
+                  )}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, fontStyle: 'italic' }}>
+                  (ciclo end-to-end medido sobre {cycle.count} cierres: {cycle.avgDays >= 1 ? cycle.avgDays.toFixed(1) + ' d' : fmtDays(cycle.avgDays)} prom · {fmtDays(cycle.medianDays)} mediana)
                 </div>
               </>
-            : <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>Sin cierres en el rango</div>}
+            : <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>Sin datos suficientes</div>}
         </div>
       </div>
     </div>

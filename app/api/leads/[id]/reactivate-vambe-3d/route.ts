@@ -21,6 +21,22 @@ const REACTIVATION_3D_TEMPLATE_ID = process.env.REACTIVATION_3D_TEMPLATE_ID
   || '8f364ab3-9dea-4892-85b2-f1b0a9ff3fca'
 
 /**
+ * Stage UUID de "Interesado" en el pipeline de Vambe.
+ *
+ * BUG FIX (17-jun-2026): cuando un lead está en "Asistencia Humana", Vambe
+ * desactiva la IA y los quick-reply buttons NO disparan ningún asistente
+ * (caso Claudia Valenzuela: respondió "Sí necesito personal" y nada se
+ * activó). El sendTemplate de Vambe acepta `stage` en query para mover
+ * el contacto AL momento de enviar el template — así cuando responda al
+ * quick reply, ya estará en "Interesado" donde el asistente Outbound /
+ * Interesado Agendador SÍ están activos.
+ *
+ * Puede sobrescribirse con env var por si Fer recablea el pipeline.
+ */
+const REACTIVATION_3D_TARGET_STAGE = process.env.REACTIVATION_3D_TARGET_STAGE
+  || '96c42cda-2828-45db-973c-3bc63a8141fd' // Interesado
+
+/**
  * POST /api/leads/[id]/reactivate-vambe-3d
  *
  * Manda el template `reactivacion_3d_chambasai` a leads que:
@@ -105,9 +121,14 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   // buttons "Sí necesito personal" / "Ya no, muchas gracias" están definidos
   // en el template y los maneja el asistente Outbound (ver prompt).
   try {
+    // BUG FIX (17-jun-2026): pasamos `stageId` para que Vambe mueva el
+    // contacto a "Interesado" antes de enviar el template. Sin esto, los
+    // leads en "Asistencia Humana" no respondían al quick reply porque la
+    // IA estaba desactivada (caso Claudia Valenzuela).
     const result = await sendTemplate({
       phone: lead.telefono,
       templateId: REACTIVATION_3D_TEMPLATE_ID,
+      stageId: REACTIVATION_3D_TARGET_STAGE,
     })
 
     // Validar respuesta — Vambe puede devolver 200 con error en body
