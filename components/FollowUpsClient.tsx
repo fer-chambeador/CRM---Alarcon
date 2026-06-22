@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import clsx from 'clsx'
 import { Sidebar } from './CommandCenter'
 import styles from './FollowUpsClient.module.css'
@@ -113,32 +113,39 @@ export default function FollowUpsClient() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<FollowUp | null>(null)
   const [importing, setImporting] = useState(false)
+  // BUG FIX (audit 17-jun-2026): stats venían del array local `items`, pero
+  // ese array ya está filtrado por el status seleccionado en el sidebar (por
+  // defecto 'pendientes'). Por eso "Completados" siempre mostraba 0 y "Hoy"
+  // mostraba 0 cuando el filtro temporal del usuario no incluía hoy. Ahora
+  // los counts vienen de un endpoint dedicado /api/follow-ups/stats que
+  // cuenta en BD sin filtros de UI.
+  const [stats, setStats] = useState({ pendientes: 0, overdue: 0, hoy: 0, completados: 0 })
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ status, range, limit: '300' })
-      const res = await fetch(`/api/follow-ups?${params}`, { cache: 'no-store' })
-      const json = await res.json()
-      setItems(json.follow_ups || [])
+      const [listRes, statsRes] = await Promise.all([
+        fetch(`/api/follow-ups?${params}`, { cache: 'no-store' }),
+        fetch('/api/follow-ups/stats', { cache: 'no-store' }),
+      ])
+      const listJson = await listRes.json()
+      setItems(listJson.follow_ups || [])
+      if (statsRes.ok) {
+        const s = await statsRes.json()
+        setStats({
+          pendientes: s.pendientes || 0,
+          overdue: s.atrasados || 0,
+          hoy: s.hoy || 0,
+          completados: s.completados || 0,
+        })
+      }
     } finally {
       setLoading(false)
     }
   }, [status, range])
 
   useEffect(() => { load() }, [load])
-
-  const stats = useMemo(() => {
-    const now = Date.now()
-    const pendientes = items.filter(i => !i.completado)
-    const overdue = pendientes.filter(i => new Date(i.fecha).getTime() < now)
-    const hoy = pendientes.filter(i => {
-      const d = new Date(i.fecha)
-      return d.toDateString() === new Date().toDateString()
-    })
-    const completados = items.filter(i => i.completado).length
-    return { pendientes: pendientes.length, overdue: overdue.length, hoy: hoy.length, completados }
-  }, [items])
 
   async function toggleComplete(id: string, newVal: boolean) {
     await fetch(`/api/follow-ups/${id}`, {

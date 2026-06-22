@@ -141,6 +141,20 @@ function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: st
                   <td>{fmtMoney(r.pipelineCerrado)}</td>
                 </tr>
               ))}
+              {/* FIX (audit 17-jun-2026): footer con totales para que el user
+                  pueda verificar visualmente que la suma cuadra con "Leads
+                  totales" del KPI. Si difiere, hay un bug en el breakdown
+                  que antes era silencioso. */}
+              {sorted.length > 1 && (
+                <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700, opacity: 0.85 }}>
+                  <td className={styles.breakdownKey}><div>TOTAL</div></td>
+                  <td>{sorted.reduce((s, r) => s + r.leads, 0)}</td>
+                  <td>{fmtMoney(sorted.reduce((s, r) => s + r.pipeline, 0))}</td>
+                  <td>{sorted.reduce((s, r) => s + r.cerrados, 0)}</td>
+                  <td>—</td>
+                  <td>{fmtMoney(sorted.reduce((s, r) => s + r.pipelineCerrado, 0))}</td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}
@@ -1981,7 +1995,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label="Ventas cerradas" value={fmtMoney(stats.pipelineCerrado)} sub={`${stats.cerrados} deals · ${DATE_LABELS[dateRange].toLowerCase()}`} accentColor="#22d68a" />
             <KPICard label="Forecast ponderado" value={fmtMoney(stats.forecast)} sub={`Meta ${fmtMoney(periodGoal)}`} accentColor="#a594ff" />
             <KPICard label="Tasa de conversión" value={fmtPct(stats.conversionRate)} sub={`${stats.cerrados} de ${stats.total - stats.descartados} (sin descartados)`} accentColor="#4ea8f5" />
-            <KPICard label="Leads totales" value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
+            <KPICard label={`Leads · ${DATE_LABELS[dateRange].toLowerCase()}`} value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
 
           {/* ── DAPTA · operativa de llamadas ────────────────────────────── */}

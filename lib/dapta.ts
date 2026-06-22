@@ -333,6 +333,20 @@ export function normalizeDaptaStatus(raw: string | undefined | null, disconnecti
   const s = (raw || '').toLowerCase().trim()
   const d = (disconnectionReason || '').toLowerCase().trim()
 
+  // BUG FIX (audit 17-jun-2026): llamadas con duración <5s aparecían como
+  // "Completada" con summary "No conversation happened" porque el
+  // disconnection_reason era "user_hangup" y la rama de hangup devolvía
+  // 'completed' sin considerar duración. Si duró menos de 5s no hubo
+  // conversación real — el cliente colgó antes de hablar. Lo tratamos
+  // como 'no_answer' para que la UI no engañe al usuario.
+  if (typeof durationSeconds === 'number' && durationSeconds < 5) {
+    // Pero si Dapta dijo explícitamente que fue buzón, respetamos eso.
+    if (d.includes('voicemail') || d.includes('buzon') || s.includes('voicemail') || s.includes('buzon')) {
+      return 'voicemail'
+    }
+    return 'no_answer'
+  }
+
   // Disconnection reason tiene prioridad cuando el status base es genérico ("ended")
   // y disconnection_reason nos dice qué realmente pasó.
   if (d) {

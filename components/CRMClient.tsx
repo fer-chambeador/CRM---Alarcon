@@ -575,6 +575,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const searchParams = useSearchParams()
   const initialLeadId = searchParams.get('lead')
   const initialNew = searchParams.get('new') === '1'
+  // BUG FIX (audit 17-jun-2026): el query param ?q= se ignoraba al cargar
+  // la página. Ahora hidratamos el input de búsqueda desde searchParams
+  // para que enlaces tipo /leads?q=5513003501 abran ya filtrados.
+  const initialQuery = searchParams.get('q') || ''
 
   const [leads, setLeads] = useState<Lead[]>(initialLeads)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(
@@ -582,7 +586,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   )
   const [showAddModal, setShowAddModal] = useState(initialNew)
   const [exportOpen, setExportOpen] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialQuery)
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
