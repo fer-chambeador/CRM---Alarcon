@@ -1203,9 +1203,22 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
   // pero el evento previo NO se borra automáticamente (Vambe no le pasa el
   // event_id viejo al webhook). Para evitar que el calendario quede con 2+
   // llamadas para el mismo lead, busco eventos futuros que matcheen al lead
-  // (por teléfono o nombre) y dejo solo el que corresponde a `llamada_at`.
+  // (por teléfono o nombre) y dejo solo el más cercano al llamada_at canónico.
   // Best-effort, no bloquea el response si falla.
-  if (llamadaAtSaved && mappedStatus === 'llamada_agendada') {
+  //
+  // FIX (24-jun-2026, caso Maricela 528126592565): antes solo corría dedupe si
+  // el webhook traía un llamadaAtSaved nuevo Y el lead acababa de moverse a
+  // llamada_agendada. En reagendas dentro de Confirmados/Llamadas, Vambe NO
+  // pasaba llamada_at nuevo → el dedupe se saltaba y los duplicados quedaban
+  // para siempre. Ahora también disparamos dedupe usando el llamada_at
+  // existente del lead si está en cualquier stage de llamada.
+  const stageIsCall = mappedStatus === 'llamada_agendada'
+    || lead.status === 'llamada_agendada'
+    || newStageId === STAGE_DEMO_AGENDADA
+    || newStageId === STAGE_DEMO_CONFIRMADA
+    || newStageId === STAGE_LLAMADA_COMERCIAL
+  const llamadaAtForDedupe = llamadaAtSaved || lead.llamada_at
+  if (stageIsCall && llamadaAtForDedupe) {
     try {
       const leadForDedupe = {
         nombre: lead.nombre,
@@ -1215,7 +1228,7 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
       const dedupe = await dedupeFutureCallEventsForLead(
         supabase,
         leadForDedupe,
-        llamadaAtSaved,
+        llamadaAtForDedupe,
       )
       if (dedupe.deleted.length > 0) {
         // Guardar el event_id "canónico" en el lead (el winner)

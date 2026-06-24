@@ -774,13 +774,24 @@ export async function listFutureEventsForLead(
 
 /**
  * Para un lead que acaba de agendar una nueva llamada con `keepLlamadaAt`,
- * lista todos los eventos futuros que matchean (por teléfono o nombre),
- * identifica el "winner" (evento cuyo start está dentro de 2 min de
- * `keepLlamadaAt`) y borra todos los demás.
+ * lista todos los eventos futuros que matchean (por teléfono o nombre)
+ * y deja UN SOLO evento canónico.
  *
- * Si no hay winner (por timing: Vambe creó el evento DESPUÉS del webhook),
- * NO borra nada — preferimos mantener todos los eventos que arriesgar
- * borrar el nuevo. La próxima reagendada lo limpia.
+ * Estrategia de elección del winner (en orden de preferencia):
+ *   1. Evento cuyo start coincide con `keepLlamadaAt` dentro de tolerancia
+ *      (default 2 min). Es el "agendado real" según Vambe.
+ *   2. Si no hay match exacto pero hay >1 evento futuro, ganamos el MÁS
+ *      CERCANO temporalmente a `keepLlamadaAt` (cualquier delta). Esto cubre
+ *      los casos en que Vambe creó/movió el evento y el start no coincide
+ *      exactamente con el llamada_at del CRM (skew de zona horaria, edits
+ *      manuales en GCal, etc).
+ *   3. Si solo hay 1 evento futuro, ese gana y no borra nada (ya está limpio).
+ *
+ * Bug previo (fixed 24-jun-2026 por reporte de Fer / caso Maricela):
+ *   antes, si no había winner exacto en la tolerancia de 2 min, NO borraba
+ *   nada y los duplicados quedaban en GCal para siempre. Ahora SIEMPRE
+ *   colapsa a un solo evento — la regla del user es "solo la última agenda
+ *   confirmada".
  *
  * Devuelve {keptEventId, deleted, totalFound}.
  */
@@ -793,10 +804,11 @@ export async function dedupeFutureCallEventsForLead(
   const TOLERANCE_MS = options.toleranceMs ?? 2 * 60_000  // 2 minutos default
   const events = await listFutureEventsForLead(supabase, lead)
   if (events.length === 0) return { keptEventId: null, deleted: [], totalFound: 0 }
+  if (events.length === 1) return { keptEventId: events[0].id, deleted: [], totalFound: 1 }
 
   const targetMs = new Date(keepLlamadaAt).getTime()
 
-  // Encontrar el evento más cercano al `keepLlamadaAt` dentro de tolerancia
+  // Paso 1: buscar match exacto dentro de tolerancia
   let winner: GCalListedEvent | null = null
   let winnerDelta = Infinity
   for (const ev of events) {
@@ -809,9 +821,24 @@ export async function dedupeFutureCallEventsForLead(
     }
   }
 
-  // Si no encontramos winner, NO borramos nada — el evento nuevo
-  // probablemente todavía no fue creado por Vambe. Salimos seguros.
+  // Paso 2: si no hay match exacto, tomamos el MÁS CERCANO temporalmente.
+  // Esto cubre el caso en que Vambe creó el nuevo evento con un start un
+  // poco distinto al llamada_at del CRM, o el lead reagendó y el llamada_at
+  // del CRM aún no se sincronizó pero los eventos GCal sí.
   if (!winner) {
+    for (const ev of events) {
+      const startStr = ev.start?.dateTime || ev.start?.date
+      if (!startStr) continue
+      const delta = Math.abs(new Date(startStr).getTime() - targetMs)
+      if (delta < winnerDelta) {
+        winner = ev
+        winnerDelta = delta
+      }
+    }
+  }
+
+  if (!winner) {
+    // No deberíamos llegar acá si events.length>0, pero por seguridad
     return { keptEventId: null, deleted: [], totalFound: events.length }
   }
 
