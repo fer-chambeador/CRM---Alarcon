@@ -282,11 +282,13 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
     <>
       <nav className={styles.sidebarNav}>
         {link('/leads', 'leads', 'Leads', '📋')}
-        {/* {link('/outbound', 'aprobaciones', 'Outbound', '📨')} oculto 7-jun-2026 por pedido de Fer (no usado por ahora; la página sigue funcional, solo se quitó del sidebar) */}
-        {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
-        {link('/follow-ups', 'follow-ups', 'Follow Ups', '📌')}
-        {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
-        {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
+        {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
+        {/* Ocultos 24-jun-2026 por pedido de Fer (las páginas siguen funcionales, sólo se quitaron del sidebar):
+            {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
+            {link('/follow-ups', 'follow-ups', 'Follow Ups', '📌')}
+            {link('/recurrentes', 'recurrentes', 'Recurrentes', '💎')}
+            {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
+        */}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
         {link('/asistente', 'asistente', 'Asistente', '🧠')}
         {link('/settings', 'settings', 'Settings', '⚙️')}
@@ -301,8 +303,10 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
 // ─── Mobile bottom tab bar ───────────────────────────────────────────────────
 const MOBILE_TABS = [
   { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
-  { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
-  { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
+  { key: 'aprobaciones', href: '/outbound', icon: '📨', label: 'Outbound' },
+  // Ocultos 24-jun-2026 (junto con sidebar):
+  // { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
+  // { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
   { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
   { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
 ] as const

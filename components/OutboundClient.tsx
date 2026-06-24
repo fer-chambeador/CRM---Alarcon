@@ -1,209 +1,295 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+/**
+ * /outbound — Contacto masivo a leads con plantilla Vambe.
+ *
+ * Flujo:
+ *  1. Filtrar leads por status CRM (multi-select)
+ *  2. Excluir leads sin teléfono o canal != Vambe (la plantilla se manda vía
+ *     Vambe API y necesita un contacto registrado en WhatsApp)
+ *  3. Elegir plantilla Vambe (lista de aprobadas viene del server)
+ *  4. Configurar batches: tamaño y cadencia (cada X minutos)
+ *  5. Pre-review de la lista, click Start, el browser dispara batches automáticos
+ *     vía /api/outbound/dispatch (mientras la tab esté abierta)
+ *
+ * Stage destino default: Interesado (mueve al lead para que el bot Vambe tome
+ * el chat cuando responda el quick reply de la plantilla).
+ */
+
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { Sidebar } from './CommandCenter'
 import styles from './LlamadasClient.module.css'
+import { STATUS_LABELS, STATUS_ORDER, statusColor } from '@/lib/status'
 
-type Lead = {
+export type OutboundLead = {
   id: string
   nombre: string | null
   email: string | null
-  empresa: string | null
   telefono: string | null
-  vacante: string | null
-  presupuesto: string | null
-  puesto: string | null
-  canal_adquisicion: string | null
-  llamada_at: string | null
-  monto: number | null
-  notas: string | null
   status: string
+  empresa: string | null
+  vacante: string | null
+  canal_adquisicion: string | null
   created_at: string
+  ultimo_contacto: string | null
+  vambe_contact_id: string | null
+  vambe_stage_id: string | null
 }
 
-type Aprobacion = {
+export type OutboundTemplate = {
   id: string
-  tipo: 'vambe_template' | 'dapta_call'
-  lead_id: string
-  status: 'pending' | 'approved' | 'rejected_manual' | 'failed' | 'expired'
-  template_id: string | null
-  template_name: string | null
-  scheduled_at: string | null
-  reason: string | null
-  score_snapshot: number | null
-  created_at: string
-  leads: Lead | null
+  name: string
+  preview: string
+  category: string
 }
 
-type ApiResponse = {
-  vambe: Aprobacion[]
-  dapta: Aprobacion[]
-  counts: { vambe: number; dapta: number; total: number }
+type RunState = 'idle' | 'running' | 'paused' | 'done'
+
+type LogEntry = {
+  ts: number
+  level: 'info' | 'ok' | 'err'
+  msg: string
 }
 
-type Tab = 'mensajes' | 'llamadas'
+const STAGE_OPTIONS = [
+  { id: '96c42cda-2828-45db-973c-3bc63a8141fd', label: 'Interesado (Asistente Agendador toma chat)' },
+  { id: '05b9af0a-9bcb-4faf-a114-bdd47517a97a', label: 'Lanzamiento' },
+  { id: '5847352c-f983-4e8b-b635-b19797d031a8', label: 'Contactados via WhatsApp' },
+  { id: '', label: 'No mover stage (mantener actual)' },
+]
 
-type ColKey = 'lead' | 'vacante' | 'telefono' | 'score' | 'edad' | 'acciones'
-const DEFAULT_COL_ORDER: ColKey[] = ['lead', 'vacante', 'telefono', 'score', 'edad', 'acciones']
-const COL_STORAGE_KEY = 'outbound_col_order_v1'
+export default function OutboundClient({
+  initialLeads,
+  initialTemplates,
+}: {
+  initialLeads: OutboundLead[]
+  initialTemplates: OutboundTemplate[]
+}) {
+  // ── Filtros ────────────────────────────────────────────────────────────
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
+  const [onlyWithPhone, setOnlyWithPhone] = useState(true)
+  const [excludeRecentlyContacted, setExcludeRecentlyContacted] = useState(true)
+  const [recentDays, setRecentDays] = useState(3)
+  const [search, setSearch] = useState('')
 
-function loadColOrder(): ColKey[] {
-  if (typeof window === 'undefined') return DEFAULT_COL_ORDER
-  try {
-    const raw = window.localStorage.getItem(COL_STORAGE_KEY)
-    if (!raw) return DEFAULT_COL_ORDER
-    const parsed = JSON.parse(raw) as string[]
-    const valid = parsed.filter((k): k is ColKey => DEFAULT_COL_ORDER.includes(k as ColKey))
-    // Asegurar que todas las columnas estén (por si agregamos una nueva en el futuro)
-    const missing = DEFAULT_COL_ORDER.filter(k => !valid.includes(k))
-    return [...valid, ...missing]
-  } catch { return DEFAULT_COL_ORDER }
-}
-function saveColOrder(order: ColKey[]) {
-  if (typeof window === 'undefined') return
-  try { window.localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(order)) } catch {}
-}
+  // ── Plantilla + stage ─────────────────────────────────────────────────
+  const [templateId, setTemplateId] = useState<string>('')
+  const [stageId, setStageId] = useState<string>(STAGE_OPTIONS[0].id) // default Interesado
 
-function fmtRelative(iso: string | null): string {
-  if (!iso) return '—'
-  const ms = Date.now() - new Date(iso).getTime()
-  const m = Math.floor(ms / 60_000)
-  if (m < 1) return 'recién'
-  if (m < 60) return `hace ${m}m`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `hace ${h}h`
-  const d = Math.floor(h / 24)
-  return `hace ${d}d`
-}
-function fmtFuture(iso: string | null): string {
-  if (!iso) return '—'
-  const ms = new Date(iso).getTime() - Date.now()
-  if (ms < 0) return 'pasada'
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `en ${m}m`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `en ${h}h`
-  const d = Math.floor(h / 24)
-  return `en ${d}d`
-}
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-}
+  // ── Batches ────────────────────────────────────────────────────────────
+  const [batchSize, setBatchSize] = useState(10)
+  const [intervalMin, setIntervalMin] = useState(5) // minutos entre batches
 
-export default function OutboundClient() {
-  const router = useRouter()
-  const [data, setData] = useState<ApiResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<Tab>('mensajes')
-  const [busy, setBusy] = useState<Record<string, 'approve' | 'reject' | null>>({})
-  const [colOrder, setColOrder] = useState<ColKey[]>(DEFAULT_COL_ORDER)
-  useEffect(() => { setColOrder(loadColOrder()) }, [])
-  const moveCol = (key: ColKey, dir: -1 | 1) => {
-    setColOrder(prev => {
-      const idx = prev.indexOf(key)
-      if (idx < 0) return prev
-      const target = idx + dir
-      if (target < 0 || target >= prev.length) return prev
-      const next = [...prev]
-      ;[next[idx], next[target]] = [next[target], next[idx]]
-      saveColOrder(next)
+  // ── Runtime ────────────────────────────────────────────────────────────
+  const [runState, setRunState] = useState<RunState>('idle')
+  const [sentIds, setSentIds] = useState<Set<string>>(new Set())
+  const [failedIds, setFailedIds] = useState<Map<string, string>>(new Map())
+  const [currentBatch, setCurrentBatch] = useState(0)
+  const [log, setLog] = useState<LogEntry[]>([])
+  const [nextBatchAt, setNextBatchAt] = useState<number | null>(null)
+  const stopRequested = useRef(false)
+
+  // ── Counts por status (basado en initialLeads, ignora otros filtros) ──
+  const statusCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const l of initialLeads) {
+      if (onlyWithPhone && !l.telefono) continue
+      map.set(l.status, (map.get(l.status) || 0) + 1)
+    }
+    return map
+  }, [initialLeads, onlyWithPhone])
+
+  // ── Lista filtrada ─────────────────────────────────────────────────────
+  const filteredLeads = useMemo(() => {
+    const recentCutoff = excludeRecentlyContacted
+      ? Date.now() - recentDays * 24 * 60 * 60 * 1000
+      : 0
+    const q = search.trim().toLowerCase()
+    return initialLeads.filter((l) => {
+      if (selectedStatuses.size > 0 && !selectedStatuses.has(l.status)) return false
+      if (onlyWithPhone && !l.telefono) return false
+      if (excludeRecentlyContacted && l.ultimo_contacto) {
+        const t = new Date(l.ultimo_contacto).getTime()
+        if (t >= recentCutoff) return false
+      }
+      if (q) {
+        const hay = `${l.nombre || ''} ${l.email || ''} ${l.empresa || ''} ${l.telefono || ''} ${l.vacante || ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [initialLeads, selectedStatuses, onlyWithPhone, excludeRecentlyContacted, recentDays, search])
+
+  const remaining = useMemo(
+    () => filteredLeads.filter((l) => !sentIds.has(l.id) && !failedIds.has(l.id)),
+    [filteredLeads, sentIds, failedIds],
+  )
+
+  const totalToSend = filteredLeads.length
+  const sentCount = sentIds.size
+  const failedCount = failedIds.size
+  const progressPct = totalToSend > 0 ? Math.floor(((sentCount + failedCount) / totalToSend) * 100) : 0
+
+  // ── Toggle status filter ──────────────────────────────────────────────
+  const toggleStatus = (s: string) => {
+    setSelectedStatuses((prev) => {
+      const next = new Set(prev)
+      if (next.has(s)) next.delete(s)
+      else next.add(s)
       return next
     })
   }
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/aprobaciones', { cache: 'no-store' })
-      const json = await res.json() as ApiResponse
-      setData(json)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
+  // ── Dispatcher ─────────────────────────────────────────────────────────
+  const appendLog = useCallback((e: Omit<LogEntry, 'ts'>) => {
+    setLog((prev) => [{ ts: Date.now(), ...e }, ...prev].slice(0, 200))
   }, [])
 
-  useEffect(() => { load() }, [load])
-  useEffect(() => { const i = setInterval(load, 30_000); return () => clearInterval(i) }, [load])
-
-  const approve = async (id: string, dapta_immediate = false) => {
-    setBusy(s => ({ ...s, [id]: 'approve' }))
+  const sendOneBatch = useCallback(async (leads: OutboundLead[]): Promise<{ ok: number; err: number }> => {
+    if (leads.length === 0) return { ok: 0, err: 0 }
+    const phones = leads.map((l) => ({ id: l.id, phone: l.telefono })).filter((p) => p.phone)
     try {
-      let res = await fetch(`/api/aprobaciones/${id}/approve`, {
+      const res = await fetch('/api/outbound/dispatch', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ dapta_immediate }),
+        body: JSON.stringify({ templateId, stageId, leads: phones }),
       })
-      let body = await res.json().catch(() => ({}))
+      const data = await res.json() as {
+        results?: { id: string; ok: boolean; error?: string }[]
+        error?: string
+      }
+      if (!res.ok || !data.results) {
+        appendLog({ level: 'err', msg: `Batch falló: ${data.error || res.status}` })
+        const errMap = new Map(failedIds)
+        for (const l of leads) errMap.set(l.id, data.error || `HTTP ${res.status}`)
+        setFailedIds(errMap)
+        return { ok: 0, err: leads.length }
+      }
+      let okCount = 0
+      let errCount = 0
+      setSentIds((prev) => {
+        const next = new Set(prev)
+        for (const r of data.results || []) {
+          if (r.ok) {
+            next.add(r.id)
+            okCount++
+          }
+        }
+        return next
+      })
+      setFailedIds((prev) => {
+        const next = new Map(prev)
+        for (const r of data.results || []) {
+          if (!r.ok) {
+            next.set(r.id, r.error || 'unknown')
+            errCount++
+          }
+        }
+        return next
+      })
+      return { ok: okCount, err: errCount }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      appendLog({ level: 'err', msg: `Network error: ${msg}` })
+      return { ok: 0, err: leads.length }
+    }
+  }, [templateId, stageId, failedIds, appendLog])
 
-      // Si el lead ya tiene llamada previa, pedimos password y reintentamos
-      // con force:true. Aplica solo al flujo dapta_call (los vambe_template
-      // nunca devuelven 'lead-already-called').
-      if (res.status === 409 && body.error === 'lead-already-called') {
-        const prev = body.previous_status || '?'
-        const password = window.prompt(
-          `Este lead ya tiene una llamada previa (status="${prev}").\n\nSi quieres VOLVER a llamarlo, escribe el password de re-llamada:`,
-          '',
-        )
-        if (!password) {
-          alert('Re-llamada cancelada — no se capturó password.')
-          return
-        }
-        res = await fetch(`/api/aprobaciones/${id}/approve`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ dapta_immediate, force: true, password }),
-        })
-        body = await res.json().catch(() => ({}))
-        if (res.status === 401 && body.error === 'force-password-required') {
-          alert('Password incorrecto. Pídeselo a Fer.')
-          return
-        }
+  // ── Loop principal ────────────────────────────────────────────────────
+  const runLoop = useCallback(async () => {
+    stopRequested.current = false
+    setRunState('running')
+    setCurrentBatch(0)
+    let batchNum = 0
+    while (!stopRequested.current) {
+      const pendingLeads = filteredLeads.filter((l) => !sentIds.has(l.id) && !failedIds.has(l.id))
+      if (pendingLeads.length === 0) {
+        appendLog({ level: 'ok', msg: '✅ Campaña completa.' })
+        setRunState('done')
+        setNextBatchAt(null)
+        return
+      }
+      const batch = pendingLeads.slice(0, batchSize)
+      batchNum++
+      setCurrentBatch(batchNum)
+      appendLog({ level: 'info', msg: `📦 Batch #${batchNum}: enviando ${batch.length} leads…` })
+      const { ok, err } = await sendOneBatch(batch)
+      appendLog({ level: ok > 0 ? 'ok' : 'err', msg: `Batch #${batchNum}: ${ok} OK, ${err} fallidos.` })
+
+      const stillRemaining = filteredLeads.filter((l) => !sentIds.has(l.id) && !failedIds.has(l.id) && !batch.some((b) => b.id === l.id)).length
+      if (stillRemaining === 0) {
+        appendLog({ level: 'ok', msg: '✅ Campaña completa.' })
+        setRunState('done')
+        setNextBatchAt(null)
+        return
       }
 
-      if (!res.ok) {
-        alert('Falló: ' + (body.error || res.status))
+      // Esperar intervalo (con check de stop cada 1s)
+      const waitMs = intervalMin * 60 * 1000
+      const until = Date.now() + waitMs
+      setNextBatchAt(until)
+      appendLog({ level: 'info', msg: `⏳ Esperando ${intervalMin} min al siguiente batch…` })
+      while (Date.now() < until) {
+        if (stopRequested.current) {
+          appendLog({ level: 'info', msg: '⏸ Pausado por usuario.' })
+          setRunState('paused')
+          setNextBatchAt(null)
+          return
+        }
+        await new Promise((r) => setTimeout(r, 1000))
       }
-      await load()
-    } finally {
-      setBusy(s => ({ ...s, [id]: null }))
     }
+  }, [filteredLeads, sentIds, failedIds, batchSize, intervalMin, sendOneBatch, appendLog])
+
+  const handleStart = () => {
+    if (!templateId) {
+      alert('Elige una plantilla primero.')
+      return
+    }
+    if (filteredLeads.length === 0) {
+      alert('No hay leads que coincidan con el filtro.')
+      return
+    }
+    if (!confirm(`¿Empezar campaña? Se enviará la plantilla a ${remaining.length} leads en batches de ${batchSize} cada ${intervalMin} min.\n\nNo cierres esta pestaña hasta que termine.`)) {
+      return
+    }
+    appendLog({ level: 'info', msg: `🚀 Iniciando: ${remaining.length} leads, batch=${batchSize}, intervalo=${intervalMin}min` })
+    void runLoop()
   }
 
-  const reject = async (id: string) => {
-    if (!confirm('¿Marcar como "lo hago manual"? Ya no se sugerirá de nuevo.')) return
-    setBusy(s => ({ ...s, [id]: 'reject' }))
-    try {
-      await fetch(`/api/aprobaciones/${id}/reject`, { method: 'POST' })
-      await load()
-    } finally {
-      setBusy(s => ({ ...s, [id]: null }))
-    }
+  const handlePause = () => {
+    stopRequested.current = true
   }
 
-  // ── Filtro Mensajes: excluir leads con canal_adquisicion === 'Vambe' ──
-  // Por regla del user (2 jun 2026): los leads que llegan VIA Vambe ya
-  // tienen su propio flujo de conversación dentro de Vambe (templates +
-  // bot), no necesitan que les mandemos OTRO template outbound desde acá.
-  // El outbound de aprobaciones es solo para inbound de OTROS canales
-  // (Facebook, Recomendación, Calendar, Tpet, etc.) que pidan contacto
-  // proactivo. Cuando el funnel de no-Vambe esté agotado, esta pestaña
-  // se va a 0 — que es justamente la señal "ya está al día".
-  const mensajesFiltered = useMemo(
-    () => (data?.vambe || []).filter(a => a.leads?.canal_adquisicion !== 'Vambe'),
-    [data],
-  )
+  const handleResume = () => {
+    void runLoop()
+  }
 
-  const summary = useMemo(() => ({
-    vambe: mensajesFiltered.length,
-    dapta: data?.counts.dapta || 0,
-    total: mensajesFiltered.length + (data?.counts.dapta || 0),
-  }), [data, mensajesFiltered])
+  const handleReset = () => {
+    if (!confirm('¿Resetear el progreso? (no afecta los mensajes ya enviados)')) return
+    setSentIds(new Set())
+    setFailedIds(new Map())
+    setCurrentBatch(0)
+    setLog([])
+    setRunState('idle')
+    setNextBatchAt(null)
+  }
 
-  const rows = tab === 'mensajes' ? mensajesFiltered : (data?.dapta || [])
+  // ── Countdown UI ──────────────────────────────────────────────────────
+  const [countdown, setCountdown] = useState<string>('')
+  useEffect(() => {
+    if (!nextBatchAt) return
+    const i = setInterval(() => {
+      const ms = nextBatchAt - Date.now()
+      if (ms <= 0) { setCountdown('disparando…'); return }
+      const s = Math.floor(ms / 1000)
+      const m = Math.floor(s / 60)
+      setCountdown(`${m}m ${s % 60}s`)
+    }, 500)
+    return () => clearInterval(i)
+  }, [nextBatchAt])
 
+  // ── UI ────────────────────────────────────────────────────────────────
   return (
     <div className={styles.root}>
       <aside className={styles.sidebar}>
@@ -213,254 +299,316 @@ export default function OutboundClient() {
 
       <main className={styles.main}>
         <div className={styles.topBar}>
-          <h1>📨 Outbound</h1>
+          <h1>📨 Outbound masivo</h1>
           <span className={styles.topBarSpacer} />
-          <button className={styles.refreshBtn} onClick={load} disabled={loading}>
-            {loading ? 'Cargando…' : '↻ Refresh'}
-          </button>
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+            {initialLeads.length.toLocaleString('es-MX')} leads en BD · {initialTemplates.length} plantillas aprobadas
+          </span>
         </div>
 
-        <div className={styles.body}>
-          {/* Summary cards */}
-          <div className={styles.summary}>
-            <Card label="Total pendiente" value={summary.total.toLocaleString('es-MX')} sub="aprobaciones esperando tu OK" />
-            <Card label="📨 Mensajes Vambe" value={summary.vambe.toLocaleString('es-MX')} sub="leads warm/cold sin contactar" />
-            <Card label="📞 Llamadas Dapta" value={summary.dapta.toLocaleString('es-MX')} sub="warm/cold con llamada agendada" />
-          </div>
+        <div className={styles.body} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          {/* COLUMNA IZQ — Configuración */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {/* 1. Filtros */}
+            <Card title="1. Filtro de leads">
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+                Selecciona uno o más status del CRM. Solo se enviará a leads con teléfono.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {STATUS_ORDER.map((s) => {
+                  const count = statusCounts.get(s) || 0
+                  const sel = selectedStatuses.has(s)
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => toggleStatus(s)}
+                      disabled={runState === 'running'}
+                      style={{
+                        padding: '7px 12px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        borderRadius: 999,
+                        border: `1px solid ${sel ? statusColor(s as never) : 'var(--border)'}`,
+                        background: sel ? statusColor(s as never) + '22' : 'transparent',
+                        color: sel ? 'var(--text)' : 'var(--text2)',
+                        cursor: 'pointer',
+                        opacity: count === 0 ? 0.4 : 1,
+                      }}>
+                      {STATUS_LABELS[s]} <span style={{ color: 'var(--text3)' }}>({count})</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 14, marginTop: 14, fontSize: 12, color: 'var(--text2)', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={onlyWithPhone} onChange={(e) => setOnlyWithPhone(e.target.checked)} disabled={runState === 'running'} />
+                  Solo con teléfono
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={excludeRecentlyContacted} onChange={(e) => setExcludeRecentlyContacted(e.target.checked)} disabled={runState === 'running'} />
+                  Excluir contactados últimos
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={recentDays}
+                  onChange={(e) => setRecentDays(Math.max(1, Number(e.target.value) || 1))}
+                  disabled={runState === 'running' || !excludeRecentlyContacted}
+                  style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
+                <span>días</span>
+              </div>
+              <input
+                type="text"
+                placeholder="Buscar por nombre, email, empresa, vacante, tel…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                disabled={runState === 'running'}
+                style={{ width: '100%', padding: '8px 12px', marginTop: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }} />
+            </Card>
 
-          {/* Tab bar */}
-          <div className={styles.filterBar} style={{ marginTop: 8 }}>
-            <TabChip label={`📨 Mensajes (${summary.vambe})`} active={tab === 'mensajes'} onClick={() => setTab('mensajes')} />
-            <TabChip label={`📞 Llamadas (${summary.dapta})`} active={tab === 'llamadas'} onClick={() => setTab('llamadas')} />
-          </div>
-
-          {/* Tabla — un solo formato para ambos tipos */}
-          {rows.length === 0 && !loading && (
-            <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)', fontSize: 14 }}>
-              {tab === 'mensajes'
-                ? '✨ Nada pendiente. Los nuevos leads inbound warm/cold con 30+ min sin contactar aparecerán aquí.'
-                : '✨ Nada pendiente. Los leads warm/cold con llamada agendada aparecerán aquí.'}
-            </div>
-          )}
-
-          {rows.length > 0 && (
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    {colOrder.map((key, idx) => (
-                      <ColHeader key={key} colKey={key} idx={idx} total={colOrder.length}
-                        tab={tab} onMove={moveCol} />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(a => (
-                    <tr key={a.id} style={{ cursor: a.leads ? 'pointer' : 'default' }}
-                      onClick={() => a.leads && router.push(`/leads/${a.leads.id}`)}>
-                      {colOrder.map(key => (
-                        <Cell key={key} colKey={key} apro={a} tab={tab}
-                          busy={busy[a.id]}
-                          onApprove={() => approve(a.id)}
-                          onReject={() => reject(a.id)} />
-                      ))}
-                    </tr>
+            {/* 2. Plantilla */}
+            <Card title="2. Plantilla Vambe">
+              {initialTemplates.length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--text3)' }}>
+                  No se pudo cargar plantillas (revisa logs). Mientras tanto puedes pegar el ID manualmente:
+                  <input
+                    type="text"
+                    placeholder="Template ID UUID"
+                    value={templateId}
+                    onChange={(e) => setTemplateId(e.target.value.trim())}
+                    style={{ width: '100%', padding: '8px 12px', marginTop: 8, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }} />
+                </div>
+              )}
+              {initialTemplates.length > 0 && (
+                <select
+                  value={templateId}
+                  onChange={(e) => setTemplateId(e.target.value)}
+                  disabled={runState === 'running'}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }}>
+                  <option value="">— Elige una plantilla —</option>
+                  {initialTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}{t.category ? ` · ${t.category}` : ''}</option>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                </select>
+              )}
+              {templateId && (() => {
+                const t = initialTemplates.find((x) => x.id === templateId)
+                if (!t) return null
+                return (
+                  <div style={{ marginTop: 10, padding: 12, borderRadius: 8, background: 'rgba(124,106,247,0.08)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>
+                    {t.preview || '(sin preview)'}
+                  </div>
+                )
+              })()}
+
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>Stage destino al enviar:</div>
+              <select
+                value={stageId}
+                onChange={(e) => setStageId(e.target.value)}
+                disabled={runState === 'running'}
+                style={{ width: '100%', padding: '8px 12px', marginTop: 4, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 12 }}>
+                {STAGE_OPTIONS.map((s) => (
+                  <option key={s.id || 'none'} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+            </Card>
+
+            {/* 3. Batches */}
+            <Card title="3. Batches">
+              <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
+                <label style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Tamaño de batch</div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+                    disabled={runState === 'running'}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
+                </label>
+                <label style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Intervalo entre batches (min)</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={intervalMin}
+                    onChange={(e) => setIntervalMin(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+                    disabled={runState === 'running'}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
+                </label>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
+                {totalToSend > 0 && batchSize > 0 && (
+                  <>
+                    <strong>{Math.ceil(totalToSend / batchSize)}</strong> batch(es) · duración estimada{' '}
+                    <strong>~{Math.max(1, Math.ceil(totalToSend / batchSize) - 1) * intervalMin} min</strong>
+                  </>
+                )}
+              </div>
+            </Card>
+
+            {/* 4. Acciones */}
+            <Card title="4. Disparar">
+              {runState === 'idle' && (
+                <button
+                  className={styles.primaryBtn}
+                  onClick={handleStart}
+                  disabled={!templateId || totalToSend === 0}
+                  style={{ width: '100%', padding: '12px', fontSize: 14, fontWeight: 700 }}>
+                  🚀 Empezar campaña ({remaining.length} leads)
+                </button>
+              )}
+              {runState === 'running' && (
+                <button
+                  onClick={handlePause}
+                  style={{ width: '100%', padding: '12px', fontSize: 14, fontWeight: 700, borderRadius: 8, background: '#ffba3d', color: '#000', border: 'none', cursor: 'pointer' }}>
+                  ⏸ Pausar
+                </button>
+              )}
+              {runState === 'paused' && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={handleResume}
+                    style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 700, borderRadius: 8, background: '#22d68a', color: '#000', border: 'none', cursor: 'pointer' }}>
+                    ▶ Reanudar ({remaining.length} restantes)
+                  </button>
+                  <button
+                    onClick={handleReset}
+                    style={{ padding: '12px', fontSize: 13, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                    Reset
+                  </button>
+                </div>
+              )}
+              {runState === 'done' && (
+                <div>
+                  <div style={{ padding: 12, borderRadius: 8, background: 'rgba(34,214,138,0.1)', color: '#22d68a', fontSize: 14, fontWeight: 600, textAlign: 'center', marginBottom: 8 }}>
+                    ✅ Completado — {sentCount} OK, {failedCount} fallidos
+                  </div>
+                  <button onClick={handleReset} style={{ width: '100%', padding: '10px', fontSize: 12, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                    Reset para otra campaña
+                  </button>
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {/* COLUMNA DER — Progress + Preview */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <Card title="Progreso">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                <Metric label="Total" value={totalToSend} />
+                <Metric label="Enviados" value={sentCount} color="#22d68a" />
+                <Metric label="Fallidos" value={failedCount} color="#f05a5a" />
+                <Metric label="Restantes" value={remaining.length} color="#4ea8f5" />
+              </div>
+              <div style={{ height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${progressPct}%`, background: 'linear-gradient(90deg, #22d68a, #4ea8f5)', transition: 'width 300ms ease' }} />
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                <span>{progressPct}% completado</span>
+                {nextBatchAt && <span>Próximo batch: {countdown}</span>}
+                {runState === 'running' && currentBatch > 0 && <span>Batch actual: #{currentBatch}</span>}
+              </div>
+            </Card>
+
+            <Card title="Log de actividad">
+              {log.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>
+                  Sin actividad. Configura la campaña y dale Start.
+                </div>
+              ) : (
+                <div style={{ maxHeight: 260, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {log.map((l, i) => (
+                    <div key={i} style={{
+                      fontSize: 11.5, fontFamily: 'ui-monospace, monospace',
+                      color: l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? '#22d68a' : 'var(--text2)',
+                      borderLeft: `2px solid ${l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? '#22d68a' : 'var(--text3)'}`,
+                      paddingLeft: 8,
+                    }}>
+                      <span style={{ color: 'var(--text3)' }}>{new Date(l.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      {' '}{l.msg}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            <Card title={`Preview (${filteredLeads.length} leads)`}>
+              {filteredLeads.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>
+                  Ningún lead coincide con el filtro.
+                </div>
+              ) : (
+                <div style={{ maxHeight: 320, overflow: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: 11.5, borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ position: 'sticky', top: 0, background: 'var(--bg, #0e0e15)' }}>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Lead</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Tel</th>
+                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Status</th>
+                        <th style={{ textAlign: 'center', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>—</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredLeads.slice(0, 200).map((l) => {
+                        const sent = sentIds.has(l.id)
+                        const failed = failedIds.has(l.id)
+                        return (
+                          <tr key={l.id} style={{ borderBottom: '1px solid var(--border)', opacity: sent ? 0.4 : 1 }}>
+                            <td style={{ padding: '6px 4px', color: 'var(--text2)' }}>
+                              {l.nombre || l.email || '(sin nombre)'}
+                              {l.empresa && <span style={{ color: 'var(--text3)' }}> · {l.empresa}</span>}
+                            </td>
+                            <td style={{ padding: '6px 4px', color: 'var(--text3)', fontFamily: 'ui-monospace, monospace' }}>{l.telefono || '—'}</td>
+                            <td style={{ padding: '6px 4px' }}>
+                              <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: statusColor(l.status as never) + '22', color: statusColor(l.status as never) }}>
+                                {STATUS_LABELS[l.status as keyof typeof STATUS_LABELS] || l.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                              {sent && <span style={{ color: '#22d68a' }}>✓</span>}
+                              {failed && <span style={{ color: '#f05a5a' }} title={failedIds.get(l.id)}>✗</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {filteredLeads.length > 200 && (
+                        <tr><td colSpan={4} style={{ padding: 8, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>+{filteredLeads.length - 200} más…</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
         </div>
       </main>
     </div>
   )
 }
 
-function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className={styles.summaryCard}>
-      <div className={styles.summaryLabel}>{label}</div>
-      <div className={styles.summaryValue}>{value}</div>
-      {sub && <div className={styles.summarySub}>{sub}</div>}
+    <section style={{
+      padding: 18,
+      borderRadius: 14,
+      background: 'var(--glass)',
+      border: '1px solid var(--border)',
+    }}>
+      <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+function Metric({ label, value, color = 'var(--text)' }: { label: string; value: number; color?: string }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{value.toLocaleString('es-MX')}</div>
     </div>
-  )
-}
-
-function TabChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={active ? styles.filterChipActive : styles.filterChip}>
-      {label}
-    </button>
-  )
-}
-
-function scoreBg(s: number | null): string {
-  if (s == null) return 'rgba(150,150,150,0.1)'
-  if (s >= 60) return 'rgba(255,90,90,0.15)'
-  if (s >= 30) return 'rgba(255,186,61,0.15)'
-  return 'rgba(78,168,245,0.15)'
-}
-function scoreFg(s: number | null): string {
-  if (s == null) return '#888'
-  if (s >= 60) return '#ff5a5a'
-  if (s >= 30) return '#ffba3d'
-  return '#4ea8f5'
-}
-function scoreBorder(s: number | null): string {
-  if (s == null) return 'rgba(150,150,150,0.3)'
-  if (s >= 60) return 'rgba(255,90,90,0.35)'
-  if (s >= 30) return 'rgba(255,186,61,0.35)'
-  return 'rgba(78,168,245,0.35)'
-}
-
-// ─── Column headers + cells (reordenables con flechas) ──────────────────
-const COL_LABELS: Record<ColKey, string> = {
-  lead: 'Lead',
-  vacante: 'Vacante / Empresa',
-  telefono: 'Teléfono',
-  score: 'Score',
-  edad: 'Fecha registro',
-  acciones: 'Acciones',
-}
-
-function ColHeader({ colKey, idx, total, tab, onMove }: {
-  colKey: ColKey
-  idx: number
-  total: number
-  tab: Tab
-  onMove: (k: ColKey, dir: -1 | 1) => void
-}) {
-  const isFirst = idx === 0
-  const isLast = idx === total - 1
-  const label = colKey === 'edad' && tab === 'llamadas' ? 'Cuándo' : COL_LABELS[colKey]
-  const align = colKey === 'score' ? 'center' : 'left'
-  const width = colKey === 'acciones' ? 280 : colKey === 'score' ? 90 : undefined
-  return (
-    <th style={{ textAlign: align, width }}>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-        <button
-          disabled={isFirst}
-          onClick={(e) => { e.stopPropagation(); onMove(colKey, -1) }}
-          title="Mover columna a la izquierda"
-          style={{
-            background: 'transparent', border: 'none', color: 'var(--text3)',
-            cursor: isFirst ? 'default' : 'pointer', padding: 0,
-            fontSize: 11, opacity: isFirst ? 0.2 : 0.7,
-          }}>◀</button>
-        <span>{label}</span>
-        <button
-          disabled={isLast}
-          onClick={(e) => { e.stopPropagation(); onMove(colKey, 1) }}
-          title="Mover columna a la derecha"
-          style={{
-            background: 'transparent', border: 'none', color: 'var(--text3)',
-            cursor: isLast ? 'default' : 'pointer', padding: 0,
-            fontSize: 11, opacity: isLast ? 0.2 : 0.7,
-          }}>▶</button>
-      </div>
-    </th>
-  )
-}
-
-function Cell({ colKey, apro, tab, busy, onApprove, onReject }: {
-  colKey: ColKey
-  apro: Aprobacion
-  tab: Tab
-  busy: 'approve' | 'reject' | null | undefined
-  onApprove: () => void
-  onReject: () => void
-}) {
-  const a = apro
-  const label = colKey === 'edad' && tab === 'llamadas' ? 'Cuándo' : COL_LABELS[colKey]
-  if (colKey === 'lead') {
-    return (
-      <td data-label={label}>
-        <div className={styles.leadName}>{a.leads?.nombre || a.leads?.email || '(sin nombre)'}</div>
-        {a.leads?.email && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.email}</div>}
-      </td>
-    )
-  }
-  if (colKey === 'vacante') {
-    return (
-      <td data-label={label}>
-        {a.leads?.vacante && <div style={{ fontSize: 13 }}>{a.leads.vacante}</div>}
-        {a.leads?.empresa && <div className={styles.muted} style={{ fontSize: 11 }}>{a.leads.empresa}</div>}
-      </td>
-    )
-  }
-  if (colKey === 'telefono') {
-    return <td data-label={label} className={styles.mono}>{a.leads?.telefono || '—'}</td>
-  }
-  if (colKey === 'score') {
-    return (
-      <td data-label={label} style={{ textAlign: 'center' }}>
-        <span style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          padding: '4px 10px', borderRadius: 999, minWidth: 56,
-          fontSize: 11, fontWeight: 600,
-          background: scoreBg(a.score_snapshot),
-          color: scoreFg(a.score_snapshot),
-          border: `1px solid ${scoreBorder(a.score_snapshot)}`,
-        }}>{a.score_snapshot ?? '—'} pts</span>
-      </td>
-    )
-  }
-  if (colKey === 'edad') {
-    return (
-      <td data-label={label} className={styles.muted} style={{ fontSize: 12 }}>
-        {tab === 'mensajes'
-          ? <>
-            <div style={{ color: 'var(--text2)' }}>{fmtDate(a.leads?.created_at || null)}</div>
-            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtRelative(a.leads?.created_at || null)}</div>
-          </>
-          : <>
-            <div style={{ color: '#b8a3ff', fontWeight: 600 }}>{fmtDate(a.scheduled_at)}</div>
-            <div className={styles.muted} style={{ fontSize: 11 }}>{fmtFuture(a.scheduled_at)}</div>
-          </>}
-      </td>
-    )
-  }
-  // acciones
-  return (
-    <td data-label={label} onClick={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          className={styles.primaryBtn}
-          disabled={!!busy}
-          onClick={onApprove}
-          style={{
-            padding: '7px 14px',
-            fontSize: 12,
-            fontWeight: 600,
-            borderRadius: 999,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            boxShadow: '0 2px 8px -2px rgba(124,84,232,0.45)',
-            transition: 'transform 100ms ease, box-shadow 100ms ease, opacity 100ms ease',
-            opacity: busy ? 0.6 : 1,
-          }}>
-          {busy === 'approve' ? '⏳ Enviando…' : tab === 'mensajes' ? '📨 Mandar' : '📞 Llamar'}
-        </button>
-        <button
-          className={styles.btnSecondary}
-          disabled={!!busy}
-          onClick={onReject}
-          style={{
-            padding: '7px 14px',
-            fontSize: 12,
-            fontWeight: 500,
-            borderRadius: 999,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            opacity: busy ? 0.6 : 1,
-          }}>
-          {busy === 'reject' ? '⏳…' : '✋ Manual'}
-        </button>
-      </div>
-    </td>
   )
 }
