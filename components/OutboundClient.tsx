@@ -67,9 +67,9 @@ export default function OutboundClient({
 }) {
   // ── Filtros ────────────────────────────────────────────────────────────
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
+  const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set())
+  const [minDaysSinceContact, setMinDaysSinceContact] = useState<number>(0) // 0 = sin filtro de días
   const [onlyWithPhone, setOnlyWithPhone] = useState(true)
-  const [excludeRecentlyContacted, setExcludeRecentlyContacted] = useState(true)
-  const [recentDays, setRecentDays] = useState(3)
   const [search, setSearch] = useState('')
 
   // ── Plantilla + stage ─────────────────────────────────────────────────
@@ -99,18 +99,44 @@ export default function OutboundClient({
     return map
   }, [initialLeads, onlyWithPhone])
 
+  // ── Counts por canal ──────────────────────────────────────────────────
+  // Normalizamos "(sin canal)" para los leads sin canal_adquisicion para que
+  // Fer pueda filtrar también ese bucket si quiere.
+  const channelCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const l of initialLeads) {
+      if (onlyWithPhone && !l.telefono) continue
+      const c = l.canal_adquisicion?.trim() || '(sin canal)'
+      map.set(c, (map.get(c) || 0) + 1)
+    }
+    return map
+  }, [initialLeads, onlyWithPhone])
+
+  const allChannels = useMemo(
+    () => Array.from(channelCounts.keys()).sort((a, b) => (channelCounts.get(b) || 0) - (channelCounts.get(a) || 0)),
+    [channelCounts],
+  )
+
   // ── Lista filtrada ─────────────────────────────────────────────────────
   const filteredLeads = useMemo(() => {
-    const recentCutoff = excludeRecentlyContacted
-      ? Date.now() - recentDays * 24 * 60 * 60 * 1000
-      : 0
+    const now = Date.now()
     const q = search.trim().toLowerCase()
     return initialLeads.filter((l) => {
       if (selectedStatuses.size > 0 && !selectedStatuses.has(l.status)) return false
+      if (selectedChannels.size > 0) {
+        const c = l.canal_adquisicion?.trim() || '(sin canal)'
+        if (!selectedChannels.has(c)) return false
+      }
       if (onlyWithPhone && !l.telefono) return false
-      if (excludeRecentlyContacted && l.ultimo_contacto) {
-        const t = new Date(l.ultimo_contacto).getTime()
-        if (t >= recentCutoff) return false
+      // Filtro "Días sin contactar":
+      //  - Si min=0 → no aplicar
+      //  - Si lead nunca tuvo contacto (ultimo_contacto null) → siempre pasa
+      //    (es candidato natural para outbound)
+      //  - Si lead tiene contacto → debe tener al menos `minDaysSinceContact`
+      //    días desde el último contacto
+      if (minDaysSinceContact > 0 && l.ultimo_contacto) {
+        const days = (now - new Date(l.ultimo_contacto).getTime()) / 86400_000
+        if (days < minDaysSinceContact) return false
       }
       if (q) {
         const hay = `${l.nombre || ''} ${l.email || ''} ${l.empresa || ''} ${l.telefono || ''} ${l.vacante || ''}`.toLowerCase()
@@ -118,7 +144,7 @@ export default function OutboundClient({
       }
       return true
     })
-  }, [initialLeads, selectedStatuses, onlyWithPhone, excludeRecentlyContacted, recentDays, search])
+  }, [initialLeads, selectedStatuses, selectedChannels, onlyWithPhone, minDaysSinceContact, search])
 
   const remaining = useMemo(
     () => filteredLeads.filter((l) => !sentIds.has(l.id) && !failedIds.has(l.id)),
@@ -130,7 +156,7 @@ export default function OutboundClient({
   const failedCount = failedIds.size
   const progressPct = totalToSend > 0 ? Math.floor(((sentCount + failedCount) / totalToSend) * 100) : 0
 
-  // ── Toggle status filter ──────────────────────────────────────────────
+  // ── Toggle helpers ────────────────────────────────────────────────────
   const toggleStatus = (s: string) => {
     setSelectedStatuses((prev) => {
       const next = new Set(prev)
@@ -139,6 +165,21 @@ export default function OutboundClient({
       return next
     })
   }
+  const toggleChannel = (c: string) => {
+    setSelectedChannels((prev) => {
+      const next = new Set(prev)
+      if (next.has(c)) next.delete(c)
+      else next.add(c)
+      return next
+    })
+  }
+  const DAYS_PRESETS: { label: string; value: number }[] = [
+    { label: 'Sin filtro', value: 0 },
+    { label: '≥ 3 días', value: 3 },
+    { label: '≥ 7 días', value: 7 },
+    { label: '≥ 14 días', value: 14 },
+    { label: '≥ 30 días', value: 30 },
+  ]
 
   // ── Dispatcher ─────────────────────────────────────────────────────────
   const appendLog = useCallback((e: Omit<LogEntry, 'ts'>) => {
@@ -311,8 +352,9 @@ export default function OutboundClient({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {/* 1. Filtros */}
             <Card title="1. Filtro de leads">
-              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
-                Selecciona uno o más status del CRM. Solo se enviará a leads con teléfono.
+              {/* Status CRM */}
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Status CRM {selectedStatuses.size > 0 && <span style={{ color: 'var(--text2)' }}>· {selectedStatuses.size} seleccionado{selectedStatuses.size === 1 ? '' : 's'}</span>}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {STATUS_ORDER.map((s) => {
@@ -324,7 +366,7 @@ export default function OutboundClient({
                       onClick={() => toggleStatus(s)}
                       disabled={runState === 'running'}
                       style={{
-                        padding: '7px 12px',
+                        padding: '6px 11px',
                         fontSize: 12,
                         fontWeight: 600,
                         borderRadius: 999,
@@ -339,24 +381,87 @@ export default function OutboundClient({
                   )
                 })}
               </div>
+
+              {/* Canal de adquisición */}
+              <div style={{ fontSize: 11, color: 'var(--text3)', margin: '14px 0 6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Canal {selectedChannels.size > 0 && <span style={{ color: 'var(--text2)' }}>· {selectedChannels.size} seleccionado{selectedChannels.size === 1 ? '' : 's'}</span>}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {allChannels.length === 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>Sin canales en BD</span>
+                )}
+                {allChannels.map((c) => {
+                  const count = channelCounts.get(c) || 0
+                  const sel = selectedChannels.has(c)
+                  return (
+                    <button
+                      key={c}
+                      onClick={() => toggleChannel(c)}
+                      disabled={runState === 'running'}
+                      style={{
+                        padding: '6px 11px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        borderRadius: 999,
+                        border: `1px solid ${sel ? '#7c6af7' : 'var(--border)'}`,
+                        background: sel ? '#7c6af722' : 'transparent',
+                        color: sel ? 'var(--text)' : 'var(--text2)',
+                        cursor: 'pointer',
+                        opacity: count === 0 ? 0.4 : 1,
+                      }}>
+                      {c} <span style={{ color: 'var(--text3)' }}>({count})</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Días sin contactar */}
+              <div style={{ fontSize: 11, color: 'var(--text3)', margin: '14px 0 6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Días sin contactar
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                {DAYS_PRESETS.map((p) => {
+                  const sel = minDaysSinceContact === p.value
+                  return (
+                    <button
+                      key={p.value}
+                      onClick={() => setMinDaysSinceContact(p.value)}
+                      disabled={runState === 'running'}
+                      style={{
+                        padding: '6px 11px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        borderRadius: 999,
+                        border: `1px solid ${sel ? '#22d68a' : 'var(--border)'}`,
+                        background: sel ? '#22d68a22' : 'transparent',
+                        color: sel ? 'var(--text)' : 'var(--text2)',
+                        cursor: 'pointer',
+                      }}>
+                      {p.label}
+                    </button>
+                  )
+                })}
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>o</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={minDaysSinceContact}
+                  onChange={(e) => setMinDaysSinceContact(Math.max(0, Math.min(365, Number(e.target.value) || 0)))}
+                  disabled={runState === 'running'}
+                  style={{ width: 70, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 12 }} />
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>días custom</span>
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic' }}>
+                Leads sin contacto previo (ultimo_contacto null) siempre pasan.
+              </div>
+
+              {/* Otros */}
               <div style={{ display: 'flex', gap: 14, marginTop: 14, fontSize: 12, color: 'var(--text2)', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
                   <input type="checkbox" checked={onlyWithPhone} onChange={(e) => setOnlyWithPhone(e.target.checked)} disabled={runState === 'running'} />
                   Solo con teléfono
                 </label>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={excludeRecentlyContacted} onChange={(e) => setExcludeRecentlyContacted(e.target.checked)} disabled={runState === 'running'} />
-                  Excluir contactados últimos
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={recentDays}
-                  onChange={(e) => setRecentDays(Math.max(1, Number(e.target.value) || 1))}
-                  disabled={runState === 'running' || !excludeRecentlyContacted}
-                  style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
-                <span>días</span>
               </div>
               <input
                 type="text"
@@ -367,11 +472,11 @@ export default function OutboundClient({
                 style={{ width: '100%', padding: '8px 12px', marginTop: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }} />
             </Card>
 
-            {/* 2. Plantilla */}
-            <Card title="2. Plantilla Vambe">
+            {/* 2. Plantilla — Cards visuales con preview inline */}
+            <Card title={`2. Plantilla Vambe (${initialTemplates.length})`}>
               {initialTemplates.length === 0 && (
                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-                  No se pudo cargar plantillas (revisa logs). Mientras tanto puedes pegar el ID manualmente:
+                  No se pudo cargar plantillas (revisa logs). Pega el ID manualmente:
                   <input
                     type="text"
                     placeholder="Template ID UUID"
@@ -381,28 +486,74 @@ export default function OutboundClient({
                 </div>
               )}
               {initialTemplates.length > 0 && (
-                <select
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  disabled={runState === 'running'}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }}>
-                  <option value="">— Elige una plantilla —</option>
-                  {initialTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}{t.category ? ` · ${t.category}` : ''}</option>
-                  ))}
-                </select>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                  gap: 10,
+                  maxHeight: 380,
+                  overflowY: 'auto',
+                  padding: 2,
+                }}>
+                  {initialTemplates.map((t) => {
+                    const sel = templateId === t.id
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setTemplateId(t.id)}
+                        disabled={runState === 'running'}
+                        style={{
+                          textAlign: 'left',
+                          padding: 12,
+                          borderRadius: 10,
+                          border: `2px solid ${sel ? '#7c6af7' : 'var(--border)'}`,
+                          background: sel ? 'rgba(124,106,247,0.12)' : 'rgba(255,255,255,0.02)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          minHeight: 110,
+                          transition: 'all 120ms ease',
+                        }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', wordBreak: 'break-word' }}>
+                            {t.name}
+                          </span>
+                          {t.category && (
+                            <span style={{
+                              fontSize: 9.5,
+                              padding: '2px 6px',
+                              borderRadius: 999,
+                              background: 'rgba(255,255,255,0.08)',
+                              color: 'var(--text3)',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.05em',
+                              fontWeight: 600,
+                            }}>{t.category}</span>
+                          )}
+                        </div>
+                        <div style={{
+                          fontSize: 11.5,
+                          color: 'var(--text2)',
+                          whiteSpace: 'pre-wrap',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 4,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          lineHeight: 1.4,
+                          flex: 1,
+                        }}>
+                          {t.preview || <em style={{ color: 'var(--text3)' }}>(sin preview)</em>}
+                        </div>
+                        {sel && (
+                          <div style={{ fontSize: 10.5, color: '#7c6af7', fontWeight: 700 }}>✓ Seleccionada</div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
               )}
-              {templateId && (() => {
-                const t = initialTemplates.find((x) => x.id === templateId)
-                if (!t) return null
-                return (
-                  <div style={{ marginTop: 10, padding: 12, borderRadius: 8, background: 'rgba(124,106,247,0.08)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>
-                    {t.preview || '(sin preview)'}
-                  </div>
-                )
-              })()}
 
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>Stage destino al enviar:</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 14 }}>Stage destino al enviar:</div>
               <select
                 value={stageId}
                 onChange={(e) => setStageId(e.target.value)}
