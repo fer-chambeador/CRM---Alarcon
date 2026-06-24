@@ -13,7 +13,7 @@ export default async function OutboundPage() {
   const leads = await fetchAllRows<Lead>((from, to) =>
     supabase
       .from('leads')
-      .select('id, nombre, email, telefono, status, empresa, vacante, canal_adquisicion, created_at, ultimo_contacto, vambe_contact_id, vambe_stage_id')
+      .select('*')
       .order('created_at', { ascending: false })
       .range(from, to),
   )
