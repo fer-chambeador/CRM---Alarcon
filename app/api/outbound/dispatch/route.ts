@@ -60,17 +60,23 @@ export async function POST(req: NextRequest) {
 
       // Registrar la actividad para no re-mandarle al mismo lead la próxima
       // vez que Fer haga una campaña (bumpea ultimo_contacto vía RPC atómica).
-      await supabase.from('lead_actividad').insert({
-        lead_id: l.id,
-        tipo: 'outbound_bulk_sent',
-        descripcion: `📨 Plantilla enviada vía Outbound masivo`,
-        metadata: { template_id: templateId, stage_id: stageId || null, vambe_message_id: r.messageId, vambe_contact_id: r.contactId },
-      }).then(() => null).catch((e) => { console.warn('actividad insert falló', e) })
+      // Supabase client devuelve PromiseLike (no Promise), por eso usamos
+      // try/catch tradicional en vez de .catch() encadenado.
+      try {
+        await supabase.from('lead_actividad').insert({
+          lead_id: l.id,
+          tipo: 'outbound_bulk_sent',
+          descripcion: `📨 Plantilla enviada vía Outbound masivo`,
+          metadata: { template_id: templateId, stage_id: stageId || null, vambe_message_id: r.messageId, vambe_contact_id: r.contactId },
+        })
+      } catch (actErr) { console.warn('actividad insert falló', actErr) }
 
-      await supabase.rpc('bump_lead_contacto', {
-        p_lead_id: l.id,
-        p_set_contactado: false, // no forzar nuevo→contactado; el bot Vambe lo moverá
-      }).then(() => null).catch((e) => { console.warn('bump_lead_contacto falló', e) })
+      try {
+        await supabase.rpc('bump_lead_contacto', {
+          p_lead_id: l.id,
+          p_set_contactado: false, // no forzar nuevo→contactado; el bot Vambe lo moverá
+        })
+      } catch (bumpErr) { console.warn('bump_lead_contacto falló', bumpErr) }
 
       results.push({ id: l.id, ok: true, messageId: r.messageId })
     } catch (e) {
