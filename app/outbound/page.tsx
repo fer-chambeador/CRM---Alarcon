@@ -34,22 +34,52 @@ export default async function OutboundPage() {
     vambe_stage_id: (l as Lead & { vambe_stage_id?: string }).vambe_stage_id ?? null,
   }))
 
-  // Cargar plantillas Vambe — solo las APPROVED para que Fer no pueda intentar
-  // mandar una pendiente de aprobación (Vambe rechazaría con 400).
+  // Cargar plantillas Vambe — pedimos TODAS y filtramos en código por
+  // status='approved' (case-insensitive). Antes mandábamos los filtros como
+  // query params al API de Vambe (status=APPROVED + channel_type=whatsapp)
+  // pero eso devolvía 0 resultados en producción (la API parece esperar
+  // valores distintos a los documentados). Hacer el filtro acá es más
+  // resiliente y deja log visible si la lista sigue vacía.
   let templates: OutboundTemplate[] = []
   try {
-    const res = await listTemplates({ status: 'APPROVED', get_all: true, channel_type: 'whatsapp' })
-    templates = res.templates.map((t) => ({
+    const res = await listTemplates({ get_all: true })
+    const all = res.templates
+    const approved = all.filter((t) => {
+      const s = String((t as { status?: string }).status || '').toLowerCase()
+      // Si Vambe no devuelve campo status, asumimos APPROVED (porque para enviar
+      // una plantilla via API debe estar aprobada — Vambe rechazaría sino).
+      return !s || s.includes('approv')
+    })
+    templates = approved.map((t) => ({
       id: String(t.id || ''),
       name: String(t.name || ''),
-      preview: String((t as { body?: string }).body || (t as { content?: string }).content || ''),
+      preview: String(
+        (t as { body?: string; content?: string; text?: string; components?: unknown[] }).body
+        || (t as { content?: string }).content
+        || (t as { text?: string }).text
+        || extractBodyFromComponents((t as { components?: unknown[] }).components)
+        || '',
+      ),
       category: String((t as { category?: string }).category || ''),
-    }))
-    // Ordenar: más recientes / más usadas arriba. Como no tenemos updated_at
-    // accesible aquí, dejamos el orden que devuelve Vambe.
+    })).filter((t) => t.id && t.name)
+    console.log(`[outbound] templates loaded: ${all.length} total, ${approved.length} approved, ${templates.length} valid`)
   } catch (e) {
     console.error('Outbound: listTemplates falló', e)
   }
 
   return <OutboundClient initialLeads={slim} initialTemplates={templates} />
+}
+
+// Vambe a veces devuelve el body dentro de `components: [{ type: 'BODY', text: '...' }]`
+// (formato Meta WhatsApp Business). Lo extraemos para preview.
+function extractBodyFromComponents(components: unknown): string {
+  if (!Array.isArray(components)) return ''
+  for (const c of components as Array<Record<string, unknown>>) {
+    const type = String(c?.type || '').toUpperCase()
+    if (type === 'BODY' || type === 'TEXT') {
+      const text = c?.text || c?.content || c?.body
+      if (typeof text === 'string') return text
+    }
+  }
+  return ''
 }
