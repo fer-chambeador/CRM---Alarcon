@@ -5,11 +5,10 @@ import { requireBotAuth } from '../../_lib/auth'
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/bot/_debug/llamadas
+ * GET /api/bot/debug/llamadas
  *
- * Debug helper — devuelve las últimas 20 llamadas SIN filtros de fecha,
- * para ver qué hay realmente en la tabla y cómo se ven los scheduled_at.
- * Muestra columnas raw para diagnosticar formato de timestamps.
+ * Debug: separa llamadas con scheduled_at (agendadas) de las de historial,
+ * y también muestra leads con status llamada_agendada.
  */
 export async function GET(req: NextRequest) {
   const unauth = requireBotAuth(req)
@@ -17,40 +16,67 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServiceClient()
 
-  // Sin filtros — última semana ordenado desc
-  const { data, error } = await supabase
-    .from('llamadas')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  // También conteo total en la tabla
-  const { count } = await supabase
+  // Total tabla
+  const { count: total } = await supabase
     .from('llamadas').select('*', { count: 'exact', head: true })
 
-  // Estadísticas de scheduled_at
-  const total = data?.length || 0
-  const withScheduled = (data || []).filter((l) => l.scheduled_at).length
-  const nullScheduled = total - withScheduled
+  // Llamadas AGENDADAS ordenadas por scheduled_at (las próximas y pasadas cercanas)
+  const now = new Date()
+  const cutoff = new Date(now.getTime() - 14 * 86_400_000).toISOString()  // últimas 2 semanas
+  const cutoffFuture = new Date(now.getTime() + 14 * 86_400_000).toISOString()
+
+  const { data: agendadas } = await supabase
+    .from('llamadas')
+    .select('id,lead_id,scheduled_at,status,outcome,started_at,leads:lead_id(nombre,empresa,telefono)')
+    .not('scheduled_at', 'is', null)
+    .gte('scheduled_at', cutoff)
+    .lte('scheduled_at', cutoffFuture)
+    .order('scheduled_at', { ascending: false })
+    .limit(30)
+
+  // Leads con status llamada_agendada — puede que "hoy" viva ahí
+  const { data: leadsAgendados, count: leadsCount } = await supabase
+    .from('leads')
+    .select('id,nombre,empresa,telefono,status,status_changed_at,ultimo_contacto,updated_at', { count: 'exact' })
+    .eq('status', 'llamada_agendada')
+    .order('status_changed_at', { ascending: false })
+    .limit(30)
 
   return NextResponse.json({
-    total_en_tabla: count,
-    ultimas_20: {
-      count: total,
-      con_scheduled_at: withScheduled,
-      sin_scheduled_at: nullScheduled,
+    now_utc: now.toISOString(),
+    now_cdmx: new Date(now.getTime() - 6 * 3600 * 1000).toISOString().replace('Z', '-06:00'),
+    llamadas_total_en_tabla: total,
+    llamadas_agendadas_2_semanas: {
+      count: agendadas?.length || 0,
+      rows: (agendadas || []).map((l) => {
+        type LeadInline = { nombre?: string; empresa?: string; telefono?: string }
+        const lead: LeadInline = (Array.isArray(l.leads) ? l.leads[0] : l.leads) || {}
+        return {
+          id: l.id,
+          scheduled_at: l.scheduled_at,
+          scheduled_at_cdmx: l.scheduled_at
+            ? new Date(new Date(l.scheduled_at as string).getTime() - 6 * 3600 * 1000).toISOString().replace('Z', '-06:00')
+            : null,
+          status: l.status,
+          outcome: l.outcome,
+          lead_name: lead.nombre || lead.empresa,
+          telefono: lead.telefono,
+        }
+      }),
     },
-    columnas_de_primera_fila: data?.[0] ? Object.keys(data[0]) : [],
-    sample: (data || []).slice(0, 5).map((l) => ({
-      id: l.id,
-      lead_id: l.lead_id,
-      scheduled_at: l.scheduled_at,
-      status: l.status,
-      created_at: l.created_at,
-      dapta_call_id: l.dapta_call_id,
-      outcome: l.outcome,
-    })),
+    leads_con_status_llamada_agendada: {
+      total_en_tabla: leadsCount,
+      count_shown: leadsAgendados?.length || 0,
+      rows: (leadsAgendados || []).map((l) => ({
+        id: l.id,
+        nombre: l.nombre || l.empresa,
+        telefono: l.telefono,
+        status_changed_at: l.status_changed_at,
+        status_changed_at_cdmx: l.status_changed_at
+          ? new Date(new Date(l.status_changed_at as string).getTime() - 6 * 3600 * 1000).toISOString().replace('Z', '-06:00')
+          : null,
+        ultimo_contacto: l.ultimo_contacto,
+      })),
+    },
   })
 }
