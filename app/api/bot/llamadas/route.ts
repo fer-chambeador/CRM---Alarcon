@@ -129,7 +129,16 @@ export async function GET(req: NextRequest) {
   // Filtrar por rango (todos los eventos con hora del día — no all-day).
   // Antes filtrábamos con isRelevantCalendarEvent pero era muy estricto (requería
   // "llamada"/"vendedor" en título). Ahora traemos todo y clasificamos con hint.
-  const INTERNAL = ['sync', 'stand up', 'standup', '1:1', 'daily', 'weekly', 'chambeador', 'chambas team']
+  const INTERNAL = [
+    'sync', 'stand up', 'standup', '1:1', '1-1',
+    'daily', 'weekly', 'monthly', 'quarterly',
+    'chambeador', 'chambas team', 'chambasai team',
+    'feedback', 'review', 'prep', 'planning',
+    'crm & updates', 'crm updates', 'ops & growth',
+    'sales mid week', 'contenido empresas',
+    'lunch', 'comida', 'break',
+    'onboarding interno', 'retro',
+  ]
   const relevant = events
     .filter((ev) => ev.status !== 'cancelled')
     .filter((ev) => !!ev.start?.dateTime)  // skip all-day
