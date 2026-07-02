@@ -1,70 +1,245 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { listUpcomingEvents, isRelevantCalendarEvent, isConnected } from '@/lib/googleCalendar'
 import { requireBotAuth } from '../_lib/auth'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 30
 
 /**
  * GET /api/bot/llamadas
  *
- * Query params:
- *   from   - ISO date (default: hoy 00:00 CDMX)
- *   to     - ISO date (default: mañana 00:00 CDMX)
- *   limit  - default 30
+ * Source of truth: **Google Calendar** (source of truth para llamadas de Fer).
+ * Lee los eventos upcoming de GCal, filtra a los relevantes (llamadas comerciales),
+ * filtra por rango de fecha en hora MX, y trata de matchear cada uno a un lead
+ * del CRM por teléfono/email (para dar contexto).
  *
- * Devuelve llamadas agendadas en el rango, con contexto del lead (empresa,
- * presupuesto, canal, vacante).
+ * Query params:
+ *   range   — hoy | manana | semana (default: hoy)
+ *   limit   — default 30, max 100
  *
  * Auth: header x-bot-secret
  */
+
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/g
+const PHONE_RE = /(?:\+?52\s*)?(?:\d[\s-]?){10,15}\d/
+
+function normalizePhone(raw: string): string {
+  return raw.replace(/[^\d]/g, '').replace(/^521/, '52').replace(/^1/, '')
+}
+
+/**
+ * Extrae teléfono y email del evento (título + descripción). Basado en la lógica de
+ * extractClientFromEvent en lib/googleCalendar.ts pero standalone.
+ */
+function extractContact(ev: {
+  summary?: string
+  description?: string
+  attendees?: Array<{ email?: string; responseStatus?: string }>
+  organizer?: { email?: string }
+}): { telefono: string | null; email: string | null; nombreTitulo: string | null } {
+  const title = ev.summary || ''
+  const desc = ev.description || ''
+  const ownerEmails = new Set(['fer@chambas.ai', 'max@chambas.ai'])
+  if (ev.organizer?.email) ownerEmails.add(ev.organizer.email.toLowerCase())
+
+  let telefono: string | null = null
+  let email: string | null = null
+  let nombreTitulo: string | null = null
+
+  // Teléfono del título (formato Vambe)
+  const phoneMatch = title.match(PHONE_RE) || desc.match(PHONE_RE)
+  if (phoneMatch) telefono = phoneMatch[0]
+
+  // Email — attendee no-owner primero, luego cualquier email en descripción
+  for (const a of ev.attendees || []) {
+    if (a.email && !ownerEmails.has(a.email.toLowerCase())) {
+      email = a.email
+      break
+    }
+  }
+  if (!email) {
+    const text = `${title}\n${desc}`
+    const emails = text.match(EMAIL_RE) || []
+    for (const m of emails) {
+      if (!ownerEmails.has(m.toLowerCase())) { email = m; break }
+    }
+  }
+
+  // Nombre del título
+  const m1 = title.match(/\(([^)]+)\)\s*$/)              // "... (nombre)"
+  const m2 = title.match(/^([^<>]+?)\s*<>/)              // "Nombre <> Llamada ..."
+  const m3 = title.match(/Llamada\s*[-—]\s*([^\d+]+?)(?:\s+\+?\d|$)/i)  // "Llamada - nombre 5215..."
+  nombreTitulo = (m1?.[1] || m2?.[1] || m3?.[1] || '').trim() || null
+
+  return { telefono, email, nombreTitulo }
+}
+
 export async function GET(req: NextRequest) {
   const unauth = requireBotAuth(req)
   if (unauth) return unauth
 
   const url = new URL(req.url)
+  const range = url.searchParams.get('range') || 'hoy'
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 100)
 
-  // Default: hoy CDMX (UTC-6). Se calcula en UTC pero con offset -6h.
-  const cdmxOffset = -6 * 60 * 60 * 1000
-  const nowLocal = new Date(Date.now() + cdmxOffset)
-  const startLocal = new Date(nowLocal)
-  startLocal.setUTCHours(0, 0, 0, 0)
-  const endLocal = new Date(startLocal.getTime() + 24 * 60 * 60 * 1000)
-
-  // Volver a UTC
-  const defaultFrom = new Date(startLocal.getTime() - cdmxOffset).toISOString()
-  const defaultTo = new Date(endLocal.getTime() - cdmxOffset).toISOString()
-
-  const from = url.searchParams.get('from') || defaultFrom
-  const to = url.searchParams.get('to') || defaultTo
-
   const supabase = createServiceClient()
-  const { data, error } = await supabase
-    .from('llamadas')
-    .select(`
-      id,
-      scheduled_at,
-      status,
-      duration_seconds,
-      outcome,
-      lead_id,
-      leads:lead_id (
-        id, nombre, empresa, telefono, canal_adquisicion,
-        presupuesto, puesto, status, monto, ultimo_contacto
-      )
-    `)
-    .not('scheduled_at', 'is', null)
-    .gte('scheduled_at', from)
-    .lt('scheduled_at', to)
-    .order('scheduled_at')
-    .limit(limit)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  // Chequear conexión GCal
+  const conn = await isConnected(supabase)
+  if (!conn.connected) {
+    return NextResponse.json({
+      error: 'Google Calendar no está conectado en el CRM',
+      hint: 'Ve a /integrations en el CRM y conecta tu cuenta de Google.',
+    }, { status: 503 })
+  }
+
+  // Rango en hora MX
+  const now = new Date()
+  const mxFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  const todayMxStr = mxFmt.format(now)
+  const startMx = new Date(`${todayMxStr}T00:00:00-06:00`)
+  const endTodayMx = new Date(`${todayMxStr}T23:59:59.999-06:00`)
+  const startTomorrowMx = new Date(startMx); startTomorrowMx.setUTCDate(startTomorrowMx.getUTCDate() + 1)
+  const endTomorrowMx = new Date(endTodayMx); endTomorrowMx.setUTCDate(endTomorrowMx.getUTCDate() + 1)
+  const endWeekMx = new Date(endTodayMx); endWeekMx.setUTCDate(endWeekMx.getUTCDate() + 7)
+
+  let rangeStart = startMx
+  let rangeEnd = endTodayMx
+  let daysAhead = 1
+  if (range === 'manana') {
+    rangeStart = startTomorrowMx
+    rangeEnd = endTomorrowMx
+    daysAhead = 2
+  } else if (range === 'semana') {
+    rangeStart = startMx
+    rangeEnd = endWeekMx
+    daysAhead = 8
+  }
+
+  // Traer eventos futuros de GCal (con margen)
+  let events
+  try {
+    events = await listUpcomingEvents(supabase, daysAhead)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: `GCal error: ${msg}` }, { status: 502 })
+  }
+
+  // Filtrar a relevantes + rango
+  const relevant = events
+    .filter(isRelevantCalendarEvent)
+    .filter((ev) => {
+      const start = ev.start?.dateTime
+      if (!start) return false
+      const t = new Date(start).getTime()
+      return t >= rangeStart.getTime() && t <= rangeEnd.getTime()
+    })
+    .slice(0, limit)
+
+  // Match a leads del CRM
+  const phones = Array.from(new Set(
+    relevant.map((ev) => extractContact(ev).telefono).filter((x): x is string => !!x)
+  ))
+  const emails = Array.from(new Set(
+    relevant.map((ev) => extractContact(ev).email).filter((x): x is string => !!x)
+  ))
+
+  type LeadInfo = {
+    id: string
+    nombre: string | null
+    empresa: string | null
+    telefono: string | null
+    email: string | null
+    canal_adquisicion: string | null
+    presupuesto: string | null
+    puesto: string | null
+    status: string | null
+    monto: number | null
+    ultimo_contacto: string | null
+    notas: string | null
+  }
+  const leadsByPhone = new Map<string, LeadInfo>()
+  const leadsByEmail = new Map<string, LeadInfo>()
+
+  if (phones.length > 0 || emails.length > 0) {
+    // Buscar por teléfono normalizado (ilike de últimos 10 dígitos)
+    const conditions: string[] = []
+    for (const p of phones) {
+      const norm = normalizePhone(p)
+      if (norm.length >= 10) {
+        const last10 = norm.slice(-10)
+        conditions.push(`telefono.ilike.%${last10}%`)
+      }
+    }
+    for (const e of emails) {
+      conditions.push(`email.eq.${e}`)
+    }
+
+    if (conditions.length > 0) {
+      const { data: leads } = await supabase
+        .from('leads')
+        .select('id,nombre,empresa,telefono,email,canal_adquisicion,presupuesto,puesto,status,monto,ultimo_contacto,notas')
+        .or(conditions.join(','))
+        .limit(200)
+
+      for (const l of (leads || []) as LeadInfo[]) {
+        if (l.telefono) {
+          const norm = normalizePhone(l.telefono)
+          if (norm.length >= 10) leadsByPhone.set(norm.slice(-10), l)
+        }
+        if (l.email) leadsByEmail.set(l.email.toLowerCase(), l)
+      }
+    }
+  }
+
+  // Construir respuesta
+  const llamadas = relevant.map((ev) => {
+    const contact = extractContact(ev)
+    let lead: LeadInfo | null = null
+    if (contact.telefono) {
+      const norm = normalizePhone(contact.telefono)
+      if (norm.length >= 10) lead = leadsByPhone.get(norm.slice(-10)) || null
+    }
+    if (!lead && contact.email) {
+      lead = leadsByEmail.get(contact.email.toLowerCase()) || null
+    }
+    return {
+      gcal_event_id: ev.id,
+      titulo: ev.summary,
+      fecha_utc: ev.start?.dateTime,
+      fecha_cdmx: ev.start?.dateTime
+        ? new Date(new Date(ev.start.dateTime as string).getTime() - 6 * 3600 * 1000).toISOString().replace('Z', '-06:00')
+        : null,
+      contacto_from_event: {
+        nombre: contact.nombreTitulo,
+        telefono: contact.telefono,
+        email: contact.email,
+      },
+      lead: lead ? {
+        id: lead.id,
+        nombre: lead.nombre || lead.empresa,
+        telefono: lead.telefono,
+        canal: lead.canal_adquisicion,
+        presupuesto: lead.presupuesto,
+        puesto: lead.puesto,
+        status: lead.status,
+        monto: lead.monto,
+        notas: lead.notas,
+      } : null,
+    }
+  })
 
   return NextResponse.json({
-    count: data?.length || 0,
-    from,
-    to,
-    llamadas: data || [],
+    source: 'google_calendar',
+    range,
+    from: rangeStart.toISOString(),
+    to: rangeEnd.toISOString(),
+    connected_email: conn.google_email,
+    count: llamadas.length,
+    llamadas,
   })
 }
