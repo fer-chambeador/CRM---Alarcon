@@ -80,7 +80,14 @@ export async function GET(req: NextRequest) {
   if (unauth) return unauth
 
   const url = new URL(req.url)
-  const range = url.searchParams.get('range') || 'hoy'
+  const rawRange = (url.searchParams.get('range') || 'hoy').toLowerCase()
+  // Sinónimos
+  const rangeMap: Record<string, string> = {
+    hoy: 'hoy', today: 'hoy',
+    manana: 'manana', 'mañana': 'manana', tomorrow: 'manana',
+    semana: 'semana', week: 'semana',
+  }
+  const range = rangeMap[rawRange] || rawRange
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 100)
 
   const supabase = createServiceClient()
@@ -116,6 +123,17 @@ export async function GET(req: NextRequest) {
     rangeStart = startMx
     rangeEnd = endWeekMx
   }
+
+  // Overrides: date=YYYY-MM-DD (día completo MX) o from/to explícitos ISO
+  const dateParam = url.searchParams.get('date')
+  if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+    rangeStart = new Date(`${dateParam}T00:00:00-06:00`)
+    rangeEnd = new Date(`${dateParam}T23:59:59.999-06:00`)
+  }
+  const fromOverride = url.searchParams.get('from')
+  const toOverride = url.searchParams.get('to')
+  if (fromOverride) rangeStart = new Date(fromOverride)
+  if (toOverride) rangeEnd = new Date(toOverride)
 
   // Traer eventos GCal EN el rango exacto (no desde `now` — necesitamos también los del mañana)
   let events
