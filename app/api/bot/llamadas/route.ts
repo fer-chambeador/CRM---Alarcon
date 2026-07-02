@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { listUpcomingEvents, isRelevantCalendarEvent, isConnected } from '@/lib/googleCalendar'
+import { listUpcomingEvents, isConnected } from '@/lib/googleCalendar'
 import { requireBotAuth } from '../_lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -129,13 +129,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `GCal error: ${msg}` }, { status: 502 })
   }
 
-  // Filtrar a relevantes + rango
+  // Filtrar por rango (todos los eventos con hora del día — no all-day).
+  // Antes filtrábamos con isRelevantCalendarEvent pero era muy estricto (requería
+  // "llamada"/"vendedor" en título). Ahora traemos todo y clasificamos con hint.
+  const INTERNAL = ['sync', 'stand up', 'standup', '1:1', 'daily', 'weekly', 'chambeador', 'chambas team']
   const relevant = events
-    .filter(isRelevantCalendarEvent)
+    .filter((ev) => ev.status !== 'cancelled')
+    .filter((ev) => !!ev.start?.dateTime)  // skip all-day
     .filter((ev) => {
-      const start = ev.start?.dateTime
-      if (!start) return false
-      const t = new Date(start).getTime()
+      const title = (ev.summary || '').toLowerCase()
+      return !INTERNAL.some((k) => title.includes(k))
+    })
+    .filter((ev) => {
+      const t = new Date(ev.start!.dateTime!).getTime()
       return t >= rangeStart.getTime() && t <= rangeEnd.getTime()
     })
     .slice(0, limit)
@@ -239,6 +245,11 @@ export async function GET(req: NextRequest) {
     from: rangeStart.toISOString(),
     to: rangeEnd.toISOString(),
     connected_email: conn.google_email,
+    debug: {
+      events_from_gcal: events.length,
+      events_after_filter: relevant.length,
+      days_ahead_queried: daysAhead,
+    },
     count: llamadas.length,
     llamadas,
   })
