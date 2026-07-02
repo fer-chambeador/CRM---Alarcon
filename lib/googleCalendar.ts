@@ -353,12 +353,25 @@ type GCalEvent = {
 export async function listUpcomingEvents(supabase: Supabase, daysAhead = 30): Promise<GCalEvent[]> {
   const now = new Date()
   const future = new Date(now.getTime() + daysAhead * 86400_000)
+  return listEventsInRange(supabase, now.toISOString(), future.toISOString())
+}
+
+/**
+ * Lee eventos GCal en un rango arbitrario (útil para "eventos del día" incluyendo
+ * los que ya pasaron hoy). timeMin/timeMax deben ser ISO strings.
+ */
+export async function listEventsInRange(
+  supabase: Supabase,
+  timeMin: string,
+  timeMax: string,
+  maxResults = 250,
+): Promise<GCalEvent[]> {
   const params = new URLSearchParams({
-    timeMin: now.toISOString(),
-    timeMax: future.toISOString(),
+    timeMin,
+    timeMax,
     singleEvents: 'true',
     orderBy: 'startTime',
-    maxResults: '100',
+    maxResults: String(maxResults),
   })
   const result = await calendarFetch(supabase, 'GET', `/calendars/{calendarId}/events?${params}`)
   return (result?.items || []) as GCalEvent[]

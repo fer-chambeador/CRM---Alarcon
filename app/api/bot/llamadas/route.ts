@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { listUpcomingEvents, isConnected } from '@/lib/googleCalendar'
+import { listEventsInRange, isConnected } from '@/lib/googleCalendar'
 import { requireBotAuth } from '../_lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -109,21 +109,18 @@ export async function GET(req: NextRequest) {
 
   let rangeStart = startMx
   let rangeEnd = endTodayMx
-  let daysAhead = 1
   if (range === 'manana') {
     rangeStart = startTomorrowMx
     rangeEnd = endTomorrowMx
-    daysAhead = 2
   } else if (range === 'semana') {
     rangeStart = startMx
     rangeEnd = endWeekMx
-    daysAhead = 8
   }
 
-  // Traer eventos futuros de GCal (con margen)
+  // Traer eventos GCal EN el rango exacto (no desde `now` — necesitamos también los del mañana)
   let events
   try {
-    events = await listUpcomingEvents(supabase, daysAhead)
+    events = await listEventsInRange(supabase, rangeStart.toISOString(), rangeEnd.toISOString(), 250)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ error: `GCal error: ${msg}` }, { status: 502 })
@@ -248,7 +245,6 @@ export async function GET(req: NextRequest) {
     debug: {
       events_from_gcal: events.length,
       events_after_filter: relevant.length,
-      days_ahead_queried: daysAhead,
     },
     count: llamadas.length,
     llamadas,
