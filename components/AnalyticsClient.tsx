@@ -1998,7 +1998,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
             <KPICard label={`Leads · ${DATE_LABELS[dateRange].toLowerCase()}`} value={String(stats.total)} sub={`${stats.descartados} descartados`} accentColor="var(--text)" />
           </div>
 
-          {false && <>{/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
+          {(false as boolean) && <>{/* ── DAPTA · operativa de llamadas ────────────────────────────── */}
           <GroupHeader title="Daniela (Dapta)" subtitle="Funnel: leads contactados → pidieron presentación → pidieron liga → pagaron. Todos en leads únicos." />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
             <KPICard
