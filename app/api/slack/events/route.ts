@@ -23,6 +23,7 @@ function verifySlackSignature(req: NextRequest, body: string): boolean {
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
   if (!verifySlackSignature(req, rawBody)) {
+    console.error('[slack-webhook] SIG_FAIL body_len=' + rawBody.length)
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
@@ -33,13 +34,29 @@ export async function POST(req: NextRequest) {
 
   if (payload.type === 'event_callback') {
     const event = payload.event
+    // ── LOGGING para diagnóstico de la 5ta regresión #canirac ────────────
+    // Cada Slack event nos importa saber: qué canal, qué subtype, si tiene texto
+    // Sin esto no podemos diagnosticar por qué mensajes de "Chambas Alert" no
+    // entran al CRM. Buscar en Railway logs con: "[slack-webhook]"
+    const dbgChannel = event.channel || event.channel_id || 'unknown'
+    const dbgSubtype = event.subtype || '(none)'
+    const dbgHasText = !!(event.text && event.text.length > 0)
+    const dbgHasBlocks = Array.isArray(event.blocks) && event.blocks.length > 0
+    const dbgHasAtt = Array.isArray(event.attachments) && event.attachments.length > 0
+    console.log(`[slack-webhook] IN channel=${dbgChannel} subtype=${dbgSubtype} hasText=${dbgHasText} hasBlocks=${dbgHasBlocks} hasAtt=${dbgHasAtt} botId=${event.bot_id || '-'} user=${event.user || '-'}`)
+
     // Aceptar mensajes de usuarios humanos (sin subtype) Y mensajes del bot
     // "Chambas Alert" que envía con subtype='bot_message'. Sin esto, NINGÚN
     // lead del onboarding (panel.chambas.ai) entra al CRM, porque todos llegan
     // via el bot a canales #leads-sales / #check-in-entrevistas.
     // Otros subtypes (channel_join, message_changed, etc.) se siguen ignorando.
+    // FIX 2-jul-2026: aceptar también mensajes con event.bot_id (sin subtype)
+    // por si Slack ahora manda ese formato para bots nuevos.
     const subtype = event.subtype
-    if (event.type !== 'message' || (subtype && subtype !== 'bot_message')) {
+    const isBotByBotId = !!event.bot_id && !subtype
+    const isValidSubtype = !subtype || subtype === 'bot_message'
+    if (event.type !== 'message' || (!isValidSubtype && !isBotByBotId)) {
+      console.log(`[slack-webhook] SKIP type=${event.type} subtype=${dbgSubtype} bot_id=${event.bot_id || '-'}`)
       return NextResponse.json({ ok: true })
     }
 
@@ -92,10 +109,19 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean)
     const fullText = candidates.join('\n').trim()
 
-    if (!fullText) return NextResponse.json({ ok: true, reason: 'no text' })
+    if (!fullText) {
+      console.log(`[slack-webhook] NO_TEXT channel=${dbgChannel} subtype=${dbgSubtype}`)
+      return NextResponse.json({ ok: true, reason: 'no text' })
+    }
 
     const parsed = parseSlackMessage(fullText)
-    if (!parsed || !parsed.email) return NextResponse.json({ ok: true })
+    if (!parsed || !parsed.email) {
+      // Preview de texto para poder ver en Railway logs QUÉ mensaje llegó y NO parseó
+      const preview = fullText.slice(0, 250).replace(/\n/g, ' | ')
+      console.log(`[slack-webhook] PARSE_FAIL channel=${dbgChannel} textLen=${fullText.length} preview="${preview}"`)
+      return NextResponse.json({ ok: true, reason: 'parse_fail' })
+    }
+    console.log(`[slack-webhook] PARSED tipo=${parsed.tipo_evento} email=${parsed.email} canal=${parsed.canal_adquisicion || '-'} tel=${parsed.telefono || '-'} empresa=${parsed.empresa || '-'}`)
 
     const supabase = createServiceClient()
     const { data: existing } = await supabase.from('leads').select('*').eq('email', parsed.email).maybeSingle()
@@ -149,7 +175,14 @@ export async function POST(req: NextRequest) {
     // ── Compañia creada → solo insertar si tiene todos los campos ──
     if (parsed.tipo_evento === 'empresa_creada') {
       if (!parsed.telefono || !parsed.puesto || !parsed.canal_adquisicion || !parsed.empresa) {
-        return NextResponse.json({ ok: true })
+        const missing = [
+          !parsed.telefono && 'tel',
+          !parsed.puesto && 'puesto',
+          !parsed.canal_adquisicion && 'canal',
+          !parsed.empresa && 'empresa',
+        ].filter(Boolean).join(',')
+        console.log(`[slack-webhook] MISSING_FIELDS email=${parsed.email} missing=${missing}`)
+        return NextResponse.json({ ok: true, reason: 'missing_fields', missing })
       }
 
       if (existing) {
@@ -164,7 +197,7 @@ export async function POST(req: NextRequest) {
           await supabase.from('leads').update(updates).eq('id', existing.id)
         }
       } else {
-        const { data: newLead } = await supabase.from('leads').insert({
+        const { data: newLead, error: insertErr } = await supabase.from('leads').insert({
           email: parsed.email.toLowerCase().trim(),
           nombre: parsed.nombre,
           empresa: empresaFromEmail,
@@ -178,7 +211,10 @@ export async function POST(req: NextRequest) {
           slack_ts: event.ts,
           slack_raw: event.text,
         }).select('id').maybeSingle()
-        if (newLead) {
+        if (insertErr) {
+          console.error(`[slack-webhook] INSERT_ERR email=${parsed.email} err=${insertErr.message}`)
+        } else if (newLead) {
+          console.log(`[slack-webhook] CREATED lead_id=${newLead.id} email=${parsed.email} canal=${parsed.canal_adquisicion}`)
           await supabase.from('lead_actividad').insert({ lead_id: newLead.id, tipo: 'slack_update', descripcion: 'Lead creado desde Slack', metadata: { slack_ts: event.ts } })
         }
       }
