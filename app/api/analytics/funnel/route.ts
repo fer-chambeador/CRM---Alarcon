@@ -27,14 +27,14 @@ export const fetchCache = 'force-no-store'
 
 // Recurrente quitado del funnel (user request, 3 jun 2026): un cliente recurrente
 // ya está convertido — duplicar en el funnel ruidoso para la vista de captación.
-const STAGES = ['nuevo', 'contactado', 'llamada_agendada', 'llamada_con_dapta', 'presentacion_enviada', 'convertido'] as const
+const STAGES = ['nuevo', 'contactado', 'llamada_agendada', 'presentacion_enviada', 'convertido'] as const
 type Stage = typeof STAGES[number]
 
 const STAGE_LABEL: Record<Stage, string> = {
   nuevo: 'Nuevo',
   contactado: 'Contactado',
   llamada_agendada: 'Llamada agendada',
-  llamada_con_dapta: 'Daniela llamó',
+
   presentacion_enviada: 'Presentación enviada',
   convertido: 'Convertido',
 }
@@ -44,7 +44,7 @@ const STAGE_RANK: Record<Stage, number> = {
   nuevo: 0,
   contactado: 1,
   llamada_agendada: 2,
-  llamada_con_dapta: 3,
+
   presentacion_enviada: 4,
   convertido: 5,
 }
