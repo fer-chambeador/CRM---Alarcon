@@ -96,7 +96,31 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     // "Puesto:" = vacante que el cliente quiere reclutar (NO confundir con "Rol en la empresa")
     const vacanteMatch = preprocessed.match(/Puesto:\s*([^\n]+)/)
     const vacante = vacanteMatch?.[1]?.trim() || null
-    if (puesto && puesto.toLowerCase().includes('soy candidato')) return null
+    // ── Filtro candidatos (NO son leads B2B, no deben entrar al CRM) ──
+    // Cuando "Rol en la empresa" es "busco trabajo", "soy candidato",
+    // "busco empleo", "necesito trabajo", etc. son personas buscando chamba
+    // que llegaron por error al canal de empresas. Descartar en el parser
+    // hace que el webhook de Slack retorne { ok: true } sin insertar nada.
+    if (puesto) {
+      const p = puesto.toLowerCase()
+      const CANDIDATE_KEYWORDS = [
+        'soy candidato',
+        'busco trabajo',
+        'buscando trabajo',
+        'busco empleo',
+        'buscando empleo',
+        'necesito trabajo',
+        'necesito empleo',
+        'quiero trabajar',
+        'quiero un trabajo',
+        'estoy buscando',
+        'aplicar a un puesto',
+        'aplicar al puesto',
+        'me interesa el puesto',
+        'oferta de trabajo',
+      ]
+      if (CANDIDATE_KEYWORDS.some(k => p.includes(k))) return null
+    }
     return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null, presupuesto, vacante }
   }
 
