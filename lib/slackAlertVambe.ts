@@ -372,6 +372,7 @@ ${transcript}
 
 const STAGE_EMOJI: Record<string, string> = {
   asistencia_humana: '🆘',
+  interesado: '✍️',
   confirmados: '✅',
   llamadas: '☎️',
   contactados_whatsapp: '💬',
@@ -385,7 +386,7 @@ const STAGE_EMOJI: Record<string, string> = {
 export async function alertNuevoMensajeVambe(params: {
   lead: Pick<Lead, 'id' | 'nombre' | 'email' | 'telefono' | 'empresa' | 'vacante' | 'presupuesto'>
   message: string
-  stageKey: 'asistencia_humana' | 'confirmados' | 'llamadas' | 'contactados_whatsapp' | 'ganados'
+  stageKey: 'asistencia_humana' | 'confirmados' | 'llamadas' | 'contactados_whatsapp' | 'ganados' | 'interesado'
   stageLabel: string
 }): Promise<{ ok: boolean; error?: string }> {
   const supabase = createServiceClient()

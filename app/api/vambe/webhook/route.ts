@@ -20,11 +20,15 @@ const STAGE_LLAMADA_COMERCIAL = 'cd0ab574-c844-4346-bea3-4ddd084fcb92'  // Llama
 
 // Stage extra usado para alertas de "nuevo mensaje":
 const STAGE_CONTACTADOS_WA    = '5847352c-f983-4e8b-b635-b19797d031a8'  // Contactados via WhatsApp
+const STAGE_INTERESADO        = '96c42cda-2828-45db-973c-3bc63a8141fd'  // Interesado ✍️
 
 // Mapa stage_id → label + key para alertas de nuevo mensaje en Slack.
 // Solo los stages aquí listados disparan alerta de "nuevo mensaje" en inbound.
-const NUEVO_MENSAJE_STAGES: Record<string, { key: 'asistencia_humana' | 'confirmados' | 'llamadas' | 'contactados_whatsapp' | 'ganados'; label: string }> = {
+// AGREGADO 7-jul 2026: STAGE_INTERESADO — leads rescatados por ah-hourly-monitor
+// pasan a Interesado y sus respuestas se estaban perdiendo (caso Antonio Sosa).
+const NUEVO_MENSAJE_STAGES: Record<string, { key: 'asistencia_humana' | 'confirmados' | 'llamadas' | 'contactados_whatsapp' | 'ganados' | 'interesado'; label: string }> = {
   [STAGE_ATENCION_HUMANA]:   { key: 'asistencia_humana',     label: 'Asistencia humana' },
+  [STAGE_INTERESADO]:        { key: 'interesado',            label: 'Interesado ✍️' },
   [STAGE_DEMO_CONFIRMADA]:   { key: 'confirmados',           label: 'Confirmados ✅' },
   [STAGE_LLAMADA_COMERCIAL]: { key: 'llamadas',              label: 'Llamadas ☎️' },
   [STAGE_CONTACTADOS_WA]:    { key: 'contactados_whatsapp',  label: 'Contactados via WhatsApp' },
