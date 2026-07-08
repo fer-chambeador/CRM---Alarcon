@@ -29,6 +29,24 @@ let lastQr = null
 let ready = false
 let meNumber = null
 
+// Limpiar locks de Chromium huérfanos (quedan en el volumen si el contenedor
+// anterior murió — "The profile appears to be in use by another process").
+const fs = require('fs')
+const path = require('path')
+function rmChromiumLocks(dir) {
+  try {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) rmChromiumLocks(p)
+      else if (/^Singleton(Lock|Cookie|Socket)$/.test(e.name)) {
+        fs.rmSync(p, { force: true })
+        console.log('[wa-bridge] lock huérfano eliminado:', p)
+      }
+    }
+  } catch { /* dir aún no existe — primera corrida */ }
+}
+rmChromiumLocks('./session')
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: './session' }),
   puppeteer: {
