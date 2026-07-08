@@ -1,0 +1,17 @@
+{
+  "name": "wa-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Puente WhatsApp de Fer — expone /send para que el CRM mande la plantilla desde su número (1x1, detonado manualmente)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "stress": "node stress-test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "engines": { "node": ">=18" }
+}

@@ -601,6 +601,30 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [liveCount, setLiveCount] = useState(0)
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>({ key: 'fecha', dir: 'desc' })
   const [popover, setPopover] = useState<{ leadId: string; current: Lead['status']; x: number; y: number } | null>(null)
+  // Popup "¿Por dónde lo quieres mandar?" (botón Mensaje) — 8-jul-2026
+  const [channelPicker, setChannelPicker] = useState<Lead | null>(null)
+  const [channelSending, setChannelSending] = useState<'vambe' | 'wa' | null>(null)
+
+  // Envío por Vambe — mismo flujo de siempre (quick-action 'message').
+  const sendChannelVambe = async (lead: Lead) => {
+    const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'message' }),
+    })
+    const data = await res.json()
+    if (!data.ok) { alert(explainError(data.error, res.status)); return }
+    if (data.lead && data.lead.id) handleSave(data.lead as Lead)
+  }
+
+  // Envío por WhatsApp directo de Fer (WA Bridge) — misma plantilla, 1×1.
+  const sendChannelWa = async (lead: Lead) => {
+    const res = await fetch(`/api/leads/${lead.id}/wa-direct`, { method: 'POST' })
+    const data = await res.json()
+    if (!data.ok) { alert(explainError(data.error, res.status)); return }
+    if (data.lead && data.lead.id) handleSave(data.lead as Lead)
+  }
+
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1065,16 +1089,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                                   if (data.lead?.id) handleSave(data.lead as Lead)
                                   return
                                 }
-                                // Audit #6: removido el confirm nativo — anti-doble-click ya está
-                                // en el endpoint (2 min) y el confirm sumaba 1 click sin agregar safety real.
-                                const res = await fetch(`/api/leads/${lead.id}/quick-action`, {
-                                  method: 'POST',
-                                  headers: { 'content-type': 'application/json' },
-                                  body: JSON.stringify({ action: 'message' }),
-                                })
-                                const data = await res.json()
-                                if (!data.ok) { alert(explainError(data.error, res.status)); return }
-                                if (data.lead && data.lead.id) handleSave(data.lead as Lead)
+                                // 8-jul-2026 (Fer): popup de canal — "¿Por dónde lo quieres
+                                // mandar?" Vambe (flujo de siempre) o WhatsApp directo de Fer
+                                // (WA Bridge). Los grandes los atiende Fer desde su WB.
+                                setChannelPicker(lead)
                               }}
                               style={{
                                 background: isReactivar
@@ -1128,6 +1146,64 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
       {selectedLead && <LeadModal lead={selectedLead} onClose={() => setSelectedLead(null)} onSave={handleSave} onDelete={handleDelete} />}
       {showAddModal && <AddLeadModal onClose={() => setShowAddModal(false)} onAdd={handleAdd} />}
+      {channelPicker && (
+        <div className={styles.modalOverlay} onClick={() => { if (!channelSending) setChannelPicker(null) }}>
+          <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className={styles.modalHeader}>
+              <div>
+                <div className={styles.modalEmail}>📨 ¿Por dónde lo quieres mandar?</div>
+                <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                  {(channelPicker.empresa || channelPicker.nombre || channelPicker.email) ?? ''} · {channelPicker.telefono}
+                </div>
+              </div>
+            </div>
+            <div className={styles.modalBody}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <button
+                  disabled={!!channelSending}
+                  onClick={async () => {
+                    setChannelSending('vambe')
+                    try { await sendChannelVambe(channelPicker) } finally { setChannelSending(null); setChannelPicker(null) }
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #7c54e8, #5e3dd1)', color: 'white',
+                    border: 'none', padding: '12px 16px', borderRadius: 8, fontSize: 14,
+                    fontWeight: 700, cursor: 'pointer', opacity: channelSending && channelSending !== 'vambe' ? 0.5 : 1,
+                  }}>
+                  {channelSending === 'vambe' ? 'Enviando por Vambe…' : '💬 1. Vambe (IA da seguimiento)'}
+                </button>
+                <button
+                  disabled={!!channelSending}
+                  onClick={async () => {
+                    setChannelSending('wa')
+                    try { await sendChannelWa(channelPicker) } finally { setChannelSending(null); setChannelPicker(null) }
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #22d68a, #1ab574)', color: 'white',
+                    border: 'none', padding: '12px 16px', borderRadius: 8, fontSize: 14,
+                    fontWeight: 700, cursor: 'pointer', opacity: channelSending && channelSending !== 'wa' ? 0.5 : 1,
+                  }}>
+                  {channelSending === 'wa' ? 'Enviando desde tu WhatsApp…' : '🟢 2. WhatsApp (desde tu WB, tú das seguimiento)'}
+                </button>
+                <button
+                  disabled={!!channelSending}
+                  onClick={() => setChannelPicker(null)}
+                  style={{
+                    background: 'transparent', color: 'var(--text-dim, #999)',
+                    border: '1px solid rgba(255,255,255,0.15)', padding: '8px 16px',
+                    borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                  }}>
+                  Cancelar
+                </button>
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.55, marginTop: 12, lineHeight: 1.5 }}>
+                Ambas opciones mandan la misma plantilla con el nombre de la empresa.
+                Vambe: la IA contesta y agenda. WhatsApp: sale de tu número vía WA Bridge y tú contestas.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {exportOpen && (
         <ExportModal
           leads={sorted}
