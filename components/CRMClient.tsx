@@ -590,7 +590,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
-  const [dateRange, setDateRange] = useState<DateRange>('todo')
+  const [dateRange, setDateRange] = useState<DateRange>('mes')
   // Custom date range — solo se usan cuando dateRange === 'custom'.
   // Default: el rango del mes actual (inicio mes → hoy) para que abra con algo útil.
   const todayIso = new Date().toISOString().slice(0, 10)
