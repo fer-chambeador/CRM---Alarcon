@@ -121,6 +121,25 @@ export function parseSlackMessage(text: string): ParsedLead | null {
       ]
       if (CANDIDATE_KEYWORDS.some(k => p.includes(k))) return null
     }
+    // ── Filtro candidatos v2 (8-jul-2026, caso gabrielargenisa) ──────────
+    // Los candidatos no siempre dicen "busco trabajo" — se detectan por
+    // COMBINACIÓN de señales: empresa basura ("Nose", "ninguna", "x"),
+    // rol de trabajador ("Ayudante", "atendió personas", "empleado") y
+    // presupuesto vacío/none. Se requieren 2+ señales para descartar, así
+    // un empleador real con un campo mal llenado sigue entrando.
+    {
+      const norm = (s: string | null) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+      const emp = norm(empresa)
+      const rol = norm(puesto)
+      const JUNK_EMPRESA = ['nose', 'no se', 'nose.', 'no c', 'ninguna', 'ninguno', 'no tengo', 'na', 'n/a', 'x', 'xx', 'xxx', '.', '-', 'no', 'nada', 'prueba', 'test', 'particular', 'personal', 'yo', 'hogar', 'casa', 'aun no', 'todavia no', 'pendiente', 'sin nombre', 'sin empresa', 'no aplica']
+      const WORKER_ROL = ['ayudante', 'atendio personas', 'atendi personas', 'empleado', 'empleada', 'operario', 'obrero', 'trabajador', 'candidato', 'desempleado', 'sin trabajo', 'busco', 'chalan', 'ayudante general', 'auxiliar general']
+      const empresaJunk = !emp || emp.length <= 2 || JUNK_EMPRESA.includes(emp)
+      const rolTrabajador = WORKER_ROL.some(k => rol.includes(k))
+      const sinPresupuesto = presupuesto === null || presupuestoRaw === null || ['none', 'no', 'nada', '0', 'ninguno'].includes(norm(presupuestoRaw))
+      const señales = (empresaJunk ? 1 : 0) + (rolTrabajador ? 1 : 0) + (sinPresupuesto ? 1 : 0)
+      if (rolTrabajador && señales >= 2) return null
+      if (empresaJunk && sinPresupuesto && !rol) return null
+    }
     return { tipo_evento: 'empresa_creada', email, nombre: null, empresa, telefono, puesto, canal_adquisicion: canal, plan: null, cupon: null, monto: null, presupuesto, vacante }
   }
 
