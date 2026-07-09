@@ -31,12 +31,19 @@ export async function fetchAllRows<T>(
   batchSize = 1000,
 ): Promise<T[]> {
   const all: T[] = []
-  for (let from = 0; ; from += batchSize) {
-    const { data, error } = await buildPage(from, from + batchSize - 1)
-    if (error) throw new Error(`fetchAllRows: ${error.message}`)
-    const page = data ?? []
-    all.push(...page)
-    if (page.length < batchSize) break
+  for (let base = 0; ; base += 6 * batchSize) {
+    const pages = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        buildPage(base + i * batchSize, base + i * batchSize + batchSize - 1)),
+    )
+    let done = false
+    for (const { data, error } of pages) {
+      if (error) throw new Error(`fetchAllRows: ${error.message}`)
+      const page = data ?? []
+      all.push(...page)
+      if (page.length < batchSize) done = true
+    }
+    if (done) break
   }
   return all
 }
