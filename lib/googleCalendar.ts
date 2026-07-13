@@ -561,7 +561,7 @@ export function isRelevantCalendarEvent(ev: GCalEvent): boolean {
   if (INTERNAL_KEYWORDS.some(k => title.includes(k))) return false
 
   // Includes — solo si hay señal clara de que es una llamada comercial
-  if (title.includes('llamada') || title.includes('vendedor')) return true
+  if (title.includes('llamada') || title.includes('vendedor') || title.includes('<>')) return true
   if (desc.includes('booked by')) return true
   return false
 }
