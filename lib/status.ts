@@ -14,10 +14,13 @@ export const STATUS_LABELS: Record<Lead['status'], string> = {
   descartado: 'Descartado',
 }
 
+// 17-jul-2026 (Fer): 'llamada_con_dapta' OCULTO de la UI (Dapta fuera de
+// operación). El status sigue existiendo en el type y en STATUS_LABELS por
+// compatibilidad, pero ya no aparece en filtros ni chips. Leads existentes
+// migrados a 'contactado'.
 export const STATUS_ORDER: Lead['status'][] = [
   'nuevo',
   'contactado',
-  'llamada_con_dapta',
   'llamada_agendada',
   'no_show_llamada',
   'presentacion_enviada',
@@ -28,7 +31,7 @@ export const STATUS_ORDER: Lead['status'][] = [
   'descartado',
 ]
 
-export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_con_dapta', 'llamada_agendada', 'no_show_llamada']
+export const PIPELINE_ACTIVE: Lead['status'][] = ['nuevo', 'contactado', 'llamada_agendada', 'no_show_llamada']
 export const PIPELINE_CLOSING: Lead['status'][] = ['presentacion_enviada', 'espera_aprobacion', 'liga_pago_enviada']
 export const PIPELINE_CLOSED: Lead['status'][] = ['convertido', 'cliente_recurrente']
 
@@ -44,7 +47,6 @@ export const STATUS_PROJECTION_ORDER: Lead['status'][] = [
   'espera_aprobacion',
   'presentacion_enviada',
   'llamada_agendada',
-  'llamada_con_dapta',
   'contactado',
   'no_show_llamada',
   'nuevo',

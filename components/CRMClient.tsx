@@ -1105,7 +1105,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                               }}>{isReactivar ? (dayLabel ? `🔁 Reactivar Vambe (${dayLabel})` : '🔁 Reactivar Vambe') : '📨 Mensaje'}</button>
                           )
                         })()}
-                        <button
+                        {/* 17-jul-2026 (Fer): Dapta/Daniela fuera de operación — botón
+                            Llamar OCULTO (no eliminado, por si Dapta regresa). Para
+                            reactivarlo: cambiar false → true. */}
+                        {(false as boolean) && <button
                           title={lead.telefono ? `Disparar llamada Daniela a ${lead.telefono}` : 'lead sin teléfono'}
                           disabled={!lead.telefono}
                           onClick={async () => {
@@ -1126,7 +1129,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                             padding: '4px 10px', borderRadius: 6,
                             fontSize: 11, fontWeight: 600, cursor: 'pointer',
                             opacity: lead.telefono ? 1 : 0.4,
-                          }}>📞 Llamar</button>
+                          }}>📞 Llamar</button>}
                       </div>
                     </td>
                     <td onClick={e => e.stopPropagation()}>
