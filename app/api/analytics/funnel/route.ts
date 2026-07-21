@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
   if (leadIds.length > 0) {
     // Chunkear ids (URLs muy largas truenan con miles de ids) y paginar
     // cada chunk (cap de 1000 filas por request de Supabase).
-    const CHUNK = 400
+    const CHUNK = 100
     for (let i = 0; i < leadIds.length; i += CHUNK) {
       const idsChunk = leadIds.slice(i, i + CHUNK)
       const chunkActs = await fetchAllRows<ActRow>((rFrom, rTo) =>
