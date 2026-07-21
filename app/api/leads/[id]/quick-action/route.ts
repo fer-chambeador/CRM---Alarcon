@@ -84,6 +84,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         phone: lead.telefono,
         templateId: tpl.template_id,
         data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
+        // FIX (21-jul-2026): pasar stageId para que Vambe asigne el contacto a
+        // "Interesado" al enviar. Sin etapa, ningun asistente IA atiende la
+        // respuesta del lead (mismo bug corregido en reactivate-vambe-3d el 17-jun,
+        // caso Claudia Valenzuela; hoy repetido con RODI 523334542877).
+        stageId: process.env.QUICK_ACTION_TARGET_STAGE || '96c42cda-2828-45db-973c-3bc63a8141fd',
       })
       // BUG FIX (3 jun 2026 — 2da iteración tras caso gerardolara555):
       // Vambe puede retornar HTTP 200 con un error en el body (sin lanzar).
