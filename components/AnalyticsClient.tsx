@@ -2092,7 +2092,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
           </div>
 
           {/* ── FUNNEL completo lead→pago ─────────────────────────────── */}
-          <GroupHeader title="Funnel de ventas" subtitle="Camino completo: lead nuevo → contactado → Daniela → pago. Conversión y tiempo entre etapas." />
+          <GroupHeader title="Funnel de ventas" subtitle="Camino completo: lead nuevo → contactado → llamada → presentación → pago. Conversión y tiempo entre etapas." />
           <FunnelSection data={funnelData} />
 
           {/* Tabla principal con tabs (full width, sin sidebar) */}
