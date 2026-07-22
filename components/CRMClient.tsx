@@ -784,7 +784,17 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
 
   const stats = useMemo(() => {
     const sumMonto = (rows: Lead[]) => rows.reduce((acc, l) => acc + (l.monto ?? DEFAULT_MONTO), 0)
-    const cerrados = dateScoped.filter(l => PIPELINE_CLOSED.includes(l.status))
+    // FIX (21-jul-2026): los cierres se cuentan por FECHA DE CONVERSION
+    // (status_changed_at), no por fecha de creacion del lead. Un lead creado
+    // antes que paga este mes ES una venta de este mes.
+    const { from: cFrom, to: cTo } = dateRangeBounds(dateRange, customFrom, customTo)
+    const cerrados = leads.filter(l => {
+      if (!PIPELINE_CLOSED.includes(l.status)) return false
+      const t = new Date(l.status_changed_at || l.created_at).getTime()
+      if (cFrom && t < cFrom.getTime()) return false
+      if (cTo && t > cTo.getTime()) return false
+      return true
+    })
     return {
       leads: dateScoped.length,
       pipelineActivo: sumMonto(dateScoped.filter(l => PIPELINE_ACTIVE.includes(l.status))),
@@ -792,7 +802,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       pipelineCerrado: sumMonto(cerrados),
       pipelineCerradoCount: cerrados.length,
     }
-  }, [dateScoped])
+  }, [dateScoped, leads, dateRange, customFrom, customTo])
   const periodGoal = goalForPeriod(dateRange)
 
   // Build CSV de leads — usado por el modal de export.
