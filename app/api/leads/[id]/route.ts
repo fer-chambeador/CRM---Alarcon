@@ -115,6 +115,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // qué cambió campo por campo.
   const { data: leadBefore } = await supabase.from('leads').select('*').eq('id', id).single()
 
+  // FIX (21-jul-2026): estampar status_changed_at cuando el status CAMBIA.
+  // Antes solo el webhook de Vambe lo seteaba; los cambios manuales via
+  // PATCH dejaban la fecha vieja y las metricas de cierre por fecha de
+  // conversion salian mal. Se puede mandar explicito para backfills.
+  if (typeof body.status_changed_at === 'string') {
+    updates.status_changed_at = body.status_changed_at
+  } else if ('status' in updates && leadBefore && updates.status !== (leadBefore as { status?: string }).status) {
+    updates.status_changed_at = new Date().toISOString()
+  }
+
   const { data, error } = await supabase.from('leads').update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
