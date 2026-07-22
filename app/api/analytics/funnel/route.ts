@@ -70,8 +70,11 @@ export async function GET(req: NextRequest) {
       let q = supabase
         .from('leads')
         .select('id, status, created_at, status_changed_at')
-        .lte('created_at', to)
-      if (from) q = q.gte('created_at', from)
+        if (from) {
+          q = q.or(`and(created_at.gte.${from},created_at.lte.${to}),and(status.in.(convertido,cliente_recurrente),status_changed_at.gte.${from},status_changed_at.lte.${to})`)
+        } else {
+          q = q.lte('created_at', to)
+        }
       return q.order('created_at', { ascending: true }).range(rFrom, rTo)
     })
   } catch (e) {
