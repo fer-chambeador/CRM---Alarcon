@@ -70,14 +70,8 @@ export async function GET(req: NextRequest) {
       let q = supabase
         .from('leads')
         .select('id, status, created_at, status_changed_at')
-        // FIX (21-jul-2026): incluir tambien leads cuya CONVERSION cae en el
-      // rango aunque hayan sido creados antes (ventas de meses previos
-      // cerradas este mes). Antes solo entraban por created_at.
-      if (from) {
-        q = q.or(`and(created_at.gte.${from},created_at.lte.${to}),and(status.in.(convertido,cliente_recurrente),status_changed_at.gte.${from},status_changed_at.lte.${to})`)
-      } else {
-        q = q.lte('created_at', to)
-      }
+        .lte('created_at', to)
+      if (from) q = q.gte('created_at', from)
       return q.order('created_at', { ascending: true }).range(rFrom, rTo)
     })
   } catch (e) {
