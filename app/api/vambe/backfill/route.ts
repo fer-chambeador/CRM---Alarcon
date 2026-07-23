@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+—import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import {
@@ -301,7 +301,7 @@ async function processContact(
 
   // Crear nuevo lead — necesitamos al menos email
   if (!fields.email) {
-    return { created: false, updated: false, error: 'sin email — no se puede crear' }
+          const _digits = String(fields.telefono || '').replace(/\D/g, ''); if (_digits) { fields.email = _digits + '@chambas.cliente' } else { return { created: false, updated: false, error: 'sin email ni telefono' } }
   }
   const insert: Record<string, unknown> = {
     ...fields,
