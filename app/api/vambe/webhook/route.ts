@@ -833,7 +833,7 @@ async function promotePendingLead(
         return { lead: null, created: false, form }
       }
       const digits = String(tel).replace(/\D/g, '').slice(-10)
-      email = `vambe-${digits}@chambas.ai`
+      email = `${digits}@clientes.chambas.ai`
     }
     const insert: Record<string, unknown> = {
       ...fields,
