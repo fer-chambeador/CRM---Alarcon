@@ -1605,8 +1605,8 @@ function TiemposConversionTimeline({ movement, cycle }: {
   // hay leads "express" que entraron ya convertidos vía Slack webhook de pago
   // — leads con ciclo ~0 que distorsionan el promedio y rompen la suma con
   // los componentes mostrados arriba.
-  const totalEstimado = rows.reduce((s, r) => s + (r.avgDays || 0), 0)
-  const totalEstimadoMediana = rows.reduce((s, r) => s + (r.medianDays || 0), 0)
+  const totalEstimado = cycle.medianDays
+  const totalEstimadoMediana = cycle.avgDays
   // Bottleneck: salto con menor count (la cohorte más chica define el funnel real)
   const minCount = rows.reduce((m, r) => (r.count > 0 && r.count < m) ? r.count : m, Infinity)
   const totalCount = minCount === Infinity ? 0 : minCount
@@ -1686,7 +1686,7 @@ function TiemposConversionTimeline({ movement, cycle }: {
         <div>
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>Tiempo TOTAL para cerrar una venta</div>
           <div style={{ fontSize: 13.5, color: 'var(--text)' }}>
-            De <strong>Nuevo</strong> a <strong>Convertido</strong>, sumando los 4 saltos del funnel
+            De <strong>Nuevo</strong> a <strong>Convertido</strong> · mediana y promedio reales por lead
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -1697,9 +1697,9 @@ function TiemposConversionTimeline({ movement, cycle }: {
                   color: '#22d68a', fontVariantNumeric: 'tabular-nums', lineHeight: 1,
                 }}>{totalEstimado >= 1 ? totalEstimado.toFixed(1) + ' días' : fmtDays(totalEstimado)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
-                  suma de promedios de cada etapa
+                  mediana real de nuevo a convertido
                   {totalEstimadoMediana > 0 && totalEstimadoMediana !== totalEstimado && (
-                    <> · mediana suma {fmtDays(totalEstimadoMediana)}</>
+                    <> · promedio {fmtDays(totalEstimadoMediana)}</>
                   )}
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, fontStyle: 'italic' }}>
@@ -1900,7 +1900,7 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
       conversionRate: nonDescartado.length > 0 ? cerrados / nonDescartado.length : 0,
       cerrados,
       forecast: forecastLeads(scoped),
-      cycle: cycleStats(scoped),
+      cycle: cycleStats(leads.filter(l => { const b = dateRangeBounds(dateRange); const t = new Date(l.status_changed_at || l.updated_at).getTime(); return l.status === 'convertido' && (!b.from || t >= b.from.getTime()) && (!b.to || t <= b.to.getTime()) })),
     }
   }, [scoped])
 
