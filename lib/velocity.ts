@@ -90,11 +90,11 @@ export type CycleStats = {
   medianDays: number
 }
 export function cycleStats(leads: Lead[]): CycleStats {
-  const closed = leads.filter(l => PIPELINE_CLOSED.includes(l.status))
+  const closed = leads.filter(l => l.status === 'convertido' && PIPELINE_CLOSED.includes(l.status))
   const days = closed.map(l => {
     const start = new Date(l.created_at).getTime()
     const end = l.status_changed_at ? new Date(l.status_changed_at).getTime() : new Date(l.updated_at).getTime()
-    return Math.max(0, (end - start) / DAY_MS)
+    return Math.max(1, (end - start) / DAY_MS)
   })
   const avg = days.length ? days.reduce((a, b) => a + b, 0) / days.length : 0
   return {
