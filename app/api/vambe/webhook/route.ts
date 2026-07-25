@@ -1149,7 +1149,7 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
             }
           }
         } else {
-          console.warn(`Vambe stage→Interesado sin form ni cacheado ni en API. aiContactId=${aiContactId}`)
+          lead = await createLeadFromStage(supabase, aiContactId, newStageId, mappedStatus) || lead
         }
       } catch (e) {
         console.error('Vambe fallback fetch error', e)
@@ -1420,3 +1420,5 @@ async function markCampaignOutcome(supabase: Supabase, leadId: string, newStageI
     .update({ [updateField]: new Date().toISOString() })
     .in('id', recipients.map(r => r.id))
 }
+
+async function createLeadFromStage(supabase: any, aiContactId: string, newStageId: string, mappedStatus: string | undefined): Promise<any> { if (!mappedStatus || mappedStatus === 'descartado') return null; try { const vk = process.env.VAMBE_API_KEY || ''; const cr = await fetch('https://api.vambe.me/api/public/contacts?days=3&stage_id=' + newStageId, { headers: { 'x-api-key': vk } }); const cj = await cr.json(); const carr: any[] = Array.isArray(cj) ? cj : (cj.contacts || cj.data || []); const c: any = carr.find(function (x: any) { return String(x.id) === String(aiContactId); }); const phone = c && c.phone ? String(c.phone) : ''; const digits = phone.replace(/[^0-9]/g, '').slice(-10); if (digits.length !== 10) { console.warn('Vambe stage sin telefono ' + aiContactId); return null; } const email = (c.email && String(c.email).includes('@')) ? c.email : digits + '@clientes.chambas.ai'; const exq = await supabase.from('leads').select('*').or('vambe_contact_id.eq.' + aiContactId + ',email.eq.' + email).limit(1).maybeSingle(); if (exq.data && exq.data.id) return exq.data; const insq = await supabase.from('leads').insert({ email: email, nombre: c.name || null, telefono: phone, canal_adquisicion: 'Vambe', status: mappedStatus, vambe_contact_id: aiContactId, vambe_stage_id: newStageId }).select('*').single(); if (insq.error) { console.error('Vambe stage insert error', insq.error.message); return null; } if (insq.data) { await supabase.from('lead_actividad').insert({ lead_id: insq.data.id, tipo: 'vambe_lead_created', descripcion: 'Lead creado desde Vambe al entrar a etapa (sin form)', metadata: { source: 'vambe_stage_no_form', stage_id: newStageId } }); return insq.data; } return null; } catch (e2) { console.error('Vambe stage create error', e2); return null; } }
