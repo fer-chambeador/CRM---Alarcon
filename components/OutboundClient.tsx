@@ -3,17 +3,13 @@
 /**
  * /outbound — Contacto masivo a leads con plantilla Vambe.
  *
- * Flujo:
- *  1. Filtrar leads por status CRM (multi-select)
- *  2. Excluir leads sin teléfono o canal != Vambe (la plantilla se manda vía
- *     Vambe API y necesita un contacto registrado en WhatsApp)
- *  3. Elegir plantilla Vambe (lista de aprobadas viene del server)
- *  4. Configurar batches: tamaño y cadencia (cada X minutos)
- *  5. Pre-review de la lista, click Start, el browser dispara batches automáticos
- *     vía /api/outbound/dispatch (mientras la tab esté abierta)
+ * Asistente de 3 pasos:
+ *   1. Audiencia  — segmenta por status, canal (buscable), días sin contactar.
+ *   2. Mensaje    — elige plantilla Vambe aprobada + stage destino.
+ *   3. Revisar y enviar — resumen, velocidad de envío, Start y monitor
+ *      (progreso + log + preview) mientras la tab esté abierta.
  *
- * Stage destino default: Interesado (mueve al lead para que el bot Vambe tome
- * el chat cuando responda el quick reply de la plantilla).
+ * Toda la lógica de envío se dispara vía /api/outbound/dispatch en batches.
  */
 
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
@@ -58,6 +54,9 @@ const STAGE_OPTIONS = [
   { id: '', label: 'No mover stage (mantener actual)' },
 ]
 
+const ACCENT = '#7c6af7'
+const GREEN = '#22d68a'
+
 export default function OutboundClient({
   initialLeads,
   initialTemplates,
@@ -65,20 +64,24 @@ export default function OutboundClient({
   initialLeads: OutboundLead[]
   initialTemplates: OutboundTemplate[]
 }) {
+  // ── Wizard ─────────────────────────────────────────────────────────────
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [channelSearch, setChannelSearch] = useState('')
+
   // ── Filtros ────────────────────────────────────────────────────────────
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set())
-  const [minDaysSinceContact, setMinDaysSinceContact] = useState<number>(0) // 0 = sin filtro de días
+  const [minDaysSinceContact, setMinDaysSinceContact] = useState<number>(0)
   const [onlyWithPhone, setOnlyWithPhone] = useState(true)
   const [search, setSearch] = useState('')
 
   // ── Plantilla + stage ─────────────────────────────────────────────────
   const [templateId, setTemplateId] = useState<string>('')
-  const [stageId, setStageId] = useState<string>(STAGE_OPTIONS[0].id) // default Interesado
+  const [stageId, setStageId] = useState<string>(STAGE_OPTIONS[0].id)
 
   // ── Batches ────────────────────────────────────────────────────────────
   const [batchSize, setBatchSize] = useState(10)
-  const [intervalMin, setIntervalMin] = useState(5) // minutos entre batches
+  const [intervalMin, setIntervalMin] = useState(5)
 
   // ── Runtime ────────────────────────────────────────────────────────────
   const [runState, setRunState] = useState<RunState>('idle')
@@ -89,7 +92,9 @@ export default function OutboundClient({
   const [nextBatchAt, setNextBatchAt] = useState<number | null>(null)
   const stopRequested = useRef(false)
 
-  // ── Counts por status (basado en initialLeads, ignora otros filtros) ──
+  const running = runState === 'running'
+
+  // ── Counts por status ─────────────────────────────────────────────────
   const statusCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const l of initialLeads) {
@@ -100,8 +105,6 @@ export default function OutboundClient({
   }, [initialLeads, onlyWithPhone])
 
   // ── Counts por canal ──────────────────────────────────────────────────
-  // Normalizamos "(sin canal)" para los leads sin canal_adquisicion para que
-  // Fer pueda filtrar también ese bucket si quiere.
   const channelCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const l of initialLeads) {
@@ -117,6 +120,15 @@ export default function OutboundClient({
     [channelCounts],
   )
 
+  // Canal compacto: seleccionados siempre + resto filtrado por búsqueda (top 10 si no hay búsqueda)
+  const channelView = useMemo(() => {
+    const q = channelSearch.trim().toLowerCase()
+    const sel = allChannels.filter((c) => selectedChannels.has(c))
+    const restAll = allChannels.filter((c) => !selectedChannels.has(c) && (!q || c.toLowerCase().includes(q)))
+    const rest = q ? restAll : restAll.slice(0, 10)
+    return { sel, rest, hidden: restAll.length - rest.length }
+  }, [allChannels, channelSearch, selectedChannels])
+
   // ── Lista filtrada ─────────────────────────────────────────────────────
   const filteredLeads = useMemo(() => {
     const now = Date.now()
@@ -128,12 +140,6 @@ export default function OutboundClient({
         if (!selectedChannels.has(c)) return false
       }
       if (onlyWithPhone && !l.telefono) return false
-      // Filtro "Días sin contactar":
-      //  - Si min=0 → no aplicar
-      //  - Si lead nunca tuvo contacto (ultimo_contacto null) → siempre pasa
-      //    (es candidato natural para outbound)
-      //  - Si lead tiene contacto → debe tener al menos `minDaysSinceContact`
-      //    días desde el último contacto
       if (minDaysSinceContact > 0 && l.ultimo_contacto) {
         const days = (now - new Date(l.ultimo_contacto).getTime()) / 86400_000
         if (days < minDaysSinceContact) return false
@@ -155,6 +161,9 @@ export default function OutboundClient({
   const sentCount = sentIds.size
   const failedCount = failedIds.size
   const progressPct = totalToSend > 0 ? Math.floor(((sentCount + failedCount) / totalToSend) * 100) : 0
+
+  const selectedTemplate = initialTemplates.find((t) => t.id === templateId) || null
+  const selectedStage = STAGE_OPTIONS.find((s) => s.id === stageId) || STAGE_OPTIONS[0]
 
   // ── Toggle helpers ────────────────────────────────────────────────────
   const toggleStatus = (s: string) => {
@@ -265,7 +274,6 @@ export default function OutboundClient({
         return
       }
 
-      // Esperar intervalo (con check de stop cada 1s)
       const waitMs = intervalMin * 60 * 1000
       const until = Date.now() + waitMs
       setNextBatchAt(until)
@@ -347,409 +355,369 @@ export default function OutboundClient({
           </span>
         </div>
 
-        <div className={styles.body} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-          {/* COLUMNA IZQ — Configuración */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            {/* 1. Filtros */}
-            <Card title="1. Filtro de leads">
-              {/* Status CRM */}
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Status CRM {selectedStatuses.size > 0 && <span style={{ color: 'var(--text2)' }}>· {selectedStatuses.size} seleccionado{selectedStatuses.size === 1 ? '' : 's'}</span>}
-              </div>
+        <div className={styles.body} style={{ maxWidth: 900, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {/* Stepper */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <StepPill n={1} label="Audiencia" active={step === 1} done={step > 1} onClick={() => !running && setStep(1)} />
+            <span style={{ color: 'var(--text3)' }}>›</span>
+            <StepPill n={2} label="Mensaje" active={step === 2} done={step > 2} onClick={() => !running && totalToSend > 0 && setStep(2)} />
+            <span style={{ color: 'var(--text3)' }}>›</span>
+            <StepPill n={3} label="Revisar y enviar" active={step === 3} done={false} onClick={() => !running && totalToSend > 0 && templateId && setStep(3)} />
+          </div>
+
+          {/* ══ PASO 1 · AUDIENCIA ══ */}
+          {step === 1 && (
+            <Card title="¿A quién le enviamos?">
+              {/* Status */}
+              <div style={labelStyle}>Status del lead</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {STATUS_ORDER.map((s) => {
                   const count = statusCounts.get(s) || 0
                   const sel = selectedStatuses.has(s)
                   return (
-                    <button
-                      key={s}
-                      onClick={() => toggleStatus(s)}
-                      disabled={runState === 'running'}
-                      style={{
-                        padding: '6px 11px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        borderRadius: 999,
-                        border: `1px solid ${sel ? statusColor(s as never) : 'var(--border)'}`,
-                        background: sel ? statusColor(s as never) + '22' : 'transparent',
-                        color: sel ? 'var(--text)' : 'var(--text2)',
-                        cursor: 'pointer',
-                        opacity: count === 0 ? 0.4 : 1,
-                      }}>
+                    <button key={s} onClick={() => toggleStatus(s)}
+                      style={chip(sel, statusColor(s as never), count === 0)}>
                       {STATUS_LABELS[s]} <span style={{ color: 'var(--text3)' }}>({count})</span>
                     </button>
                   )
                 })}
               </div>
+              <div style={hintStyle}>Sin seleccionar = todos los status.</div>
 
-              {/* Canal de adquisición */}
-              <div style={{ fontSize: 11, color: 'var(--text3)', margin: '14px 0 6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Canal {selectedChannels.size > 0 && <span style={{ color: 'var(--text2)' }}>· {selectedChannels.size} seleccionado{selectedChannels.size === 1 ? '' : 's'}</span>}
+              {/* Canal — buscable */}
+              <div style={{ ...labelStyle, marginTop: 18 }}>
+                Canal {selectedChannels.size > 0 && <span style={{ color: 'var(--text2)' }}>· {selectedChannels.size} elegido{selectedChannels.size === 1 ? '' : 's'}</span>}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {allChannels.length === 0 && (
-                  <span style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>Sin canales en BD</span>
-                )}
-                {allChannels.map((c) => {
-                  const count = channelCounts.get(c) || 0
-                  const sel = selectedChannels.has(c)
-                  return (
-                    <button
-                      key={c}
-                      onClick={() => toggleChannel(c)}
-                      disabled={runState === 'running'}
-                      style={{
-                        padding: '6px 11px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        borderRadius: 999,
-                        border: `1px solid ${sel ? '#7c6af7' : 'var(--border)'}`,
-                        background: sel ? '#7c6af722' : 'transparent',
-                        color: sel ? 'var(--text)' : 'var(--text2)',
-                        cursor: 'pointer',
-                        opacity: count === 0 ? 0.4 : 1,
-                      }}>
-                      {c} <span style={{ color: 'var(--text3)' }}>({count})</span>
+              {channelView.sel.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                  {channelView.sel.map((c) => (
+                    <button key={c} onClick={() => toggleChannel(c)} style={chip(true, ACCENT, false)}>
+                      {c} <span style={{ opacity: 0.7 }}>✕</span>
                     </button>
-                  )
-                })}
+                  ))}
+                </div>
+              )}
+              <input type="text" placeholder={`Buscar entre ${allChannels.length} canales…`}
+                value={channelSearch} onChange={(e) => setChannelSearch(e.target.value)}
+                style={inputStyle} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                {channelView.rest.length === 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>Sin coincidencias</span>
+                )}
+                {channelView.rest.map((c) => (
+                  <button key={c} onClick={() => toggleChannel(c)} style={chip(false, ACCENT, (channelCounts.get(c) || 0) === 0)}>
+                    {c} <span style={{ color: 'var(--text3)' }}>({channelCounts.get(c) || 0})</span>
+                  </button>
+                ))}
+                {channelView.hidden > 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>+{channelView.hidden} más — busca arriba</span>
+                )}
               </div>
 
               {/* Días sin contactar */}
-              <div style={{ fontSize: 11, color: 'var(--text3)', margin: '14px 0 6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Días sin contactar
-              </div>
+              <div style={{ ...labelStyle, marginTop: 18 }}>Días sin contactar</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                {DAYS_PRESETS.map((p) => {
-                  const sel = minDaysSinceContact === p.value
-                  return (
-                    <button
-                      key={p.value}
-                      onClick={() => setMinDaysSinceContact(p.value)}
-                      disabled={runState === 'running'}
-                      style={{
-                        padding: '6px 11px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        borderRadius: 999,
-                        border: `1px solid ${sel ? '#22d68a' : 'var(--border)'}`,
-                        background: sel ? '#22d68a22' : 'transparent',
-                        color: sel ? 'var(--text)' : 'var(--text2)',
-                        cursor: 'pointer',
-                      }}>
-                      {p.label}
-                    </button>
-                  )
-                })}
-                <span style={{ fontSize: 11, color: 'var(--text3)' }}>o</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={365}
-                  value={minDaysSinceContact}
-                  onChange={(e) => setMinDaysSinceContact(Math.max(0, Math.min(365, Number(e.target.value) || 0)))}
-                  disabled={runState === 'running'}
-                  style={{ width: 70, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 12 }} />
-                <span style={{ fontSize: 11, color: 'var(--text3)' }}>días custom</span>
+                {DAYS_PRESETS.map((p) => (
+                  <button key={p.value} onClick={() => setMinDaysSinceContact(p.value)}
+                    style={chip(minDaysSinceContact === p.value, GREEN, false)}>
+                    {p.label}
+                  </button>
+                ))}
               </div>
-              <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic' }}>
-                Leads sin contacto previo (ultimo_contacto null) siempre pasan.
-              </div>
+              <div style={hintStyle}>Leads sin contacto previo siempre pasan.</div>
 
               {/* Otros */}
-              <div style={{ display: 'flex', gap: 14, marginTop: 14, fontSize: 12, color: 'var(--text2)', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={onlyWithPhone} onChange={(e) => setOnlyWithPhone(e.target.checked)} disabled={runState === 'running'} />
-                  Solo con teléfono
-                </label>
-              </div>
-              <input
-                type="text"
-                placeholder="Buscar por nombre, email, empresa, vacante, tel…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                disabled={runState === 'running'}
-                style={{ width: '100%', padding: '8px 12px', marginTop: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }} />
-            </Card>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 12.5, color: 'var(--text2)', marginTop: 16 }}>
+                <input type="checkbox" checked={onlyWithPhone} onChange={(e) => setOnlyWithPhone(e.target.checked)} />
+                Solo leads con teléfono
+              </label>
+              <input type="text" placeholder="Buscar por nombre, email, empresa, tel…"
+                value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...inputStyle, marginTop: 12 }} />
 
-            {/* 2. Plantilla — Cards visuales con preview inline */}
-            <Card title={`2. Plantilla Vambe (${initialTemplates.length})`}>
+              {/* Contador + nav */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)', flexWrap: 'wrap', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 30, fontWeight: 800, color: ACCENT, fontVariantNumeric: 'tabular-nums' }}>{totalToSend.toLocaleString('es-MX')}</span>
+                  <span style={{ fontSize: 13, color: 'var(--text2)' }}>leads en este segmento</span>
+                </div>
+                <button className={styles.primaryBtn} onClick={() => setStep(2)} disabled={totalToSend === 0}
+                  style={{ padding: '11px 20px', fontSize: 14, fontWeight: 700, opacity: totalToSend === 0 ? 0.5 : 1 }}>
+                  Siguiente: mensaje →
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {/* ══ PASO 2 · MENSAJE ══ */}
+          {step === 2 && (
+            <Card title={`¿Qué mensaje enviamos? (${initialTemplates.length} plantillas)`}>
               {initialTemplates.length === 0 && (
                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-                  No se pudo cargar plantillas (revisa logs). Pega el ID manualmente:
-                  <input
-                    type="text"
-                    placeholder="Template ID UUID"
-                    value={templateId}
-                    onChange={(e) => setTemplateId(e.target.value.trim())}
-                    style={{ width: '100%', padding: '8px 12px', marginTop: 8, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }} />
+                  No se pudo cargar plantillas. Pega el ID manualmente:
+                  <input type="text" placeholder="Template ID UUID" value={templateId}
+                    onChange={(e) => setTemplateId(e.target.value.trim())} style={{ ...inputStyle, marginTop: 8 }} />
                 </div>
               )}
               {initialTemplates.length > 0 && (
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-                  gap: 10,
-                  maxHeight: 380,
-                  overflowY: 'auto',
-                  padding: 2,
-                }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10, maxHeight: 420, overflowY: 'auto', padding: 2 }}>
                   {initialTemplates.map((t) => {
                     const sel = templateId === t.id
                     return (
-                      <button
-                        key={t.id}
-                        onClick={() => setTemplateId(t.id)}
-                        disabled={runState === 'running'}
+                      <button key={t.id} onClick={() => setTemplateId(t.id)}
                         style={{
-                          textAlign: 'left',
-                          padding: 12,
-                          borderRadius: 10,
-                          border: `2px solid ${sel ? '#7c6af7' : 'var(--border)'}`,
+                          textAlign: 'left', padding: 12, borderRadius: 10,
+                          border: `2px solid ${sel ? ACCENT : 'var(--border)'}`,
                           background: sel ? 'rgba(124,106,247,0.12)' : 'rgba(255,255,255,0.02)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 6,
-                          minHeight: 110,
-                          transition: 'all 120ms ease',
+                          cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 6, minHeight: 110,
                         }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', wordBreak: 'break-word' }}>
-                            {t.name}
-                          </span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', wordBreak: 'break-word' }}>{t.name}</span>
                           {t.category && (
-                            <span style={{
-                              fontSize: 9.5,
-                              padding: '2px 6px',
-                              borderRadius: 999,
-                              background: 'rgba(255,255,255,0.08)',
-                              color: 'var(--text3)',
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.05em',
-                              fontWeight: 600,
-                            }}>{t.category}</span>
+                            <span style={{ fontSize: 9.5, padding: '2px 6px', borderRadius: 999, background: 'rgba(255,255,255,0.08)', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>{t.category}</span>
                           )}
                         </div>
-                        <div style={{
-                          fontSize: 11.5,
-                          color: 'var(--text2)',
-                          whiteSpace: 'pre-wrap',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 4,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                          lineHeight: 1.4,
-                          flex: 1,
-                        }}>
+                        <div style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', lineHeight: 1.4, flex: 1 }}>
                           {t.preview || <em style={{ color: 'var(--text3)' }}>(sin preview)</em>}
                         </div>
-                        {sel && (
-                          <div style={{ fontSize: 10.5, color: '#7c6af7', fontWeight: 700 }}>✓ Seleccionada</div>
-                        )}
+                        {sel && <div style={{ fontSize: 10.5, color: ACCENT, fontWeight: 700 }}>✓ Seleccionada</div>}
                       </button>
                     )
                   })}
                 </div>
               )}
 
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 14 }}>Stage destino al enviar:</div>
-              <select
-                value={stageId}
-                onChange={(e) => setStageId(e.target.value)}
-                disabled={runState === 'running'}
-                style={{ width: '100%', padding: '8px 12px', marginTop: 4, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 12 }}>
+              <div style={{ ...labelStyle, marginTop: 16 }}>Stage destino al enviar</div>
+              <select value={stageId} onChange={(e) => setStageId(e.target.value)} style={{ ...inputStyle, marginTop: 0 }}>
                 {STAGE_OPTIONS.map((s) => (
                   <option key={s.id || 'none'} value={s.id}>{s.label}</option>
                 ))}
               </select>
-            </Card>
 
-            {/* 3. Batches */}
-            <Card title="3. Batches">
-              <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
-                <label style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Tamaño de batch</div>
-                  <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
-                    disabled={runState === 'running'}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Intervalo entre batches (min)</div>
-                  <input
-                    type="number"
-                    min={0}
-                    max={60}
-                    value={intervalMin}
-                    onChange={(e) => setIntervalMin(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
-                    disabled={runState === 'running'}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)' }} />
-                </label>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
-                {totalToSend > 0 && batchSize > 0 && (
-                  <>
-                    <strong>{Math.ceil(totalToSend / batchSize)}</strong> batch(es) · duración estimada{' '}
-                    <strong>~{Math.max(1, Math.ceil(totalToSend / batchSize) - 1) * intervalMin} min</strong>
-                  </>
-                )}
-              </div>
-            </Card>
-
-            {/* 4. Acciones */}
-            <Card title="4. Disparar">
-              {runState === 'idle' && (
-                <button
-                  className={styles.primaryBtn}
-                  onClick={handleStart}
-                  disabled={!templateId || totalToSend === 0}
-                  style={{ width: '100%', padding: '12px', fontSize: 14, fontWeight: 700 }}>
-                  🚀 Empezar campaña ({remaining.length} leads)
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)', gap: 12 }}>
+                <button onClick={() => setStep(1)} style={backBtn}>← Audiencia</button>
+                <button className={styles.primaryBtn} onClick={() => setStep(3)} disabled={!templateId}
+                  style={{ padding: '11px 20px', fontSize: 14, fontWeight: 700, opacity: !templateId ? 0.5 : 1 }}>
+                  Siguiente: revisar →
                 </button>
-              )}
-              {runState === 'running' && (
-                <button
-                  onClick={handlePause}
-                  style={{ width: '100%', padding: '12px', fontSize: 14, fontWeight: 700, borderRadius: 8, background: '#ffba3d', color: '#000', border: 'none', cursor: 'pointer' }}>
-                  ⏸ Pausar
-                </button>
-              )}
-              {runState === 'paused' && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    onClick={handleResume}
-                    style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 700, borderRadius: 8, background: '#22d68a', color: '#000', border: 'none', cursor: 'pointer' }}>
-                    ▶ Reanudar ({remaining.length} restantes)
-                  </button>
-                  <button
-                    onClick={handleReset}
-                    style={{ padding: '12px', fontSize: 13, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                    Reset
-                  </button>
-                </div>
-              )}
-              {runState === 'done' && (
-                <div>
-                  <div style={{ padding: 12, borderRadius: 8, background: 'rgba(34,214,138,0.1)', color: '#22d68a', fontSize: 14, fontWeight: 600, textAlign: 'center', marginBottom: 8 }}>
-                    ✅ Completado — {sentCount} OK, {failedCount} fallidos
-                  </div>
-                  <button onClick={handleReset} style={{ width: '100%', padding: '10px', fontSize: 12, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                    Reset para otra campaña
-                  </button>
-                </div>
-              )}
-            </Card>
-          </div>
-
-          {/* COLUMNA DER — Progress + Preview */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-            <Card title="Progreso">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
-                <Metric label="Total" value={totalToSend} />
-                <Metric label="Enviados" value={sentCount} color="#22d68a" />
-                <Metric label="Fallidos" value={failedCount} color="#f05a5a" />
-                <Metric label="Restantes" value={remaining.length} color="#4ea8f5" />
-              </div>
-              <div style={{ height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${progressPct}%`, background: 'linear-gradient(90deg, #22d68a, #4ea8f5)', transition: 'width 300ms ease' }} />
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
-                <span>{progressPct}% completado</span>
-                {nextBatchAt && <span>Próximo batch: {countdown}</span>}
-                {runState === 'running' && currentBatch > 0 && <span>Batch actual: #{currentBatch}</span>}
               </div>
             </Card>
+          )}
 
-            <Card title="Log de actividad">
-              {log.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>
-                  Sin actividad. Configura la campaña y dale Start.
+          {/* ══ PASO 3 · REVISAR Y ENVIAR ══ */}
+          {step === 3 && (
+            <>
+              <Card title="Revisar y enviar">
+                {/* Resumen */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 16 }}>
+                  <SummaryItem label="Audiencia" value={`${totalToSend.toLocaleString('es-MX')} leads`} />
+                  <SummaryItem label="Plantilla" value={selectedTemplate?.name || '—'} />
+                  <SummaryItem label="Stage destino" value={selectedStage.label.split(' (')[0]} />
                 </div>
-              ) : (
-                <div style={{ maxHeight: 260, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {log.map((l, i) => (
-                    <div key={i} style={{
-                      fontSize: 11.5, fontFamily: 'ui-monospace, monospace',
-                      color: l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? '#22d68a' : 'var(--text2)',
-                      borderLeft: `2px solid ${l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? '#22d68a' : 'var(--text3)'}`,
-                      paddingLeft: 8,
-                    }}>
-                      <span style={{ color: 'var(--text3)' }}>{new Date(l.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                      {' '}{l.msg}
+
+                {/* Velocidad */}
+                <div style={labelStyle}>Velocidad de envío</div>
+                <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Leads por batch</div>
+                    <input type="number" min={1} max={500} value={batchSize} disabled={running}
+                      onChange={(e) => setBatchSize(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+                      style={{ ...inputStyle, marginTop: 0 }} />
+                  </label>
+                  <label style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Minutos entre batches</div>
+                    <input type="number" min={0} max={60} value={intervalMin} disabled={running}
+                      onChange={(e) => setIntervalMin(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+                      style={{ ...inputStyle, marginTop: 0 }} />
+                  </label>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
+                  {totalToSend > 0 && batchSize > 0 && (
+                    <>
+                      <strong>{Math.ceil(totalToSend / batchSize)}</strong> batch(es) · duración estimada{' '}
+                      <strong>~{Math.max(1, Math.ceil(totalToSend / batchSize) - 1) * intervalMin} min</strong>
+                    </>
+                  )}
+                </div>
+
+                {/* Acciones */}
+                <div style={{ marginTop: 18 }}>
+                  {runState === 'idle' && (
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <button onClick={() => setStep(2)} style={backBtn}>← Mensaje</button>
+                      <button className={styles.primaryBtn} onClick={handleStart} disabled={!templateId || totalToSend === 0}
+                        style={{ flex: 1, minWidth: 200, padding: '13px', fontSize: 15, fontWeight: 800 }}>
+                        🚀 Empezar campaña ({remaining.length.toLocaleString('es-MX')} leads)
+                      </button>
                     </div>
-                  ))}
+                  )}
+                  {runState === 'running' && (
+                    <button onClick={handlePause} style={{ width: '100%', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 8, background: '#ffba3d', color: '#000', border: 'none', cursor: 'pointer' }}>
+                      ⏸ Pausar
+                    </button>
+                  )}
+                  {runState === 'paused' && (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={handleResume} style={{ flex: 1, padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 8, background: GREEN, color: '#000', border: 'none', cursor: 'pointer' }}>
+                        ▶ Reanudar ({remaining.length.toLocaleString('es-MX')} restantes)
+                      </button>
+                      <button onClick={handleReset} style={{ padding: '13px', fontSize: 13, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>Reset</button>
+                    </div>
+                  )}
+                  {runState === 'done' && (
+                    <div>
+                      <div style={{ padding: 12, borderRadius: 8, background: 'rgba(34,214,138,0.1)', color: GREEN, fontSize: 14, fontWeight: 600, textAlign: 'center', marginBottom: 8 }}>
+                        ✅ Completado — {sentCount} OK, {failedCount} fallidos
+                      </div>
+                      <button onClick={handleReset} style={{ width: '100%', padding: '10px', fontSize: 12, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                        Reset para otra campaña
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </Card>
+              </Card>
 
-            <Card title={`Preview (${filteredLeads.length} leads)`}>
-              {filteredLeads.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>
-                  Ningún lead coincide con el filtro.
+              {/* Progreso */}
+              <Card title="Progreso">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                  <Metric label="Total" value={totalToSend} />
+                  <Metric label="Enviados" value={sentCount} color={GREEN} />
+                  <Metric label="Fallidos" value={failedCount} color="#f05a5a" />
+                  <Metric label="Restantes" value={remaining.length} color="#4ea8f5" />
                 </div>
-              ) : (
-                <div style={{ maxHeight: 320, overflow: 'auto' }}>
-                  <table style={{ width: '100%', fontSize: 11.5, borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ position: 'sticky', top: 0, background: 'var(--bg, #0e0e15)' }}>
-                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Lead</th>
-                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Tel</th>
-                        <th style={{ textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>Status</th>
-                        <th style={{ textAlign: 'center', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>—</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredLeads.slice(0, 200).map((l) => {
-                        const sent = sentIds.has(l.id)
-                        const failed = failedIds.has(l.id)
-                        return (
-                          <tr key={l.id} style={{ borderBottom: '1px solid var(--border)', opacity: sent ? 0.4 : 1 }}>
-                            <td style={{ padding: '6px 4px', color: 'var(--text2)' }}>
-                              {l.nombre || l.email || '(sin nombre)'}
-                              {l.empresa && <span style={{ color: 'var(--text3)' }}> · {l.empresa}</span>}
-                            </td>
-                            <td style={{ padding: '6px 4px', color: 'var(--text3)', fontFamily: 'ui-monospace, monospace' }}>{l.telefono || '—'}</td>
-                            <td style={{ padding: '6px 4px' }}>
-                              <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: statusColor(l.status as never) + '22', color: statusColor(l.status as never) }}>
-                                {STATUS_LABELS[l.status as keyof typeof STATUS_LABELS] || l.status}
-                              </span>
-                            </td>
-                            <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                              {sent && <span style={{ color: '#22d68a' }}>✓</span>}
-                              {failed && <span style={{ color: '#f05a5a' }} title={failedIds.get(l.id)}>✗</span>}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                      {filteredLeads.length > 200 && (
-                        <tr><td colSpan={4} style={{ padding: 8, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>+{filteredLeads.length - 200} más…</td></tr>
-                      )}
-                    </tbody>
-                  </table>
+                <div style={{ height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${progressPct}%`, background: 'linear-gradient(90deg, #22d68a, #4ea8f5)', transition: 'width 300ms ease' }} />
                 </div>
-              )}
-            </Card>
-          </div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{progressPct}% completado</span>
+                  {nextBatchAt && <span>Próximo batch: {countdown}</span>}
+                  {running && currentBatch > 0 && <span>Batch actual: #{currentBatch}</span>}
+                </div>
+              </Card>
+
+              {/* Log */}
+              <Card title="Log de actividad">
+                {log.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>
+                    Sin actividad todavía. Dale a empezar campaña.
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 240, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {log.map((l, i) => (
+                      <div key={i} style={{ fontSize: 11.5, fontFamily: 'ui-monospace, monospace', color: l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? GREEN : 'var(--text2)', borderLeft: `2px solid ${l.level === 'err' ? '#f05a5a' : l.level === 'ok' ? GREEN : 'var(--text3)'}`, paddingLeft: 8 }}>
+                        <span style={{ color: 'var(--text3)' }}>{new Date(l.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                        {' '}{l.msg}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              {/* Preview */}
+              <Card title={`A quién le llega (${filteredLeads.length.toLocaleString('es-MX')})`}>
+                {filteredLeads.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>Ningún lead coincide con el filtro.</div>
+                ) : (
+                  <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: 11.5, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ position: 'sticky', top: 0, background: 'var(--bg, #0e0e15)' }}>
+                          <th style={thStyle}>Lead</th>
+                          <th style={thStyle}>Tel</th>
+                          <th style={thStyle}>Status</th>
+                          <th style={{ ...thStyle, textAlign: 'center' }}>—</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredLeads.slice(0, 200).map((l) => {
+                          const sent = sentIds.has(l.id)
+                          const failed = failedIds.has(l.id)
+                          return (
+                            <tr key={l.id} style={{ borderBottom: '1px solid var(--border)', opacity: sent ? 0.4 : 1 }}>
+                              <td style={{ padding: '6px 4px', color: 'var(--text2)' }}>
+                                {l.nombre || l.email || '(sin nombre)'}
+                                {l.empresa && <span style={{ color: 'var(--text3)' }}> · {l.empresa}</span>}
+                              </td>
+                              <td style={{ padding: '6px 4px', color: 'var(--text3)', fontFamily: 'ui-monospace, monospace' }}>{l.telefono || '—'}</td>
+                              <td style={{ padding: '6px 4px' }}>
+                                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: statusColor(l.status as never) + '22', color: statusColor(l.status as never) }}>
+                                  {STATUS_LABELS[l.status as keyof typeof STATUS_LABELS] || l.status}
+                                </span>
+                              </td>
+                              <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                                {sent && <span style={{ color: GREEN }}>✓</span>}
+                                {failed && <span style={{ color: '#f05a5a' }} title={failedIds.get(l.id)}>✗</span>}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                        {filteredLeads.length > 200 && (
+                          <tr><td colSpan={4} style={{ padding: 8, textAlign: 'center', color: 'var(--text3)', fontSize: 11 }}>+{filteredLeads.length - 200} más…</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
         </div>
       </main>
     </div>
   )
 }
 
+// ── Estilos compartidos ────────────────────────────────────────────────
+const labelStyle: React.CSSProperties = { fontSize: 11, color: 'var(--text3)', marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }
+const hintStyle: React.CSSProperties = { fontSize: 10.5, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic' }
+const inputStyle: React.CSSProperties = { width: '100%', padding: '9px 12px', marginTop: 4, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg, transparent)', color: 'var(--text)', fontSize: 13 }
+const thStyle: React.CSSProperties = { textAlign: 'left', padding: '6px 4px', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }
+const backBtn: React.CSSProperties = { padding: '11px 16px', fontSize: 13, fontWeight: 600, borderRadius: 8, background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', cursor: 'pointer' }
+
+function chip(sel: boolean, color: string, dim: boolean): React.CSSProperties {
+  return {
+    padding: '6px 11px',
+    fontSize: 12,
+    fontWeight: 600,
+    borderRadius: 999,
+    border: `1px solid ${sel ? color : 'var(--border)'}`,
+    background: sel ? color + '22' : 'transparent',
+    color: sel ? 'var(--text)' : 'var(--text2)',
+    cursor: 'pointer',
+    opacity: dim ? 0.4 : 1,
+  }
+}
+
+function StepPill({ n, label, active, done, onClick }: { n: number; label: string; active: boolean; done: boolean; onClick: () => void }) {
+  const on = active || done
+  return (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 999,
+      border: `1px solid ${active ? ACCENT : 'var(--border)'}`,
+      background: active ? 'rgba(124,106,247,0.14)' : 'transparent',
+      color: on ? 'var(--text)' : 'var(--text3)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+    }}>
+      <span style={{
+        width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, fontWeight: 700, background: on ? ACCENT : 'var(--border)', color: on ? '#fff' : 'var(--text3)',
+      }}>{done ? '✓' : n}</span>
+      {label}
+    </button>
+  )
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '10px 12px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginTop: 3, wordBreak: 'break-word' }}>{value}</div>
+    </div>
+  )
+}
+
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{
-      padding: 18,
-      borderRadius: 14,
-      background: 'var(--glass)',
-      border: '1px solid var(--border)',
-    }}>
-      <h3 style={{ margin: 0, marginBottom: 12, fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{title}</h3>
+    <section style={{ padding: 18, borderRadius: 14, background: 'var(--glass)', border: '1px solid var(--border)' }}>
+      <h3 style={{ margin: 0, marginBottom: 12, fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{title}</h3>
       {children}
     </section>
   )
