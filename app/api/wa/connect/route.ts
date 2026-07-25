@@ -1,0 +1,1 @@
+import { NextResponse } from 'next/server'; export const dynamic = 'force-dynamic'; export async function GET() { const raw = process.env.WA_BRIDGE_URL || ''; const b = raw.endsWith('/') ? raw.slice(0, -1) : raw; if (!b) return NextResponse.json({ error: 'WA_BRIDGE_URL no configurado' }, { status: 500 }); return NextResponse.redirect(b + '/'); }
