@@ -42,7 +42,7 @@ export default function SettingsClient() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [tplData, setTplData] = useState<OutboundTemplateResp | null>(null)
   const [tplSaving, setTplSaving] = useState(false)
-  const [tplFilter, setTplFilter] = useState('')
+  const [tplFilter, setTplFilter] = useState(''); const [wa, setWa] = useState<{ready:boolean;linked_as:string|null;configured:boolean}|null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -88,7 +88,7 @@ export default function SettingsClient() {
     } finally { setTplSaving(false) }
   }
 
-  useEffect(() => { load(); loadTemplates() }, [])
+  useEffect(() => { load(); loadTemplates(); fetch('/api/wa/status').then(r=>r.json()).then(setWa).catch(()=>{}) }, [])
 
   useEffect(() => {
     const g = params.get('google')
@@ -126,7 +126,7 @@ export default function SettingsClient() {
             }}>{flash}</div>
           )}
 
-          {/* Google Calendar */}
+          {wa && wa.configured && !wa.ready && (<div style={{ background: 'rgba(240,90,90,0.12)', border: '1px solid rgba(240,90,90,0.4)', color: '#f05a5a', padding: '12px 16px', borderRadius: 10, fontSize: 14, fontWeight: 700, marginBottom: 4 }}>WhatsApp desconectado: debes escanear de nuevo el QR para reactivar los envios automaticos.</div>)}<section style={{ background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 14, padding: '20px 24px' }}><div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}><span style={{ fontSize: 20 }}>WA</span><h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>WhatsApp (envios automaticos)</h2></div><div style={{ fontSize: 14, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 10, height: 10, borderRadius: 999, background: wa ? (wa.ready ? '#22c55e' : '#f05a5a') : '#999', display: 'inline-block' }}></span>{wa ? (wa.ready ? ('Conectado' + (wa.linked_as ? ': ' + wa.linked_as : '')) : (wa.configured ? 'Desconectado - escanea el QR para reconectar' : 'Bridge no configurado')) : 'Consultando estado...'}</div><button onClick={() => window.open('/api/wa/connect', '_blank')} style={{ background: '#22c55e', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 10, fontWeight: 700, cursor: 'pointer', fontSize: 14 }}>Generar QR / Conectar</button></section>{/* Google Calendar */}
           <section style={{
             background: 'var(--glass)', border: '1px solid var(--border)',
             borderRadius: 14, padding: '20px 24px',
