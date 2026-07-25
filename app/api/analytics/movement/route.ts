@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createServiceClient, fetchAllRows } from '@/lib/supabase'
 import { parseStatusFromDesc, passCounts, transitionStats, funnelTransitionStats, forwardAdvanceByStage, type StatusChangeRow, type ForwardAdvance } from '@/lib/statusHistory'
 import type { Lead } from '@/lib/supabase'
 
@@ -38,12 +38,12 @@ export async function GET(req: NextRequest) {
   const toISO = url.searchParams.get('to')
 
   // Para passCounts: solo los cambios dentro del rango.
-  let qRange = supabase.from('lead_actividad').select('lead_id, descripcion, created_at')
+  const rangeRows = await fetchAllRows<{ lead_id: string; descripcion: string | null; created_at: string }>((rFrom, rTo) => { let q = supabase.from('lead_actividad').select('lead_id, descripcion, created_at')
     .eq('tipo', 'status_change')
-  if (fromISO) qRange = qRange.gte('created_at', fromISO)
-  if (toISO) qRange = qRange.lte('created_at', toISO)
-  const { data: rangeRows, error: e1 } = await qRange.limit(50000)
-  if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
+  ; if (fromISO) q = q.gte('created_at', fromISO)
+  if (toISO) q = q.lte('created_at', toISO)
+  return q.order('created_at', { ascending: true }).range(rFrom, rTo) })
+  // rangeRows: paginado con fetchAllRows
 
   const inRange: StatusChangeRow[] = []
   for (const r of (rangeRows || []) as Array<{ lead_id: string; descripcion: string | null; created_at: string }>) {
@@ -53,12 +53,12 @@ export async function GET(req: NextRequest) {
 
   // Para transitions y advance: TODOS los cambios de status históricos
   // (sin filtro por rango), para tener máxima muestra estadística.
-  const { data: allRows, error: e2 } = await supabase
+  const allRows = await fetchAllRows<{ lead_id: string; descripcion: string | null; created_at: string }>((rFrom, rTo) => supabase
     .from('lead_actividad')
     .select('lead_id, descripcion, created_at')
     .eq('tipo', 'status_change')
-    .limit(100000)
-  if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
+    .order('created_at', { ascending: true }).range(rFrom, rTo))
+  // allRows: paginado con fetchAllRows
   const allParsed: StatusChangeRow[] = []
   for (const r of (allRows || []) as Array<{ lead_id: string; descripcion: string | null; created_at: string }>) {
     const s = parseStatusFromDesc(r.descripcion)
