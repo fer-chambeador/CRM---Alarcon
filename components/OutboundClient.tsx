@@ -67,6 +67,8 @@ export default function OutboundClient({
   // ── Wizard ─────────────────────────────────────────────────────────────
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [channelSearch, setChannelSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
 
   // ── Filtros ────────────────────────────────────────────────────────────
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
@@ -133,7 +135,14 @@ export default function OutboundClient({
   const filteredLeads = useMemo(() => {
     const now = Date.now()
     const q = search.trim().toLowerCase()
+    const fromTs = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null
+    const toTs = dateTo ? new Date(dateTo + 'T23:59:59.999').getTime() : null
     return initialLeads.filter((l) => {
+      if (fromTs || toTs) {
+        const t = new Date(l.created_at).getTime()
+        if (fromTs && t < fromTs) return false
+        if (toTs && t > toTs) return false
+      }
       if (selectedStatuses.size > 0 && !selectedStatuses.has(l.status)) return false
       if (selectedChannels.size > 0) {
         const c = l.canal_adquisicion?.trim() || '(sin canal)'
@@ -150,7 +159,7 @@ export default function OutboundClient({
       }
       return true
     })
-  }, [initialLeads, selectedStatuses, selectedChannels, onlyWithPhone, minDaysSinceContact, search])
+  }, [initialLeads, selectedStatuses, selectedChannels, onlyWithPhone, minDaysSinceContact, search, dateFrom, dateTo])
 
   const remaining = useMemo(
     () => filteredLeads.filter((l) => !sentIds.has(l.id) && !failedIds.has(l.id)),
@@ -188,6 +197,17 @@ export default function OutboundClient({
     { label: '≥ 7 días', value: 7 },
     { label: '≥ 14 días', value: 14 },
     { label: '≥ 30 días', value: 30 },
+  ]
+  const _today = new Date()
+  const _pad2 = (n: number) => String(n).padStart(2, '0')
+  const _ymd = (d: Date) => `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())}`
+  const _addDays = (n: number) => { const d = new Date(_today); d.setDate(d.getDate() + n); return d }
+  const DATE_PRESETS: { label: string; from: string; to: string }[] = [
+    { label: 'Todo', from: '', to: '' },
+    { label: 'Hoy', from: _ymd(_today), to: _ymd(_today) },
+    { label: 'Ayer', from: _ymd(_addDays(-1)), to: _ymd(_addDays(-1)) },
+    { label: 'Últimos 7 días', from: _ymd(_addDays(-6)), to: _ymd(_today) },
+    { label: 'Últimos 30 días', from: _ymd(_addDays(-29)), to: _ymd(_today) },
   ]
 
   // ── Dispatcher ─────────────────────────────────────────────────────────
@@ -368,8 +388,26 @@ export default function OutboundClient({
           {/* ══ PASO 1 · AUDIENCIA ══ */}
           {step === 1 && (
             <Card title="¿A quién le enviamos?">
-              {/* Status */}
-              <div style={labelStyle}>Status del lead</div>
+              {/* 1. Fecha de llegada */}
+              <div style={labelStyle}>Fecha de llegada del lead</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                {DATE_PRESETS.map((p) => (
+                  <button key={p.label} onClick={() => { setDateFrom(p.from); setDateTo(p.to) }}
+                    style={chip(dateFrom === p.from && dateTo === p.to, '#4ea8f5', false)}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>Desde</span>
+                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ ...inputStyle, width: 'auto', marginTop: 0 }} />
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>Hasta</span>
+                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ ...inputStyle, width: 'auto', marginTop: 0 }} />
+              </div>
+              <div style={hintStyle}>Filtra por cuándo llegó el lead (fecha de creación).</div>
+
+              {/* 2. Status */}
+              <div style={{ ...labelStyle, marginTop: 18 }}>Status del lead</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {STATUS_ORDER.map((s) => {
                   const count = statusCounts.get(s) || 0
@@ -383,6 +421,18 @@ export default function OutboundClient({
                 })}
               </div>
               <div style={hintStyle}>Sin seleccionar = todos los status.</div>
+
+              {/* 3. Días sin contactar */}
+              <div style={{ ...labelStyle, marginTop: 18 }}>Días sin contactar</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                {DAYS_PRESETS.map((p) => (
+                  <button key={p.value} onClick={() => setMinDaysSinceContact(p.value)}
+                    style={chip(minDaysSinceContact === p.value, GREEN, false)}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div style={hintStyle}>Leads sin contacto previo siempre pasan.</div>
 
               {/* Canal — buscable */}
               <div style={{ ...labelStyle, marginTop: 18 }}>
@@ -413,18 +463,6 @@ export default function OutboundClient({
                   <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>+{channelView.hidden} más — busca arriba</span>
                 )}
               </div>
-
-              {/* Días sin contactar */}
-              <div style={{ ...labelStyle, marginTop: 18 }}>Días sin contactar</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                {DAYS_PRESETS.map((p) => (
-                  <button key={p.value} onClick={() => setMinDaysSinceContact(p.value)}
-                    style={chip(minDaysSinceContact === p.value, GREEN, false)}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <div style={hintStyle}>Leads sin contacto previo siempre pasan.</div>
 
               {/* Otros */}
               <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 12.5, color: 'var(--text2)', marginTop: 16 }}>
