@@ -56,6 +56,12 @@ const client = new Client({
   // clientId 'v2' = sesión nueva tras subir a whatsapp-web.js 1.34.x (la vieja
   // era incompatible y rompía getChats/getNumberId). Fuerza QR limpio 1 vez.
   authStrategy: new LocalAuth({ dataPath: './session', clientId: 'v2' }),
+  // Ancla la versión de WhatsApp Web a una parchada (wa-version) para que el
+  // Store cargue bien y getChats/getNumberId/sendMessage dejen de tronar ("r").
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1040976739-alpha.html',
+  },
   puppeteer: {
     headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
