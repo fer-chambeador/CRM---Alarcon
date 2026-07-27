@@ -13,9 +13,11 @@
  * Railway:           deploy de esta carpeta, var BRIDGE_SECRET, disco para ./session
  *
  * Endpoints:
- *  GET  /            → status + QR para vincular (HTML)
- *  GET  /health      → JSON { ready }
- *  POST /send        → { phone, text } + header x-bridge-secret
+ *  GET  /               → status + QR para vincular (HTML)
+ *  GET  /health         → JSON { ready }
+ *  POST /send           → { phone, text } + header x-bridge-secret
+ *  GET  /chats          → chats 1:1 recientes (backfill sync CRM)
+ *  GET  /chat-messages  → transcript corto de un chat (clasificación)
  */
 const express = require('express')
 const QRCode = require('qrcode')
@@ -138,6 +140,69 @@ app.post('/send', async (req, res) => {
     res.json({ ok: true, to: numberId._serialized })
   } catch (e) {
     console.error('[wa-bridge] error:', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Backfill: lectura de chats (solo lectura, protegido por secret) ─────────
+// GET /chats?days=90 → lista de chats individuales con actividad reciente.
+app.get('/chats', async (req, res) => {
+  if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
+  const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 90))
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400
+  try {
+    const chats = await client.getChats()
+    const out = []
+    for (const c of chats) {
+      if (c.isGroup) continue
+      const id = c.id && c.id._serialized ? c.id._serialized : ''
+      if (!id.endsWith('@c.us')) continue
+      const ts = c.timestamp || (c.lastMessage && c.lastMessage.timestamp) || 0
+      if (ts && ts < cutoff) continue
+      out.push({
+        phone: id.replace('@c.us', ''),
+        name: c.name || null,
+        ts: ts || null,
+        lastFromMe: !!(c.lastMessage && c.lastMessage.fromMe),
+        unread: c.unreadCount || 0,
+      })
+    }
+    out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+    res.json({ ok: true, count: out.length, chats: out })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// GET /chat-messages?phone=52...&limit=25 → transcript corto para clasificar.
+app.get('/chat-messages', async (req, res) => {
+  if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
+  const phone = String(req.query.phone || '').replace(/\D/g, '')
+  if (!phone) return res.status(400).json({ ok: false, error: 'phone requerido' })
+  const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 25))
+  try {
+    let numberId = null
+    for (const c of candidates(phone)) {
+      numberId = await client.getNumberId(c)
+      if (numberId) break
+    }
+    if (!numberId) return res.json({ ok: true, phone, messages: [] })
+    const chat = await client.getChatById(numberId._serialized)
+    const msgs = await chat.fetchMessages({ limit })
+    res.json({
+      ok: true,
+      phone,
+      name: chat.name || null,
+      messages: msgs.map(m => ({
+        fromMe: !!m.fromMe,
+        ts: m.timestamp || null,
+        type: m.type,
+        body: (m.body || '').slice(0, 400),
+      })),
+    })
+  } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
 })
