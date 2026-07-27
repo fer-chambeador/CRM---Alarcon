@@ -179,7 +179,10 @@ app.get('/chats', async (req, res) => {
     out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
     res.json({ ok: true, count: out.length, chats: out })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
+    console.error('[wa-bridge] /chats error:', e)
+    let state = null
+    try { state = await client.getState() } catch (se) { state = 'getState_err:' + (se && se.message) }
+    res.status(500).json({ ok: false, error: e && e.message, name: e && e.name, state, stack: String(e && e.stack).slice(0, 1800) })
   }
 })
 
