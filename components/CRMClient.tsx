@@ -7,7 +7,7 @@ import { format, formatDistanceToNow, startOfDay, startOfWeek, startOfMonth, end
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 import styles from './CRMClient.module.css'
-import { Sidebar } from './CommandCenter'
+import { Sidebar } from './CommandCenter'; import { LeadBulkBar } from './LeadBulkBar'
 import {
   STATUS_LABELS, STATUS_ORDER, PIPELINE_ACTIVE, PIPELINE_CLOSING, PIPELINE_CLOSED,
   DEFAULT_MONTO, statusColor, fmtMoney,
@@ -580,7 +580,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   // para que enlaces tipo /leads?q=5513003501 abran ya filtrados.
   const initialQuery = searchParams.get('q') || ''
 
-  const [leads, setLeads] = useState<Lead[]>(initialLeads)
+  const [leads, setLeads] = useState<Lead[]>(initialLeads); const [sel, setSel] = useState<Set<string>>(new Set()); const toggleSel = (id: string) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n }); const toggleSelAll = (ids: string[]) => setSel(p => { const all = ids.length > 0 && ids.every(i => p.has(i)); const n = new Set(p); ids.forEach(i => all ? n.delete(i) : n.add(i)); return n })
   const [selectedLead, setSelectedLead] = useState<Lead | null>(
     initialLeadId ? initialLeads.find(l => l.id === initialLeadId) || null : null
   )
@@ -974,10 +974,10 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
         {newLeadFlash && <div className={styles.flashBanner}>🆕 Nuevo lead: <strong>{newLeadFlash}</strong></div>}
 
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
+          <LeadBulkBar selectedIds={sel} leads={visibleSorted} onDone={() => setSel(new Set())} /><table className={styles.table}>
             <thead>
               <tr>
-                <SortableHeader label="Lead" sortKey="email" current={sort} onSort={onSort} />
+                <th style={{ width: 30, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={visibleSorted.length > 0 && visibleSorted.every(l => sel.has(l.id))} onChange={() => toggleSelAll(visibleSorted.map(l => l.id))} /></th><SortableHeader label="Lead" sortKey="email" current={sort} onSort={onSort} />
                 <SortableHeader label="Empresa" sortKey="empresa" current={sort} onSort={onSort} />
                 <SortableHeader label="Teléfono" sortKey="telefono" current={sort} onSort={onSort} />
                 <SortableHeader label="Ubicación" sortKey="ubicacion" current={sort} onSort={onSort} />
@@ -1001,7 +1001,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 const bucket = scoreBucket(score)
                 return (
                   <tr key={lead.id} className={clsx(styles.row, isNew && styles.rowFlash)}
-                      onClick={() => setSelectedLead(lead)}>
+                      onClick={() => setSelectedLead(lead)}><td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={sel.has(lead.id)} onChange={() => toggleSel(lead.id)} /></td>
                     <td>
                       <div className={styles.emailCell}>
                         <span className={styles.tipoIcon}>{tipoLabel(lead.tipo_evento)}</span>
