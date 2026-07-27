@@ -53,7 +53,9 @@ function rmChromiumLocks(dir) {
 rmChromiumLocks('./session')
 
 const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: './session' }),
+  // clientId 'v2' = sesión nueva tras subir a whatsapp-web.js 1.34.x (la vieja
+  // era incompatible y rompía getChats/getNumberId). Fuerza QR limpio 1 vez.
+  authStrategy: new LocalAuth({ dataPath: './session', clientId: 'v2' }),
   puppeteer: {
     headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
