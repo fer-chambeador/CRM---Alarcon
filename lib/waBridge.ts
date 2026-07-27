@@ -14,7 +14,7 @@
 export const waDirectTemplate = (empresa: string) =>
   `Lic, mucho gusto.
 
-Soy Fernando de ChambasAI, la plataforma de reclutamiento, vi que te registraste con ${empresa}.\n\n¿Estás libre hoy o mañana para una llamada? Así te explico a detalle cómo reclutamos.`
+Soy Fernando de ChambasAI, la plataforma de reclutamiento, vi que te registraste con ${empresa}\n\n¿Estás libre hoy o mañana para una llamada? Así te explico a detalle cómo reclutamos.`
 
 export type WaBridgeResult = { ok: boolean; error?: string; to?: string }
 
