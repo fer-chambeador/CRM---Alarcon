@@ -25,6 +25,9 @@ const PORT = process.env.PORT || 3009
 const SECRET = process.env.BRIDGE_SECRET
 if (!SECRET) { console.error('Falta BRIDGE_SECRET'); process.exit(1) }
 
+// URL del webhook del CRM para el sync en vivo (marca leads como contactado).
+const CRM_INBOUND_URL = process.env.CRM_INBOUND_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/inbound'
+
 let lastQr = null
 let ready = false
 let meNumber = null
@@ -67,6 +70,27 @@ client.on('ready', () => {
   console.log(`[wa-bridge] ✅ Listo. Vinculado como +${meNumber}`)
 })
 client.on('disconnected', reason => { ready = false; console.log('[wa-bridge] desconectado:', reason) })
+
+// ── Sync en vivo con el CRM ────────────────────────────────────────────────
+// Reporta CADA mensaje del chat 1:1 (entrante y saliente de Fer) al CRM para
+// marcar al lead como "contactado" y actualizar su último contacto. Así el
+// outbound automático no le vuelve a escribir a alguien que ya está en
+// conversación. Solo chats individuales (@c.us): ignora grupos y estados.
+// Fire-and-forget: nunca debe romper ni frenar el envío de WhatsApp.
+async function reportToCrm(msg) {
+  try {
+    const chatId = msg.fromMe ? msg.to : msg.from
+    if (!chatId || !String(chatId).endsWith('@c.us')) return
+    const phone = String(chatId).replace('@c.us', '')
+    await fetch(CRM_INBOUND_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bridge-secret': SECRET },
+      body: JSON.stringify({ phone, fromMe: !!msg.fromMe, ts: Date.now() }),
+    }).catch(() => {})
+  } catch { /* nunca romper el bridge por el sync */ }
+}
+client.on('message_create', reportToCrm)
+
 client.initialize()
 
 const app = express()
