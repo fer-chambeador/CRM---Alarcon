@@ -207,4 +207,16 @@ app.get('/chat-messages', async (req, res) => {
   }
 })
 
+// POST /relink — borra la sesión guardada y reinicia para forzar QR nuevo.
+// (destroy() antes del rm evita que el cliente vuelva a re-guardar la sesión.)
+app.post('/relink', async (req, res) => {
+  if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  res.json({ ok: true, msg: 'relinking — espera ~30s y abre / para escanear el QR' })
+  setTimeout(async () => {
+    try { await client.destroy() } catch { /* ignore */ }
+    try { fs.rmSync('./session', { recursive: true, force: true }) } catch { /* ignore */ }
+    process.exit(0) // Railway reinicia el contenedor → arranca sin sesión → QR
+  }, 300)
+})
+
 app.listen(PORT, () => console.log(`[wa-bridge] escuchando en :${PORT} — abre http://localhost:${PORT} para vincular`))
