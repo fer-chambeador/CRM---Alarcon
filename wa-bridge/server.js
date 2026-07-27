@@ -214,7 +214,12 @@ app.post('/relink', async (req, res) => {
   res.json({ ok: true, msg: 'relinking — espera ~30s y abre / para escanear el QR' })
   setTimeout(async () => {
     try { await client.destroy() } catch { /* ignore */ }
-    try { fs.rmSync('./session', { recursive: true, force: true }) } catch { /* ignore */ }
+    // './session' es el mountpoint del volumen: borrar su CONTENIDO, no el dir.
+    try {
+      for (const e of fs.readdirSync('./session')) {
+        fs.rmSync(path.join('./session', e), { recursive: true, force: true })
+      }
+    } catch { /* ignore */ }
     process.exit(0) // Railway reinicia el contenedor → arranca sin sesión → QR
   }, 300)
 })
