@@ -64,7 +64,7 @@ const client = new Client({
   },
   puppeteer: {
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    // Sin executablePath → usa el Chromium emparejado que descarga Puppeteer.
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
       '--disable-gpu',
@@ -224,7 +224,8 @@ app.post('/relink', async (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   res.json({ ok: true, msg: 'relinking — espera ~30s y abre / para escanear el QR' })
   setTimeout(async () => {
-    try { await client.destroy() } catch { /* ignore */ }
+    // No bloquear si destroy() se cuelga (pasa si el store está roto).
+    try { await Promise.race([client.destroy(), new Promise(r => setTimeout(r, 3000))]) } catch { /* ignore */ }
     // './session' es el mountpoint del volumen: borrar su CONTENIDO, no el dir.
     try {
       for (const e of fs.readdirSync('./session')) {
