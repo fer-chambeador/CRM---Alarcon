@@ -30,6 +30,7 @@ const PORT = process.env.PORT || 3009
 const SECRET = process.env.BRIDGE_SECRET
 if (!SECRET) { console.error('Falta BRIDGE_SECRET'); process.exit(1) }
 const CRM_INBOUND_URL = process.env.CRM_INBOUND_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/inbound'
+const CRM_LABELS_URL = process.env.CRM_LABELS_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/labels'
 const AUTH_DIR = './session/auth'
 
 let sock = null
@@ -99,6 +100,24 @@ async function reportToCrm(phone, fromMe) {
   } catch { /* fire and forget */ }
 }
 
+// Reporta al CRM las etiquetas de WhatsApp Business de un chat 1:1.
+async function reportLabelsToCrm(jid) {
+  try {
+    if (!only1to1(jid)) return
+    const set = chatLabels.get(jid)
+    const labels = set ? [...set].map(id => labelDefs.get(id)).filter(Boolean) : []
+    await fetch(CRM_LABELS_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bridge-secret': SECRET },
+      body: JSON.stringify({ phone: phoneOf(jid), labels }),
+    }).catch(() => {})
+  } catch { /* fire and forget */ }
+}
+
+// Sync periódico de TODAS las etiquetas actuales (backfill inicial + cambios).
+// El CRM deduplica: si la etiqueta no cambió, no hace nada.
+setInterval(() => { for (const jid of chatLabels.keys()) reportLabelsToCrm(jid) }, 5 * 60 * 1000)
+
 async function startSock() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
   // Negociar la versión ACTUAL de WhatsApp (sin esto, WhatsApp rechaza con 428).
@@ -135,7 +154,6 @@ async function startSock() {
       ready = true; lastQr = null
       meNumber = phoneOf(sock.user && sock.user.id)
       console.log('[wa-bridge] ✅ Vinculado como', meNumber)
-      // Forzar sync del app-state para traer etiquetas (labels) + asociaciones.
       setTimeout(() => {
         try { sock.resyncAppState(['critical_unblock_low', 'regular_high', 'regular_low', 'regular'], false).catch(() => {}) } catch { /* ignore */ }
       }, 4000)
@@ -146,7 +164,6 @@ async function startSock() {
         ? lastDisconnect.error.output.statusCode : null
       console.log('[wa-bridge] conexión cerrada, code=', code)
       if (code === DisconnectReason.loggedOut) {
-        // Sesión cerrada: borrar auth para forzar QR nuevo en el próximo arranque.
         try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }) } catch { /* ignore */ }
         setTimeout(() => startSock().catch(e => console.error('restart err', e && e.message)), 1500)
       } else {
@@ -155,7 +172,6 @@ async function startSock() {
     }
   })
 
-  // Historial inicial (para el backfill)
   sock.ev.on('messaging-history.set', (h) => {
     try {
       const chats = h.chats || []
@@ -170,7 +186,6 @@ async function startSock() {
     } catch { /* ignore */ }
   })
 
-  // Mensajes nuevos (entrantes y salientes) → sync en vivo + store
   sock.ev.on('messages.upsert', (up) => {
     try {
       const messages = up.messages || []
@@ -183,7 +198,6 @@ async function startSock() {
     } catch { /* ignore */ }
   })
 
-  // Etiquetas de WhatsApp Business (definiciones)
   sock.ev.on('labels.edit', (label) => {
     try {
       if (!label || label.id == null) return
@@ -192,7 +206,6 @@ async function startSock() {
       else labelDefs.set(id, label.name || id)
     } catch { /* ignore */ }
   })
-  // Asociación etiqueta ↔ chat
   sock.ev.on('labels.association', (ev) => {
     try {
       const a = (ev && ev.association) || {}
@@ -203,10 +216,10 @@ async function startSock() {
       if (!set) { set = new Set(); chatLabels.set(jid, set) }
       if (ev.type === 'remove') set.delete(lid)
       else set.add(lid)
+      reportLabelsToCrm(jid)  // push en vivo al CRM
     } catch { /* ignore */ }
   })
 
-  // Nombres de contactos/chats para enriquecer el store
   sock.ev.on('contacts.upsert', (cs) => {
     try {
       for (const c of cs || []) {
@@ -220,17 +233,13 @@ async function startSock() {
 
 startSock().catch(e => console.error('[wa-bridge] startSock error:', e && e.message))
 
-// ── Cross-check programado 24/7 ─────────────────────────────────────────────
-// Además del sync en vivo (tiempo real), re-sincroniza los leads existentes con
-// los chats de WhatsApp a las 9:00 y 20:00 hora CDMX (UTC-6). Red de seguridad
-// para leads que se crearon en el CRM después de una conversación en WB.
 const CRM_BACKFILL_URL = process.env.CRM_BACKFILL_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/backfill'
 let lastCronKey = ''
 setInterval(async () => {
   try {
     if (!ready) return
     const now = new Date()
-    const hCdmx = (now.getUTCHours() - 6 + 24) % 24 // CDMX = UTC-6 (sin horario de verano)
+    const hCdmx = (now.getUTCHours() - 6 + 24) % 24
     const key = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${hCdmx}`
     if ((hCdmx === 9 || hCdmx === 20) && key !== lastCronKey) {
       lastCronKey = key
@@ -245,7 +254,6 @@ setInterval(async () => {
   } catch (e) { console.log('[wa-bridge] cross-check error:', e && e.message) }
 }, 60 * 1000)
 
-// ── HTTP API ────────────────────────────────────────────────────────────────
 const app = express()
 app.use(express.json())
 
@@ -260,7 +268,6 @@ app.get('/', async (_req, res) => {
   res.send(`<html><body style="font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh"><div style="text-align:center"><h2>Escanea con WhatsApp</h2><p>WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo</p><img src="${dataUrl}"/><script>setTimeout(()=>location.reload(),8000)</script></div></body></html>`)
 })
 
-// Normaliza a número internacional MX: 52 + 10 dígitos.
 function toMxNumber(phone) {
   const d = String(phone).replace(/\D/g, '')
   return '52' + d.slice(-10)
@@ -290,7 +297,6 @@ app.post('/send', async (req, res) => {
   }
 })
 
-// Backfill: chats 1:1 recientes desde el store.
 app.get('/chats', (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
@@ -308,7 +314,6 @@ app.get('/chats', (req, res) => {
   res.json({ ok: true, count: out.length, chats: out })
 })
 
-// Etiquetas de WhatsApp Business detectadas (definiciones + conteo de chats).
 app.get('/labels', (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   const counts = {}
@@ -317,7 +322,6 @@ app.get('/labels', (req, res) => {
   res.json({ ok: true, ready, labels, taggedChats: chatLabels.size })
 })
 
-// Transcript corto de un chat desde el store.
 app.get('/chat-messages', (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
@@ -331,7 +335,6 @@ app.get('/chat-messages', (req, res) => {
   res.json({ ok: true, phone, name: (found && chatStore.get(found) && chatStore.get(found).name) || null, messages: msgs })
 })
 
-// Borra la sesión y reinicia para generar un QR nuevo.
 app.post('/relink', async (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   res.json({ ok: true, msg: 'relinking — espera ~20s y abre / para escanear el QR' })
