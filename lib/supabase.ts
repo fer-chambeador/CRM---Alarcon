@@ -78,6 +78,7 @@ export type Lead = {
   vambe_contact_id: string | null
   vambe_stage_id: string | null
   tipo_llamada: 'demo' | 'comercial' | null
+  etiqueta_wa: string | null
 }
 
 export type LeadActividad = {
