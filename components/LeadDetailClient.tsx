@@ -219,6 +219,7 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
           <DataCard label="Contactos" value={`${lead.veces_contactado || 0} intentos`} />
           {lead.llamada_at && <DataCard label="Llamada" value={format(new Date(lead.llamada_at), "d MMM, HH:mm", { locale: es })} />}
           {lead.tipo_llamada && <DataCard label="Tipo llamada" value={lead.tipo_llamada} />}
+          {lead.etiqueta_wa && <DataCard label="Etiqueta WA" value={lead.etiqueta_wa} />}
         </section>
 
         {/* Notas */}
