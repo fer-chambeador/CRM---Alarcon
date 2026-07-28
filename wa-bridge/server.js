@@ -1,108 +1,185 @@
 /**
- * WA Bridge — vincula el WhatsApp de Fer (personal o Business) como
- * dispositivo (igual que WhatsApp Web) y expone un endpoint /send que el
- * CRM usa para mandar la plantilla outbound desde SU número.
+ * WA Bridge (Baileys) — vincula el WhatsApp de Fer por el protocolo multi-device
+ * (WebSocket, SIN navegador). Reemplaza whatsapp-web.js, cuyo Store se rompía
+ * con la versión actual de WhatsApp Web (error "r"). Baileys es inmune a eso.
  *
- * ⚠️ IMPORTANTE
- *  - Envíos 1×1, siempre detonados por un humano desde el CRM.
- *  - Cliente no oficial: WhatsApp puede suspender números que detecte
- *    automatizando. Por eso la prueba de estrés se hace primero con el
- *    número personal, con pausas humanas entre mensajes.
- *
- * Uso local (Mac):   cd wa-bridge && npm install && BRIDGE_SECRET=algo npm start
- * Railway:           deploy de esta carpeta, var BRIDGE_SECRET, disco para ./session
- *
- * Endpoints:
+ * Misma API HTTP que antes (para no tocar el CRM):
  *  GET  /               → status + QR para vincular (HTML)
- *  GET  /health         → JSON { ready }
+ *  GET  /health         → { ok, ready, linked_as }
  *  POST /send           → { phone, text } + header x-bridge-secret
- *  GET  /chats          → chats 1:1 recientes (backfill sync CRM)
- *  GET  /chat-messages  → transcript corto de un chat (clasificación)
+ *  GET  /chats          → chats 1:1 recientes (backfill)
+ *  GET  /chat-messages  → transcript corto de un chat
+ *  POST /relink         → borra la sesión y reinicia para QR nuevo
+ *
+ * Sync en vivo: cada mensaje 1:1 (entrante y saliente) se reporta al CRM.
  */
 const express = require('express')
 const QRCode = require('qrcode')
-const { Client, LocalAuth } = require('whatsapp-web.js')
+const fs = require('fs')
+const path = require('path')
+const P = require('pino')({ level: 'silent' })
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  Browsers,
+  fetchLatestBaileysVersion,
+} = require('@whiskeysockets/baileys')
 
 const PORT = process.env.PORT || 3009
 const SECRET = process.env.BRIDGE_SECRET
 if (!SECRET) { console.error('Falta BRIDGE_SECRET'); process.exit(1) }
-
-// URL del webhook del CRM para el sync en vivo (marca leads como contactado).
 const CRM_INBOUND_URL = process.env.CRM_INBOUND_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/inbound'
+const AUTH_DIR = './session/auth'
 
+let sock = null
 let lastQr = null
 let ready = false
 let meNumber = null
 
-// Limpiar locks de Chromium huérfanos (quedan en el volumen si el contenedor
-// anterior murió — "The profile appears to be in use by another process").
-const fs = require('fs')
-const path = require('path')
-function rmChromiumLocks(dir) {
-  try {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name)
-      if (e.isDirectory()) rmChromiumLocks(p)
-      else if (/^Singleton(Lock|Cookie|Socket)$/.test(e.name)) {
-        fs.rmSync(p, { force: true })
-        console.log('[wa-bridge] lock huérfano eliminado:', p)
-      }
-    }
-  } catch { /* dir aún no existe — primera corrida */ }
+// Store mínimo en memoria para el backfill (Baileys no trae getChats).
+const chatStore = new Map()   // jid -> { name, ts, lastFromMe }
+const msgStore = new Map()    // jid -> [{ fromMe, ts, type, body }]  (máx 50)
+
+function only1to1(jid) { return typeof jid === 'string' && jid.endsWith('@s.whatsapp.net') }
+function phoneOf(jid) { return String(jid || '').split('@')[0].split(':')[0] }
+
+function extractText(m) {
+  const msg = m && m.message ? m.message : {}
+  return (
+    msg.conversation ||
+    (msg.extendedTextMessage && msg.extendedTextMessage.text) ||
+    (msg.imageMessage && msg.imageMessage.caption) ||
+    (msg.videoMessage && msg.videoMessage.caption) ||
+    (msg.buttonsResponseMessage && msg.buttonsResponseMessage.selectedButtonId) ||
+    (msg.listResponseMessage && msg.listResponseMessage.title) ||
+    ''
+  )
 }
-rmChromiumLocks('./session')
+function typeOf(m) {
+  const msg = m && m.message ? m.message : {}
+  const k = Object.keys(msg)[0] || 'chat'
+  if (/image/i.test(k)) return 'image'
+  if (/video/i.test(k)) return 'video'
+  if (/document/i.test(k)) return 'document'
+  if (/audio|ptt/i.test(k)) return 'audio'
+  return 'chat'
+}
 
-const client = new Client({
-  // clientId 'v2' = sesión nueva tras subir a whatsapp-web.js 1.34.x (la vieja
-  // era incompatible y rompía getChats/getNumberId). Fuerza QR limpio 1 vez.
-  authStrategy: new LocalAuth({ dataPath: './session', clientId: 'v2' }),
-  // Ancla la versión de WhatsApp Web a una parchada (wa-version) para que el
-  // Store cargue bien y getChats/getNumberId/sendMessage dejen de tronar ("r").
-  webVersionCache: {
-    type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1040976739-alpha.html',
-  },
-  puppeteer: {
-    headless: true,
-    // Sin executablePath → usa el Chromium emparejado que descarga Puppeteer.
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-extensions', '--disable-software-rasterizer', '--no-first-run',
-    ],
-  },
-})
-
-client.on('qr', qr => { lastQr = qr; ready = false; console.log('[wa-bridge] QR nuevo — escanéalo desde WhatsApp > Dispositivos vinculados') })
-client.on('ready', () => {
-  ready = true; lastQr = null
-  meNumber = client.info?.wid?.user || null
-  console.log(`[wa-bridge] ✅ Listo. Vinculado como +${meNumber}`)
-})
-client.on('disconnected', reason => { ready = false; console.log('[wa-bridge] desconectado:', reason) })
-
-// ── Sync en vivo con el CRM ────────────────────────────────────────────────
-// Reporta CADA mensaje del chat 1:1 (entrante y saliente de Fer) al CRM para
-// marcar al lead como "contactado" y actualizar su último contacto. Así el
-// outbound automático no le vuelve a escribir a alguien que ya está en
-// conversación. Solo chats individuales (@c.us): ignora grupos y estados.
-// Fire-and-forget: nunca debe romper ni frenar el envío de WhatsApp.
-async function reportToCrm(msg) {
+function recordMessage(m) {
   try {
-    const chatId = msg.fromMe ? msg.to : msg.from
-    if (!chatId || !String(chatId).endsWith('@c.us')) return
-    const phone = String(chatId).replace('@c.us', '')
+    const jid = m.key && m.key.remoteJid
+    if (!only1to1(jid)) return
+    const fromMe = !!(m.key && m.key.fromMe)
+    const ts = Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)
+    const body = String(extractText(m) || '')
+    const type = typeOf(m)
+    // chat index
+    const prev = chatStore.get(jid) || {}
+    if (!prev.ts || ts >= prev.ts) chatStore.set(jid, { name: prev.name || null, ts, lastFromMe: fromMe })
+    else chatStore.set(jid, { ...prev, name: prev.name || null })
+    // messages (cap 50, orden cronológico aprox)
+    const arr = msgStore.get(jid) || []
+    arr.push({ fromMe, ts, type, body })
+    arr.sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    if (arr.length > 50) arr.splice(0, arr.length - 50)
+    msgStore.set(jid, arr)
+  } catch { /* no romper por el store */ }
+}
+
+async function reportToCrm(phone, fromMe) {
+  try {
     await fetch(CRM_INBOUND_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-bridge-secret': SECRET },
-      body: JSON.stringify({ phone, fromMe: !!msg.fromMe, ts: Date.now() }),
+      body: JSON.stringify({ phone, fromMe: !!fromMe, ts: Date.now() }),
     }).catch(() => {})
-  } catch { /* nunca romper el bridge por el sync */ }
+  } catch { /* fire and forget */ }
 }
-client.on('message_create', reportToCrm)
 
-client.initialize()
+async function startSock() {
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
+  let version
+  try { ({ version } = await fetchLatestBaileysVersion()) } catch { version = undefined }
 
+  sock = makeWASocket({
+    version,
+    auth: state,
+    logger: P,
+    browser: Browsers.macOS('Chrome'),
+    printQRInTerminal: false,
+    syncFullHistory: true,
+    markOnlineOnConnect: false,
+  })
+
+  sock.ev.on('creds.update', saveCreds)
+
+  sock.ev.on('connection.update', (u) => {
+    const { connection, lastDisconnect, qr } = u
+    if (qr) { lastQr = qr; ready = false }
+    if (connection === 'open') {
+      ready = true; lastQr = null
+      meNumber = phoneOf(sock.user && sock.user.id)
+      console.log('[wa-bridge] ✅ Vinculado como', meNumber)
+    }
+    if (connection === 'close') {
+      ready = false
+      const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
+        ? lastDisconnect.error.output.statusCode : null
+      console.log('[wa-bridge] conexión cerrada, code=', code)
+      if (code === DisconnectReason.loggedOut) {
+        // Sesión cerrada: borrar auth para forzar QR nuevo en el próximo arranque.
+        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }) } catch { /* ignore */ }
+        setTimeout(() => startSock().catch(e => console.error('restart err', e && e.message)), 1500)
+      } else {
+        setTimeout(() => startSock().catch(e => console.error('reconnect err', e && e.message)), 2500)
+      }
+    }
+  })
+
+  // Historial inicial (para el backfill)
+  sock.ev.on('messaging-history.set', (h) => {
+    try {
+      const chats = h.chats || []
+      for (const c of chats) {
+        if (!only1to1(c.id)) continue
+        const ts = Number(c.conversationTimestamp) || null
+        const prev = chatStore.get(c.id) || {}
+        chatStore.set(c.id, { name: c.name || c.notify || prev.name || null, ts: ts || prev.ts || null, lastFromMe: prev.lastFromMe || false })
+      }
+      const msgs = h.messages || []
+      for (const m of msgs) recordMessage(m)
+    } catch { /* ignore */ }
+  })
+
+  // Mensajes nuevos (entrantes y salientes) → sync en vivo + store
+  sock.ev.on('messages.upsert', (up) => {
+    try {
+      const messages = up.messages || []
+      for (const m of messages) {
+        const jid = m.key && m.key.remoteJid
+        if (!only1to1(jid)) continue
+        recordMessage(m)
+        reportToCrm(phoneOf(jid), !!(m.key && m.key.fromMe))
+      }
+    } catch { /* ignore */ }
+  })
+
+  // Nombres de contactos/chats para enriquecer el store
+  sock.ev.on('contacts.upsert', (cs) => {
+    try {
+      for (const c of cs || []) {
+        if (!only1to1(c.id)) continue
+        const prev = chatStore.get(c.id) || {}
+        chatStore.set(c.id, { ...prev, name: c.name || c.notify || prev.name || null })
+      }
+    } catch { /* ignore */ }
+  })
+}
+
+startSock().catch(e => console.error('[wa-bridge] startSock error:', e && e.message))
+
+// ── HTTP API ────────────────────────────────────────────────────────────────
 const app = express()
 app.use(express.json())
 
@@ -112,128 +189,80 @@ app.get('/', async (_req, res) => {
   if (ready) {
     return res.send(`<html><body style="font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh"><div style="text-align:center"><h2>✅ WA Bridge listo</h2><p>Vinculado como +${meNumber}</p></div></body></html>`)
   }
-  if (!lastQr) return res.send('<html><body style="font-family:sans-serif"><p>Iniciando… recarga en unos segundos.</p></body></html>')
+  if (!lastQr) return res.send('<html><body style="font-family:sans-serif"><p>Iniciando… recarga en unos segundos.</p><script>setTimeout(()=>location.reload(),4000)</script></body></html>')
   const dataUrl = await QRCode.toDataURL(lastQr, { width: 320 })
   res.send(`<html><body style="font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh"><div style="text-align:center"><h2>Escanea con WhatsApp</h2><p>WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo</p><img src="${dataUrl}"/><script>setTimeout(()=>location.reload(),8000)</script></div></body></html>`)
 })
 
-// Normaliza número MX a formato WhatsApp: 52 + 10 dígitos (y prueba 521 legacy).
-function candidates(phone) {
+// Normaliza a número internacional MX: 52 + 10 dígitos.
+function toMxNumber(phone) {
   const d = String(phone).replace(/\D/g, '')
-  const last10 = d.slice(-10)
-  return [`52${last10}`, `521${last10}`]
+  return '52' + d.slice(-10)
 }
 
 let lastSendAt = 0
 app.post('/send', async (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
-  if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado — abre / y escanea el QR' })
+  if (!ready || !sock) return res.status(503).json({ ok: false, error: 'bridge no vinculado — abre / y escanea el QR' })
   const { phone, text } = req.body || {}
   if (!phone || !text) return res.status(400).json({ ok: false, error: 'phone y text requeridos' })
 
-  // Throttle de seguridad: mínimo 5 s entre envíos (esto es 1×1 humano, no blast).
   const wait = 5000 - (Date.now() - lastSendAt)
   if (wait > 0) await new Promise(r => setTimeout(r, wait))
   lastSendAt = Date.now()
 
   try {
-    let numberId = null
-    for (const c of candidates(phone)) {
-      numberId = await client.getNumberId(c)
-      if (numberId) break
-    }
-    if (!numberId) return res.status(404).json({ ok: false, error: `el número ${phone} no tiene WhatsApp` })
-    await client.sendMessage(numberId._serialized, text)
-    console.log(`[wa-bridge] 📤 enviado a ${numberId._serialized}`)
-    res.json({ ok: true, to: numberId._serialized })
+    const num = toMxNumber(phone)
+    const [info] = await sock.onWhatsApp(num)
+    if (!info || !info.exists) return res.status(404).json({ ok: false, error: `el número ${phone} no tiene WhatsApp` })
+    await sock.sendMessage(info.jid, { text: String(text) })
+    console.log('[wa-bridge] 📤 enviado a', info.jid)
+    res.json({ ok: true, to: info.jid })
   } catch (e) {
-    console.error('[wa-bridge] error:', e.message)
-    res.status(500).json({ ok: false, error: e.message })
+    console.error('[wa-bridge] error /send:', e && e.message)
+    res.status(500).json({ ok: false, error: e && e.message })
   }
 })
 
-// ── Backfill: lectura de chats (solo lectura, protegido por secret) ─────────
-// GET /chats?days=90 → lista de chats individuales con actividad reciente.
-app.get('/chats', async (req, res) => {
+// Backfill: chats 1:1 recientes desde el store.
+app.get('/chats', (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
   const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 90))
   const cutoff = Math.floor(Date.now() / 1000) - days * 86400
-  try {
-    const chats = await client.getChats()
-    const out = []
-    for (const c of chats) {
-      if (c.isGroup) continue
-      const id = c.id && c.id._serialized ? c.id._serialized : ''
-      if (!id.endsWith('@c.us')) continue
-      const ts = c.timestamp || (c.lastMessage && c.lastMessage.timestamp) || 0
-      if (ts && ts < cutoff) continue
-      out.push({
-        phone: id.replace('@c.us', ''),
-        name: c.name || null,
-        ts: ts || null,
-        lastFromMe: !!(c.lastMessage && c.lastMessage.fromMe),
-        unread: c.unreadCount || 0,
-      })
-    }
-    out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
-    res.json({ ok: true, count: out.length, chats: out })
-  } catch (e) {
-    console.error('[wa-bridge] /chats error:', e)
-    let state = null
-    try { state = await client.getState() } catch (se) { state = 'getState_err:' + (se && se.message) }
-    res.status(500).json({ ok: false, error: e && e.message, name: e && e.name, state, stack: String(e && e.stack).slice(0, 1800) })
+  const out = []
+  for (const [jid, v] of chatStore.entries()) {
+    if (!only1to1(jid)) continue
+    if (v.ts && v.ts < cutoff) continue
+    out.push({ phone: phoneOf(jid), name: v.name || null, ts: v.ts || null, lastFromMe: !!v.lastFromMe })
   }
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+  res.json({ ok: true, count: out.length, chats: out })
 })
 
-// GET /chat-messages?phone=52...&limit=25 → transcript corto para clasificar.
-app.get('/chat-messages', async (req, res) => {
+// Transcript corto de un chat desde el store.
+app.get('/chat-messages', (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
   if (!ready) return res.status(503).json({ ok: false, error: 'bridge no vinculado' })
   const phone = String(req.query.phone || '').replace(/\D/g, '')
   if (!phone) return res.status(400).json({ ok: false, error: 'phone requerido' })
+  const last10 = phone.slice(-10)
+  let found = null
+  for (const jid of msgStore.keys()) { if (phoneOf(jid).slice(-10) === last10) { found = jid; break } }
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 25))
-  try {
-    let numberId = null
-    for (const c of candidates(phone)) {
-      numberId = await client.getNumberId(c)
-      if (numberId) break
-    }
-    if (!numberId) return res.json({ ok: true, phone, messages: [] })
-    const chat = await client.getChatById(numberId._serialized)
-    const msgs = await chat.fetchMessages({ limit })
-    res.json({
-      ok: true,
-      phone,
-      name: chat.name || null,
-      messages: msgs.map(m => ({
-        fromMe: !!m.fromMe,
-        ts: m.timestamp || null,
-        type: m.type,
-        body: (m.body || '').slice(0, 400),
-      })),
-    })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
+  const msgs = (found ? msgStore.get(found) : []).slice(-limit).map(m => ({ fromMe: m.fromMe, ts: m.ts, type: m.type, body: (m.body || '').slice(0, 400) }))
+  res.json({ ok: true, phone, name: (found && chatStore.get(found) && chatStore.get(found).name) || null, messages: msgs })
 })
 
-// POST /relink — borra la sesión guardada y reinicia para forzar QR nuevo.
-// (destroy() antes del rm evita que el cliente vuelva a re-guardar la sesión.)
+// Borra la sesión y reinicia para generar un QR nuevo.
 app.post('/relink', async (req, res) => {
   if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
-  res.json({ ok: true, msg: 'relinking — espera ~30s y abre / para escanear el QR' })
+  res.json({ ok: true, msg: 'relinking — espera ~20s y abre / para escanear el QR' })
   setTimeout(async () => {
-    // No bloquear si destroy() se cuelga (pasa si el store está roto).
-    try { await Promise.race([client.destroy(), new Promise(r => setTimeout(r, 3000))]) } catch { /* ignore */ }
-    // './session' es el mountpoint del volumen: borrar su CONTENIDO, no el dir.
-    try {
-      for (const e of fs.readdirSync('./session')) {
-        fs.rmSync(path.join('./session', e), { recursive: true, force: true })
-      }
-    } catch { /* ignore */ }
-    process.exit(0) // Railway reinicia el contenedor → arranca sin sesión → QR
+    try { if (sock) await Promise.race([sock.logout().catch(() => {}), new Promise(r => setTimeout(r, 3000))]) } catch { /* ignore */ }
+    try { for (const e of fs.readdirSync('./session')) fs.rmSync(path.join('./session', e), { recursive: true, force: true }) } catch { /* ignore */ }
+    process.exit(0)
   }, 300)
 })
 
-app.listen(PORT, () => console.log(`[wa-bridge] escuchando en :${PORT} — abre http://localhost:${PORT} para vincular`))
+app.listen(PORT, () => console.log(`[wa-bridge] (baileys) escuchando en :${PORT}`))

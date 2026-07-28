@@ -1,17 +1,17 @@
 {
   "name": "wa-bridge",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Puente WhatsApp de Fer — expone /send para que el CRM mande la plantilla desde su número (1x1, detonado manualmente)",
+  "description": "Puente WhatsApp de Fer (Baileys) — /send + sync en vivo con el CRM, sin navegador",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "stress": "node stress-test.js"
+    "start": "node server.js"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "6.7.23",
     "express": "^4.19.2",
-    "qrcode": "^1.5.3",
-    "whatsapp-web.js": "^1.34.7"
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.3"
   },
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=20" }
 }
