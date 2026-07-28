@@ -99,10 +99,22 @@ async function reportToCrm(phone, fromMe) {
 
 async function startSock() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
-  // No usamos fetchLatestBaileysVersion (llamada de red que puede colgar el
-  // arranque); Baileys trae una versión por defecto que funciona.
+  // Negociar la versión ACTUAL de WhatsApp (sin esto, WhatsApp rechaza con 428).
+  // Con timeout para no colgar el arranque si la red no responde.
+  let version
+  try {
+    const r = await Promise.race([
+      fetchLatestBaileysVersion(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+    ])
+    version = r && r.version
+    console.log('[wa-bridge] WA version negociada:', JSON.stringify(version))
+  } catch (e) {
+    console.log('[wa-bridge] fetchLatestBaileysVersion falló:', e && e.message)
+  }
   console.log('[wa-bridge] creando socket Baileys...')
   sock = makeWASocket({
+    version,
     auth: state,
     logger: P,
     browser: Browsers.macOS('Chrome'),
