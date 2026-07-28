@@ -99,11 +99,10 @@ async function reportToCrm(phone, fromMe) {
 
 async function startSock() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
-  let version
-  try { ({ version } = await fetchLatestBaileysVersion()) } catch { version = undefined }
-
+  // No usamos fetchLatestBaileysVersion (llamada de red que puede colgar el
+  // arranque); Baileys trae una versión por defecto que funciona.
+  console.log('[wa-bridge] creando socket Baileys...')
   sock = makeWASocket({
-    version,
     auth: state,
     logger: P,
     browser: Browsers.macOS('Chrome'),
@@ -111,12 +110,13 @@ async function startSock() {
     syncFullHistory: true,
     markOnlineOnConnect: false,
   })
+  console.log('[wa-bridge] socket creado, esperando QR / conexión...')
 
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', (u) => {
     const { connection, lastDisconnect, qr } = u
-    if (qr) { lastQr = qr; ready = false }
+    if (qr) { lastQr = qr; ready = false; console.log('[wa-bridge] 📲 QR generado') }
     if (connection === 'open') {
       ready = true; lastQr = null
       meNumber = phoneOf(sock.user && sock.user.id)
