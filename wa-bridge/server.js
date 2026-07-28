@@ -40,6 +40,8 @@ let meNumber = null
 // Store mínimo en memoria para el backfill (Baileys no trae getChats).
 const chatStore = new Map()   // jid -> { name, ts, lastFromMe }
 const msgStore = new Map()    // jid -> [{ fromMe, ts, type, body }]  (máx 50)
+const labelDefs = new Map()   // labelId -> name  (etiquetas de WhatsApp Business)
+const chatLabels = new Map()  // jid -> Set(labelId)
 
 function only1to1(jid) { return typeof jid === 'string' && jid.endsWith('@s.whatsapp.net') }
 function phoneOf(jid) { return String(jid || '').split('@')[0].split(':')[0] }
@@ -133,6 +135,10 @@ async function startSock() {
       ready = true; lastQr = null
       meNumber = phoneOf(sock.user && sock.user.id)
       console.log('[wa-bridge] ✅ Vinculado como', meNumber)
+      // Forzar sync del app-state para traer etiquetas (labels) + asociaciones.
+      setTimeout(() => {
+        try { sock.resyncAppState(['critical_unblock_low', 'regular_high', 'regular_low', 'regular'], false).catch(() => {}) } catch { /* ignore */ }
+      }, 4000)
     }
     if (connection === 'close') {
       ready = false
@@ -177,6 +183,29 @@ async function startSock() {
     } catch { /* ignore */ }
   })
 
+  // Etiquetas de WhatsApp Business (definiciones)
+  sock.ev.on('labels.edit', (label) => {
+    try {
+      if (!label || label.id == null) return
+      const id = String(label.id)
+      if (label.deleted) labelDefs.delete(id)
+      else labelDefs.set(id, label.name || id)
+    } catch { /* ignore */ }
+  })
+  // Asociación etiqueta ↔ chat
+  sock.ev.on('labels.association', (ev) => {
+    try {
+      const a = (ev && ev.association) || {}
+      const jid = a.chatId
+      if (!jid || !only1to1(jid) || a.labelId == null) return
+      const lid = String(a.labelId)
+      let set = chatLabels.get(jid)
+      if (!set) { set = new Set(); chatLabels.set(jid, set) }
+      if (ev.type === 'remove') set.delete(lid)
+      else set.add(lid)
+    } catch { /* ignore */ }
+  })
+
   // Nombres de contactos/chats para enriquecer el store
   sock.ev.on('contacts.upsert', (cs) => {
     try {
@@ -190,6 +219,31 @@ async function startSock() {
 }
 
 startSock().catch(e => console.error('[wa-bridge] startSock error:', e && e.message))
+
+// ── Cross-check programado 24/7 ─────────────────────────────────────────────
+// Además del sync en vivo (tiempo real), re-sincroniza los leads existentes con
+// los chats de WhatsApp a las 9:00 y 20:00 hora CDMX (UTC-6). Red de seguridad
+// para leads que se crearon en el CRM después de una conversación en WB.
+const CRM_BACKFILL_URL = process.env.CRM_BACKFILL_URL || 'https://crm-alarcon-production.up.railway.app/api/wa/backfill'
+let lastCronKey = ''
+setInterval(async () => {
+  try {
+    if (!ready) return
+    const now = new Date()
+    const hCdmx = (now.getUTCHours() - 6 + 24) % 24 // CDMX = UTC-6 (sin horario de verano)
+    const key = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${hCdmx}`
+    if ((hCdmx === 9 || hCdmx === 20) && key !== lastCronKey) {
+      lastCronKey = key
+      console.log('[wa-bridge] ⏰ cross-check programado', hCdmx + 'h CDMX')
+      const r = await fetch(CRM_BACKFILL_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-bridge-secret': SECRET },
+        body: JSON.stringify({ days: 120, applyExisting: true, createUnknown: false, unknownLimit: 0 }),
+      })
+      console.log('[wa-bridge] cross-check resultado:', (await r.text()).slice(0, 150))
+    }
+  } catch (e) { console.log('[wa-bridge] cross-check error:', e && e.message) }
+}, 60 * 1000)
 
 // ── HTTP API ────────────────────────────────────────────────────────────────
 const app = express()
@@ -246,10 +300,21 @@ app.get('/chats', (req, res) => {
   for (const [jid, v] of chatStore.entries()) {
     if (!only1to1(jid)) continue
     if (v.ts && v.ts < cutoff) continue
-    out.push({ phone: phoneOf(jid), name: v.name || null, ts: v.ts || null, lastFromMe: !!v.lastFromMe })
+    const lids = chatLabels.get(jid)
+    const labels = lids ? [...lids].map(id => labelDefs.get(id)).filter(Boolean) : []
+    out.push({ phone: phoneOf(jid), name: v.name || null, ts: v.ts || null, lastFromMe: !!v.lastFromMe, labels })
   }
   out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
   res.json({ ok: true, count: out.length, chats: out })
+})
+
+// Etiquetas de WhatsApp Business detectadas (definiciones + conteo de chats).
+app.get('/labels', (req, res) => {
+  if (req.headers['x-bridge-secret'] !== SECRET) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  const counts = {}
+  for (const set of chatLabels.values()) for (const lid of set) counts[lid] = (counts[lid] || 0) + 1
+  const labels = [...labelDefs.entries()].map(([id, name]) => ({ id, name, chats: counts[id] || 0 }))
+  res.json({ ok: true, ready, labels, taggedChats: chatLabels.size })
 })
 
 // Transcript corto de un chat desde el store.
