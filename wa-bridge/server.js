@@ -140,7 +140,7 @@ async function startSock() {
     logger: P,
     browser: Browsers.macOS('Chrome'),
     printQRInTerminal: false,
-    syncFullHistory: true,
+    syncFullHistory: false,
     markOnlineOnConnect: false,
   })
   console.log('[wa-bridge] socket creado, esperando QR / conexión...')
