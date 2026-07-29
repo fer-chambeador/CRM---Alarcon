@@ -167,7 +167,7 @@ async function startSock() {
         try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }) } catch { /* ignore */ }
         setTimeout(() => startSock().catch(e => console.error('restart err', e && e.message)), 1500)
       } else {
-        setTimeout(() => startSock().catch(e => console.error('reconnect err', e && e.message)), 60000)
+        setTimeout(() => startSock().catch(e => console.error('reconnect err', e && e.message)), 3000)
       }
     }
   })
