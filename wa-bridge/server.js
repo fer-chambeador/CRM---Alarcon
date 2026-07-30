@@ -155,8 +155,11 @@ async function startSock() {
       meNumber = phoneOf(sock.user && sock.user.id)
       console.log('[wa-bridge] ✅ Vinculado como', meNumber)
       setTimeout(() => {
-        try { sock.resyncAppState(['critical_unblock_low', 'regular_high', 'regular_low', 'regular'], false).catch(() => {}) } catch { /* ignore */ }
+        try { sock.resyncAppState(['critical_unblock_low', 'regular_high', 'regular_low', 'regular'], true).catch(() => {}) } catch { /* ignore */ }
       }, 4000)
+      // Empuje inicial de TODAS las etiquetas al CRM (no esperar al ciclo de 5 min).
+      setTimeout(() => { try { for (const jid of chatLabels.keys()) reportLabelsToCrm(jid) } catch { /* ignore */ } }, 25000)
+      setTimeout(() => { try { for (const jid of chatLabels.keys()) reportLabelsToCrm(jid) } catch { /* ignore */ } }, 60000)
     }
     if (connection === 'close') {
       ready = false
