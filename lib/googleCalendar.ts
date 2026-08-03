@@ -1,4 +1,4 @@
-import { createServiceClient } from './supabase'
+import { createServiceClient, fetchAllRows } from './supabase'
 import type { Lead } from './supabase'
 import { getSetting, setSetting } from './systemSettings'
 
@@ -606,16 +606,35 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
     details: [],
   }
 
-  // Pre-fetch todos los leads para matching por email Y por teléfono (last-10)
-  const { data: allLeads } = await supabase
-    .from('leads').select('id, email, nombre, telefono, status, llamada_at, google_calendar_event_id')
+  // Pre-fetch todos los leads para matching por email Y por teléfono (last-10).
+  //
+  // BUG FIX (3-ago-2026, reportado por Fer — caso Karla García + 8 eventos
+  // "no_email_found"): este select NO paginaba, y Supabase corta la respuesta
+  // en 1000 filas por default. Con >1000 leads en la tabla, los MÁS RECIENTES
+  // quedaban fuera del índice → ninguna llamada nueva se podía enlazar, y sin
+  // `google_calendar_event_id` la reconciliación tampoco detectaba
+  // cancelaciones. fetchAllRows pagina de a 1000 en paralelo (mismo helper que
+  // ya usa /leads).
+  const allLeads = await fetchAllRows<LeadMatch>((from, to) =>
+    supabase
+      .from('leads')
+      .select('id, email, nombre, telefono, status, llamada_at, google_calendar_event_id')
+      .order('created_at', { ascending: false })
+      .range(from, to),
+  )
   const leadsByEmail = new Map<string, LeadMatch>()
   const leadsByPhoneLast10 = new Map<string, LeadMatch>()
+  // Orden: más reciente primero. Ante duplicados (mismo teléfono/email en
+  // varios leads) gana el MÁS NUEVO — es el que el bot acaba de trabajar.
   for (const l of (allLeads || []) as LeadMatch[]) {
-    if (l.email) leadsByEmail.set(l.email.toLowerCase(), l)
+    if (l.email && !leadsByEmail.has(l.email.toLowerCase())) {
+      leadsByEmail.set(l.email.toLowerCase(), l)
+    }
     if (l.telefono) {
       const last10 = l.telefono.replace(/\D/g, '').slice(-10)
-      if (last10.length === 10) leadsByPhoneLast10.set(last10, l)
+      if (last10.length === 10 && !leadsByPhoneLast10.has(last10)) {
+        leadsByPhoneLast10.set(last10, l)
+      }
     }
   }
 
