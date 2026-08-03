@@ -16,6 +16,15 @@ export type SystemSettings = {
     template_name: string
   }
   slack_alertas_vambe_webhook?: string
+  // Canal de push notifications de Google Calendar (events.watch).
+  // Se renueva automáticamente desde /api/cron/calendar-sync y
+  // /api/gcal/watch cuando faltan <24h para expirar.
+  gcal_watch_channel?: {
+    channel_id: string
+    resource_id: string
+    expiration: string   // ISO date
+    address: string      // webhook URL registrado
+  }
 }
 
 type Supabase = ReturnType<typeof createServiceClient>

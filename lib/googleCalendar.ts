@@ -1,5 +1,6 @@
 import { createServiceClient } from './supabase'
 import type { Lead } from './supabase'
+import { getSetting, setSetting } from './systemSettings'
 
 /**
  * Google Calendar integration — OAuth 2.0 + Calendar API helpers.
@@ -343,6 +344,7 @@ type GCalEvent = {
   id: string
   summary?: string
   description?: string
+  location?: string
   start?: { dateTime?: string; date?: string }
   end?: { dateTime?: string; date?: string }
   attendees?: Array<{ email?: string; responseStatus?: string }>
@@ -422,10 +424,20 @@ function getOwnerEmails(ev: GCalEvent, ownerEmail: string | null): Set<string> {
   return owners
 }
 
+/**
+ * Limpia caracteres invisibles de control bidi (U+200E, U+200F, U+202A..U+202E)
+ * que Google mete en títulos con teléfonos (ej. "Llamada - ‪+52 55 2088 3704‬")
+ * y rompían el matching por regex.
+ */
+function stripBidi(s: string): string {
+  return s.replace(/[‎‏‪-‮⁦-⁩]/g, '')
+}
+
 function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): ClientInfo {
   const owners = getOwnerEmails(ev, ownerEmail)
-  const desc = ev.description || ''
-  const title = ev.summary || ''
+  const desc = stripBidi(ev.description || '')
+  const title = stripBidi(ev.summary || '')
+  const location = stripBidi(ev.location || '')
 
   let nombre: string | null = null
   let email: string | null = null
@@ -461,6 +473,11 @@ function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): Clien
         //  3c. "Llamada - Nombre 525543814663" → texto entre "Llamada -" y un teléfono
         const m3 = title.match(/Llamada\s*[-—]\s*([^\d+]+?)(?:\s+\+?\d|$)/i)
         if (m3) nombre = m3[1].trim()
+        else {
+          //  3d. "Llamada: Jorge" / "Demo: Nombre" (booking manual de Fer)
+          const m4 = title.match(/(?:llamada|demo)\s*:\s*([^\d+]+?)(?:\s+\+?\d|$)/i)
+          if (m4) nombre = m4[1].trim()
+        }
       }
     }
   }
@@ -487,6 +504,13 @@ function extractClientFromEvent(ev: GCalEvent, ownerEmail: string | null): Clien
   // 6. Teléfono fallback desde description completa
   if (!telefono) {
     const m = desc.match(PHONE_RE)
+    if (m) telefono = m[0]
+  }
+
+  // 7. Teléfono fallback desde location — el booking page "Llamada - Vendedor"
+  //    guarda el teléfono del cliente en el campo Ubicación del evento.
+  if (!telefono && location) {
+    const m = location.match(PHONE_RE)
     if (m) telefono = m[0]
   }
 
@@ -868,4 +892,185 @@ export async function dedupeFutureCallEventsForLead(
   }
 
   return { keptEventId: winner.id, deleted, totalFound: events.length }
+}
+
+// ─── Push notifications (events.watch) — sync GCal → CRM en tiempo real ──
+//
+// 20-jul-2026 (Fer): "que todas las llamadas que se agenden en mi calendario
+// estén actualizadas y marcadas en el CRM".
+//
+// Flujo:
+//   1. `ensureWatchChannel` registra un canal events.watch apuntando a
+//      /api/gcal/webhook. Google manda un POST ahí cada vez que CUALQUIER
+//      evento del calendario cambia (creado/movido/cancelado).
+//   2. El webhook corre importEventsToLeads + reconcileCancelledCalls →
+//      el CRM refleja el calendario segundos después del cambio.
+//   3. Los canales expiran (TTL máx 7 días para events.watch), así que
+//      el cron de calendar-sync llama ensureWatchChannel en cada corrida
+//      y renueva cuando faltan <24h. El cron mismo sigue siendo fallback
+//      por si Google deja de notificar.
+//
+// REQUISITO de Google: el dominio del webhook debe estar verificado en el
+// Cloud project (Search Console → verificación por meta tag; ver
+// GOOGLE_SITE_VERIFICATION en app/layout.tsx).
+
+const WATCH_TTL_SECONDS = 7 * 24 * 3600        // 7 días (máximo para events.watch)
+const WATCH_RENEW_BEFORE_MS = 24 * 3600_000    // renovar si expira en <24h
+
+export function gcalWebhookToken(): string {
+  return process.env.GCAL_WEBHOOK_TOKEN
+    || process.env.CRON_SECRET
+    || process.env.DAPTA_POST_CALL_SECRET
+    || ''
+}
+
+export function appBaseUrl(): string {
+  return (process.env.APP_BASE_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+    || 'https://crm-alarcon-production.up.railway.app').replace(/\/$/, '')
+}
+
+async function startWatchChannel(supabase: Supabase, address: string): Promise<{
+  channel_id: string; resource_id: string; expiration: string
+}> {
+  const channelId = `crm-gcal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const body = {
+    id: channelId,
+    type: 'web_hook',
+    address,
+    token: gcalWebhookToken(),
+    params: { ttl: String(WATCH_TTL_SECONDS) },
+  }
+  const result = await calendarFetch(supabase, 'POST', '/calendars/{calendarId}/events/watch', body) as {
+    resourceId?: string; expiration?: string
+  }
+  if (!result?.resourceId) throw new Error('events.watch no devolvió resourceId')
+  return {
+    channel_id: channelId,
+    resource_id: result.resourceId,
+    // expiration llega como epoch-millis string
+    expiration: new Date(Number(result.expiration || Date.now() + WATCH_TTL_SECONDS * 1000)).toISOString(),
+  }
+}
+
+async function stopWatchChannel(supabase: Supabase, channelId: string, resourceId: string): Promise<void> {
+  const auth = await getValidAccessToken(supabase)
+  if (!auth) return
+  // /channels/stop vive fuera de /calendars — no usa calendarFetch
+  await fetch(`${CALENDAR_API}/channels/stop`, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${auth.accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ id: channelId, resourceId }),
+  }).catch(() => { /* best effort — el canal expira solo */ })
+}
+
+/**
+ * Garantiza que exista un canal de push activo y no por expirar.
+ * Idempotente — seguro de llamar en cada corrida del cron.
+ */
+export async function ensureWatchChannel(supabase: Supabase, force = false): Promise<{
+  action: 'kept' | 'created' | 'renewed' | 'skipped'
+  channel?: { channel_id: string; expiration: string }
+  error?: string
+}> {
+  try {
+    const conn = await isConnected(supabase)
+    if (!conn.connected) return { action: 'skipped', error: 'google-calendar-not-connected' }
+    if (!gcalWebhookToken()) return { action: 'skipped', error: 'sin GCAL_WEBHOOK_TOKEN/CRON_SECRET' }
+
+    const address = `${appBaseUrl()}/api/gcal/webhook`
+    const existing = await getSetting(supabase, 'gcal_watch_channel')
+
+    const expiresSoon = existing
+      ? new Date(existing.expiration).getTime() - Date.now() < WATCH_RENEW_BEFORE_MS
+      : true
+    const addressChanged = existing ? existing.address !== address : true
+
+    if (existing && !expiresSoon && !addressChanged && !force) {
+      return { action: 'kept', channel: { channel_id: existing.channel_id, expiration: existing.expiration } }
+    }
+
+    // Parar el canal viejo (best effort) y crear uno nuevo
+    if (existing) await stopWatchChannel(supabase, existing.channel_id, existing.resource_id)
+    const fresh = await startWatchChannel(supabase, address)
+    await setSetting(supabase, 'gcal_watch_channel', { ...fresh, address })
+    return {
+      action: existing ? 'renewed' : 'created',
+      channel: { channel_id: fresh.channel_id, expiration: fresh.expiration },
+    }
+  } catch (e) {
+    return { action: 'skipped', error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─── Reconciliación de cancelados: GCal → CRM ────────────────────────────
+//
+// El import solo AVANZA leads cuando aparece un evento. Esta función cubre
+// la dirección inversa: si la llamada FUTURA de un lead se canceló o borró
+// en el calendario, el lead no puede quedarse en 'llamada_agendada' colgado.
+// Regla: revertir a 'contactado' + limpiar llamada_at/event_id + actividad.
+//
+// Solo toca llamadas FUTURAS — si el evento ya pasó, el resultado lo marca
+// Fer manualmente (propuesta enviada / no show), no nosotros.
+
+export type ReconcileResult = {
+  checked: number
+  reverted: Array<{ lead_id: string; nombre: string | null; event_id: string; reason: 'cancelled' | 'missing' }>
+  errors: number
+}
+
+async function getEventStatus(supabase: Supabase, eventId: string): Promise<'active' | 'cancelled' | 'missing'> {
+  const auth = await getValidAccessToken(supabase)
+  if (!auth) throw new Error('Google Calendar no conectado')
+  const url = `${CALENDAR_API}/calendars/${encodeURIComponent(auth.calendarId)}/events/${encodeURIComponent(eventId)}`
+  const res = await fetch(url, { headers: { authorization: `Bearer ${auth.accessToken}` } })
+  if (res.status === 404 || res.status === 410) return 'missing'
+  if (!res.ok) throw new Error(`Calendar API ${res.status}`)
+  const ev = await res.json() as { status?: string }
+  return ev.status === 'cancelled' ? 'cancelled' : 'active'
+}
+
+export async function reconcileCancelledCalls(supabase: Supabase, maxLeads = 25): Promise<ReconcileResult> {
+  const result: ReconcileResult = { checked: 0, reverted: [], errors: 0 }
+
+  const { data: leads } = await supabase
+    .from('leads')
+    .select('id, nombre, status, llamada_at, google_calendar_event_id')
+    .eq('status', 'llamada_agendada')
+    .gt('llamada_at', new Date().toISOString())
+    .not('google_calendar_event_id', 'is', null)
+    .limit(maxLeads)
+
+  for (const lead of (leads || []) as Array<{ id: string; nombre: string | null; llamada_at: string; google_calendar_event_id: string }>) {
+    result.checked += 1
+    try {
+      const status = await getEventStatus(supabase, lead.google_calendar_event_id)
+      if (status === 'active') continue
+
+      await supabase.from('leads').update({
+        status: 'contactado',
+        status_changed_at: new Date().toISOString(),
+        llamada_at: null,
+        google_calendar_event_id: null,
+      }).eq('id', lead.id)
+
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'field_change',
+        descripcion: `Llamada del ${new Date(lead.llamada_at).toLocaleString('es-MX')} ${status === 'cancelled' ? 'CANCELADA' : 'BORRADA'} en Google Calendar → status regresa a Contactado (re-contactar al lead)`,
+        metadata: { source: 'calendar_reconcile', event_id: lead.google_calendar_event_id, reason: status },
+      })
+      result.reverted.push({
+        lead_id: lead.id, nombre: lead.nombre,
+        event_id: lead.google_calendar_event_id, reason: status,
+      })
+    } catch (e) {
+      result.errors += 1
+      console.error(`[reconcileCancelledCalls] lead ${lead.id}:`, e)
+    }
+  }
+  return result
 }
