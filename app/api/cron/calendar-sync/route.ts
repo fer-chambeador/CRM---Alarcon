@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { importEventsToLeads, isConnected } from '@/lib/googleCalendar'
+import { importEventsToLeads, isConnected, reconcileCancelledCalls, ensureWatchChannel } from '@/lib/googleCalendar'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -48,20 +48,32 @@ export async function GET(req: NextRequest) {
   try {
     const result = await importEventsToLeads(supabase)
 
+    // 20-jul-2026: reconciliación inversa — llamadas futuras canceladas o
+    // borradas en GCal revierten el lead a 'contactado' (no dejar colgados).
+    const reconciled = await reconcileCancelledCalls(supabase)
+
+    // 20-jul-2026: mantener vivo el canal de push (tiempo real). El canal
+    // expira cada 7 días; acá se renueva solo cuando faltan <24h.
+    const watch = await ensureWatchChannel(supabase)
+
     // Log de la corrida en lead_actividad — pero solo si hubo trabajo real.
     // No queremos spam en la timeline cada 10 min con corridas vacías.
-    if (result.leads_updated > 0 || result.leads_created > 0) {
+    if (result.leads_updated > 0 || result.leads_created > 0 || reconciled.reverted.length > 0) {
       console.log('[calendar-sync] result', {
         scanned: result.events_scanned,
         matched: result.leads_matched,
         updated: result.leads_updated,
         created: result.leads_created,
+        reverted: reconciled.reverted.length,
+        watch: watch.action,
       })
     }
     return NextResponse.json({
       ok: true,
       timestamp: new Date().toISOString(),
       ...result,
+      reconcile: { checked: reconciled.checked, reverted: reconciled.reverted },
+      watch,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
