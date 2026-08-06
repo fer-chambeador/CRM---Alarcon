@@ -4,6 +4,7 @@ import type { Lead } from '@/lib/supabase'
 import { parseFormMessage, getMessages, type VambeWebhookEvent, type FormFields } from '@/lib/vambe'
 import { extractCompanyFromEmail, normalizePuesto, normalizeVacante, buildNotasFromForm } from '@/lib/vambeNormalize'
 import { normalizeMexicanPhone } from '@/lib/phoneNormalize'
+import { extractMetaAttribution, type MetaAttribution } from '@/lib/metaCapi'
 import { alertAtencionHumana, alertVentaCerrada, alertHighValueLead } from '@/lib/slackAlert'
 import { alertAtencionHumanaVambe, alertNuevoMensajeVambe } from '@/lib/slackAlertVambe'
 
@@ -250,6 +251,14 @@ async function handleMessage(supabase: Supabase, type: string, aiContactId: stri
     || (data.payload as Record<string, unknown> | undefined)?.body
     || (data.payload as Record<string, unknown> | undefined)?.text
     || '') as string)
+
+  // Atribución de Meta ads (CTWA): si el payload trae el objeto `referral`
+  // de WhatsApp lo capturamos first-touch. Hoy Vambe NO lo reenvía (feature
+  // request abierto) — extractMetaAttribution devuelve null y esto es no-op,
+  // pero cuando lo agreguen la atribución fluye sin tocar código.
+  if (isInbound) {
+    await captureMetaAttribution(supabase, aiContactId, data)
+  }
 
   // CASO ESPECIAL: mensaje con el patrón del formulario. NO creamos el lead
   // todavía — solo guardamos los datos en vambe_pending_leads. La creación
@@ -722,6 +731,51 @@ function extractContactPhone(data: Record<string, unknown>, isInbound: boolean):
 }
 
 /**
+ * Captura la atribución de Meta ads (referral CTWA) de un mensaje inbound,
+ * first-touch. El referral llega en el PRIMER mensaje del contacto, casi
+ * siempre antes de que el lead exista en el CRM — en ese caso se cachea en
+ * vambe_pending_leads.meta_attribution y promotePendingLead lo incluye al
+ * materializar el lead. Best-effort: nunca rompe el webhook.
+ */
+async function captureMetaAttribution(
+  supabase: Supabase,
+  aiContactId: string | undefined,
+  data: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const attr = extractMetaAttribution(data)
+    if (!attr) return
+
+    const lead = await findLead(supabase, aiContactId, data)
+    if (lead) {
+      if (lead.ctwa_clid) return  // first-touch: no sobrescribir el click original
+      const updates: Record<string, unknown> = {}
+      if (attr.ctwa_clid) updates.ctwa_clid = attr.ctwa_clid
+      if (attr.fb_ad_id && !lead.fb_ad_id) updates.fb_ad_id = attr.fb_ad_id
+      if (attr.fb_source_url && !lead.fb_source_url) updates.fb_source_url = attr.fb_source_url
+      if (Object.keys(updates).length === 0) return
+      await supabase.from('leads').update(updates).eq('id', lead.id)
+      await supabase.from('lead_actividad').insert({
+        lead_id: lead.id,
+        tipo: 'meta_attribution',
+        descripcion: '🎯 Atribución de Meta ads capturada (referral CTWA)',
+        metadata: { source: 'vambe', ...attr },
+      })
+    } else if (aiContactId) {
+      // Lead aún no existe — cachear en pending. El upsert no toca form_data
+      // ni raw_event si la fila ya existe (solo setea las columnas provistas).
+      await supabase.from('vambe_pending_leads').upsert({
+        vambe_contact_id: aiContactId,
+        meta_attribution: attr,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'vambe_contact_id' })
+    }
+  } catch (e) {
+    console.error('[vambe webhook] captureMetaAttribution error', e instanceof Error ? e.message : e)
+  }
+}
+
+/**
  * Guarda los datos del formulario en vambe_pending_leads sin crear lead todavía.
  * El lead se materializa en `leads` cuando la stage avanza a "Interesado".
  */
@@ -752,12 +806,18 @@ async function promotePendingLead(
   // 1) Buscar pending
   const { data: pending } = await supabase
     .from('vambe_pending_leads')
-    .select('form_data, raw_event')
+    .select('form_data, raw_event, meta_attribution')
     .eq('vambe_contact_id', aiContactId)
     .maybeSingle()
 
   const form = (pending?.form_data || null) as FormFields | null
   if (!form) return { lead: null, created: false, form: null }
+
+  // Atribución Meta CTWA: la cacheada por captureMetaAttribution, o como
+  // fallback la que venga pegada al raw_event del propio form.
+  const attribution: MetaAttribution | null =
+    (pending?.meta_attribution as MetaAttribution | null)
+    || (pending?.raw_event ? extractMetaAttribution(pending.raw_event as Record<string, unknown>) : null)
 
   // Defensa extra: si el form quedó sin teléfono (Vambe lo quitó del
   // formulario el 11-jun-2026), intentar extraerlo del evento crudo.
@@ -797,6 +857,9 @@ async function promotePendingLead(
   if (company) fields.empresa = company
   const notas = buildNotasFromForm(form)
   if (notas) fields.notas = notas
+  if (attribution?.ctwa_clid) fields.ctwa_clid = attribution.ctwa_clid
+  if (attribution?.fb_ad_id) fields.fb_ad_id = attribution.fb_ad_id
+  if (attribution?.fb_source_url) fields.fb_source_url = attribution.fb_source_url
 
   // Campos que SIEMPRE se sobreescriben para mantener data limpia.
   // `telefono` también — porque Vambe siempre tiene el actual y el viejo puede ser obsoleto.

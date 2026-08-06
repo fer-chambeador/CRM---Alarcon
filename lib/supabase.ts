@@ -79,6 +79,10 @@ export type Lead = {
   vambe_stage_id: string | null
   tipo_llamada: 'demo' | 'comercial' | null
   etiqueta_wa?: string | null
+  meta_capi_schedule_sent_at?: string | null
+  ctwa_clid?: string | null
+  fb_ad_id?: string | null
+  fb_source_url?: string | null
 }
 
 export type LeadActividad = {
