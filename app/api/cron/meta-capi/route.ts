@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 /**
- * GET /api/cron/meta-capi?secret=<CRON_SECRET>
+ * GET /api/cron/meta-capi?secret=<META_CAPI_CRON_SECRET>
  *
  * Sweep cada 10 min: manda el evento "Schedule" a Meta CAPI por cada lead
  * que llegó a `llamada_agendada` y aún no tiene evento enviado
@@ -23,14 +23,21 @@ export const maxDuration = 60
  * El evento se manda UNA sola vez por lead: la marca sobrevive el rebote
  * cancelación → contactado → re-agendada (no se re-envía).
  *
- * Setup cron en Railway / cron-job.org (igual que calendar-sync):
- *   schedule: *\/10 * * * *
- *   curl -s -H "x-cron-secret: $CRON_SECRET" https://<host>/api/cron/meta-capi
+ * Setup:
+ *   1. Env var META_CAPI_CRON_SECRET en el web service (openssl rand -hex 32).
+ *   2. Scheduler externo (Railway cron service / Cloud Scheduler / cron-job.org):
+ *      schedule: *\/10 * * * *
+ *      curl -fsS -H "x-cron-secret: $META_CAPI_CRON_SECRET" https://<host>/api/cron/meta-capi
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const secret = url.searchParams.get('secret') || req.headers.get('x-cron-secret')
-  const expected = process.env.CRON_SECRET || process.env.DAPTA_POST_CALL_SECRET
+  // Secret DEDICADO de este cron (META_CAPI_CRON_SECRET): independiente del
+  // secret compartido de los otros crons — rotarlo no afecta a nadie más y
+  // viceversa. Fallback a los compartidos por consistencia con el resto.
+  const expected = process.env.META_CAPI_CRON_SECRET
+    || process.env.CRON_SECRET
+    || process.env.DAPTA_POST_CALL_SECRET
   if (!expected || secret !== expected) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
