@@ -18,8 +18,9 @@ export const maxDuration = 60
  * Este cron es el punto de enganche ÚNICO — no hay llamadas inline en los
  * sitios que escriben el status (PATCH UI, webhook Vambe, GCal import,
  * etiquetas WA, MCP, bot...): cualquier camino presente o futuro queda
- * cubierto por el barrido. Ventana de 7 días = límite de event_time de Meta;
- * también evita disparar leads históricos en el primer deploy.
+ * cubierto por el barrido. Ventana de 3 días (decisión de negocio: solo
+ * conversiones frescas; el límite duro de Meta es 7) — también evita
+ * disparar leads históricos en el primer deploy.
  *
  * El evento se manda UNA sola vez por lead: la marca sobrevive el rebote
  * cancelación → contactado → re-agendada (no se re-envía).
@@ -52,16 +53,16 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = createServiceClient()
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
+  const windowStart = new Date(Date.now() - 3 * 24 * 3600_000).toISOString()
 
-  // coalesce(status_changed_at, created_at) >= hace 7 días, expresado en
+  // coalesce(status_changed_at, created_at) >= hace 3 días, expresado en
   // sintaxis .or() de PostgREST (no soporta coalesce en filtros).
   const { data, error } = await supabase
     .from('leads')
     .select('*')
     .eq('status', 'llamada_agendada')
     .is('meta_capi_schedule_sent_at', null)
-    .or(`status_changed_at.gte.${sevenDaysAgo},and(status_changed_at.is.null,created_at.gte.${sevenDaysAgo})`)
+    .or(`status_changed_at.gte.${windowStart},and(status_changed_at.is.null,created_at.gte.${windowStart})`)
     .order('status_changed_at', { ascending: true, nullsFirst: true })
     .limit(50)
 
