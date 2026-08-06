@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
 import { isMetaCapiConfigured, sendScheduleEvent } from '@/lib/metaCapi'
+import { alertMetaCapiEvent } from '@/lib/slackAlertMetaCapi'
 import { captureMessage } from '@/lib/errorTracking'
 
 export const dynamic = 'force-dynamic'
@@ -95,6 +96,14 @@ export async function GET(req: NextRequest) {
           fbtrace_id: result.fbtrace_id,
           events_received: result.events_received,
         },
+      })
+      await alertMetaCapiEvent({
+        lead,
+        eventName: 'Schedule',
+        eventId: `schedule-${lead.id}`,
+        datasetId: process.env.META_CAPI_PIXEL_ID || '',
+        customData: result.custom_data,
+        eventsReceived: result.events_received,
       })
     } else if (result.unmatchable) {
       // Sin email/teléfono utilizables — nunca va a matchear. Se marca como

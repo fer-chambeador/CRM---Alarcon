@@ -27,19 +27,20 @@ export function isMetaCapiConfigured(): boolean {
 }
 
 export type MetaCapiResult =
-  | { ok: true; events_received: number; fbtrace_id?: string }
+  | { ok: true; events_received: number; fbtrace_id?: string; custom_data: Record<string, unknown> }
   // unmatchable = el lead no tiene email ni teléfono utilizables — reintentar
   // nunca va a servir; el cron lo marca como enviado con actividad de skip.
   | { ok: false; error: string; unmatchable?: boolean }
 
-// Emails inventados por el CRM para leads sin email real. Mandarlos a Meta
-// contaminaría el matching (dominios que no existen en ninguna cuenta real).
-const PLACEHOLDER_EMAIL_DOMAINS = ['@clientes.chambas.ai', '@whatsapp.chambas.ai']
-
+// Emails inventados para leads sin email real: el CRM genera placeholders
+// (@clientes.chambas.ai, @whatsapp.chambas.ai) y a veces se capturan a mano
+// variantes tipo @chambasia. Mandarlos a Meta contaminaría el matching.
+// Regla: cualquier dominio que contenga "chambas" es interno/fake — los
+// leads reales son empresas externas, nunca tienen email de chambas.
 function isPlaceholderEmail(email: string | null | undefined): boolean {
   if (!email) return true
-  const e = email.trim().toLowerCase()
-  return PLACEHOLDER_EMAIL_DOMAINS.some(d => e.endsWith(d))
+  const domain = email.trim().toLowerCase().split('@')[1] || ''
+  return !domain || domain.includes('chambas')
 }
 
 function sha256(value: string): string {
@@ -102,6 +103,14 @@ export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
     const changedSec = Math.floor(new Date(lead.status_changed_at || lead.created_at).getTime() / 1000)
     const eventTime = Math.min(nowSec, Math.max(changedSec, nowSec - 7 * 24 * 3600 + 3600))
 
+    // Sin value/currency a propósito: el `monto` del lead es un default del
+    // CRM (1160), no un valor real de compra — mandaría señal falsa a Meta.
+    const customData: Record<string, unknown> = {
+      canal_adquisicion: lead.canal_adquisicion || 'desconocido',
+      lead_source: lead.vambe_contact_id ? 'vambe' : lead.google_calendar_event_id ? 'calendar' : 'manual',
+      ...(lead.fb_ad_id ? { fb_ad_id: lead.fb_ad_id } : {}),
+    }
+
     // business_messaging exige ctwa_clid; sin él (leads manuales, o mientras
     // Vambe no reenvíe el referral) el evento sale como system_generated.
     const event: Record<string, unknown> = {
@@ -110,13 +119,7 @@ export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
       event_id: `schedule-${lead.id}`,
       action_source: lead.ctwa_clid ? 'business_messaging' : 'system_generated',
       user_data: userData,
-      custom_data: {
-        currency: 'MXN',
-        value: lead.monto || 0,
-        canal_adquisicion: lead.canal_adquisicion || 'desconocido',
-        lead_source: lead.vambe_contact_id ? 'vambe' : lead.google_calendar_event_id ? 'calendar' : 'manual',
-        ...(lead.fb_ad_id ? { fb_ad_id: lead.fb_ad_id } : {}),
-      },
+      custom_data: customData,
     }
     if (lead.ctwa_clid) event.messaging_channel = 'whatsapp'
 
@@ -136,7 +139,7 @@ export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
     if (!res.ok) {
       return { ok: false, error: json?.error?.message || `Meta CAPI HTTP ${res.status}` }
     }
-    return { ok: true, events_received: json?.events_received ?? 0, fbtrace_id: json?.fbtrace_id }
+    return { ok: true, events_received: json?.events_received ?? 0, fbtrace_id: json?.fbtrace_id, custom_data: customData }
   } catch (e) {
     captureException(e, { context: 'meta-capi sendScheduleEvent', lead_id: lead.id })
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
