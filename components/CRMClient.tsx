@@ -281,6 +281,7 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
     monto: lead.monto ?? DEFAULT_MONTO,
     estado: lead.estado || '',
     presupuesto: lead.presupuesto || '',
+    vendedor: lead.vendedor || 'Sin asignar',
     vacante: lead.vacante || '',
     llamada_at: lead.llamada_at ? lead.llamada_at.slice(0, 16) : '',
   })
@@ -443,6 +444,13 @@ function LeadModal({ lead, onClose, onSave, onDelete }: {
                 {PRESUPUESTO_VALUES.map(p => <option key={p} value={p}>{PRESUPUESTO_LABELS[p]}</option>)}
               </select>
             </label>
+            <label><span>Vendedor</span>
+              <select value={form.vendedor} onChange={e => setForm(f => ({ ...f, vendedor: e.target.value }))}>
+                <option value="Sin asignar">Sin asignar</option>
+                <option value="Fer">Fer</option>
+                <option value="Moises">Moises</option>
+              </select>
+            </label>
             <label><span>Vacante (puesto buscado)</span>
               <input value={form.vacante} onChange={e => setForm(f => ({ ...f, vacante: e.target.value }))}
                 placeholder="Cocinero, Seguridad, Reclutador, etc." />
@@ -590,6 +598,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [filterStatus, setFilterStatus] = useState<Lead['status'] | 'todos'>('todos')
   const [filterAttempts, setFilterAttempts] = useState<number | 'todos'>('todos')
   const [filterCanal, setFilterCanal] = useState<string>('todos')
+  const [filterVendedor, setFilterVendedor] = useState<string>('todos')
   const [dateRange, setDateRange] = useState<DateRange>('mes')
   // Custom date range — solo se usan cuando dateRange === 'custom'.
   // Default: el rango del mes actual (inicio mes → hoy) para que abra con algo útil.
@@ -737,10 +746,11 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       const matchCanal = filterCanal === 'todos' || lead.canal_adquisicion === filterCanal
       const matchAttempts = filterStatus !== 'contactado' || filterAttempts === 'todos'
         || (lead.veces_contactado || 0) === filterAttempts
-      const matchSearch = !q || leadMatchesQuery(q, lead)
-      return matchStatus && matchCanal && matchAttempts && matchSearch
+      const matchVendedor = filterVendedor === 'todos' || (lead.vendedor || 'Sin asignar') === filterVendedor
+            const matchSearch = !q || leadMatchesQuery(q, lead)
+      return matchStatus && matchCanal && matchAttempts && matchVendedor && matchSearch
     })
-  }, [dateScoped, search, filterStatus, filterAttempts, filterCanal])
+  }, [dateScoped, search, filterStatus, filterAttempts, filterCanal, filterVendedor])
 
   const sorted = useMemo(() => {
     if (!sort) return filtered
@@ -890,7 +900,13 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
             <input ref={searchInputRef} className={styles.searchInput} type="text"
               placeholder="Buscar (atajo: / )" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <select className={styles.dateSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
+          <select className={styles.dateSelect} value={filterVendedor} onChange={e => setFilterVendedor(e.target.value)}>
+                <option value="todos">Vendedor: todos</option>
+                <option value="Sin asignar">Sin asignar</option>
+                <option value="Fer">Fer</option>
+                <option value="Moises">Moises</option>
+              </select>
+              <select className={styles.dateSelect} value={dateRange} onChange={e => setDateRange(e.target.value as DateRange)}>
             {(Object.keys(DATE_LABELS) as DateRange[]).map(r => (
               <option key={r} value={r}>{DATE_LABELS[r]}</option>
             ))}
@@ -985,6 +1001,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                 <SortableHeader label="Status" sortKey="status" current={sort} onSort={onSort} />
                 <SortableHeader label="Monto" sortKey="monto" current={sort} onSort={onSort} />
                 <SortableHeader label="Presupuesto" sortKey="presupuesto" current={sort} onSort={onSort} />
+              <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 700, color: 'var(--muted)', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '.04em' }}>Vendedor</th>
                 <SortableHeader label="Contacto" sortKey="contacto" current={sort} onSort={onSort} />
                 <SortableHeader label="Fecha" sortKey="fecha" current={sort} onSort={onSort} />
                 <th style={{ width: 180 }}>Acciones</th>
@@ -1069,6 +1086,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                           </span>
                         : <span className={styles.empty}>No registrado</span>}
                     </td>
+                    <td style={{ padding: '10px 12px', fontSize: 13 }}>{lead.vendedor || 'Sin asignar'}</td>
                     <td>
                       {(lead.veces_contactado || 0) > 0
                         ? <span className={styles.contactCount} style={{ color: isDescartadoPorIntentos ? 'var(--red)' : 'var(--yellow)' }}>{contactoLabel}</span>
