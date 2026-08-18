@@ -18,8 +18,8 @@ Soy Fernando de ChambasAI, la plataforma de reclutamiento, vi que te registraste
 
 export type WaBridgeResult = { ok: boolean; error?: string; to?: string }
 
-export async function sendViaWaBridge(phone: string, text: string): Promise<WaBridgeResult> {
-  const base = process.env.WA_BRIDGE_URL
+export async function sendViaWaBridge(phone: string, text: string, sender?: string): Promise<WaBridgeResult> {
+  const base = sender === 'moises' ? (process.env.WA_BRIDGE_URL_MOISES || process.env.WA_BRIDGE_URL) : process.env.WA_BRIDGE_URL
   const secret = process.env.WA_BRIDGE_SECRET
   if (!base || !secret) {
     return { ok: false, error: 'WA Bridge no configurado (faltan WA_BRIDGE_URL / WA_BRIDGE_SECRET)' }
