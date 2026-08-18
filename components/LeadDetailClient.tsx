@@ -141,6 +141,7 @@ export default function LeadDetailClient({ leadId }: { leadId: string }) {
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+              <select value={lead.vendedor || 'Sin asignar'} onChange={async (e) => { const v = e.target.value; setLead(prev => prev ? { ...prev, vendedor: v } : prev); fetch('/api/leads/' + leadId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vendedor: v }) }).catch(() => {}) }} style={{ background: 'var(--glass)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 4 }}><option value="Sin asignar">Vendedor: Sin asignar</option><option value="Moises">Vendedor: Moises</option><option value="Fer">Vendedor: Fer</option></select>
             <span style={{
               background: `${statusColor(lead.status)}22`,
               color: statusColor(lead.status),
