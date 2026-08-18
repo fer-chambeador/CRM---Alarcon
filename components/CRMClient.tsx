@@ -612,7 +612,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [popover, setPopover] = useState<{ leadId: string; current: Lead['status']; x: number; y: number } | null>(null)
   // Popup "¿Por dónde lo quieres mandar?" (botón Mensaje) — 8-jul-2026
   const [channelPicker, setChannelPicker] = useState<Lead | null>(null)
-  const [channelSending, setChannelSending] = useState<'vambe' | 'wa' | null>(null)
+  const [channelSending, setChannelSending] = useState<'vambe' | 'wa' | 'wa2' | null>(null)
 
   // Envío por Vambe — mismo flujo de siempre (quick-action 'message').
   const sendChannelVambe = async (lead: Lead) => {
@@ -627,8 +627,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   }
 
   // Envío por WhatsApp directo de Fer (WA Bridge) — misma plantilla, 1×1.
-  const sendChannelWa = async (lead: Lead) => {
-    const res = await fetch(`/api/leads/${lead.id}/wa-direct`, { method: 'POST' })
+  const sendChannelWa = async (lead: Lead, sender: string = 'fer') => {
+    const res = await fetch(`/api/leads/${lead.id}/wa-direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender }) })
     const data = await res.json()
     if (!data.ok) { alert(explainError(data.error, res.status)); return }
     if (data.lead && data.lead.id) handleSave(data.lead as Lead)
@@ -1207,14 +1207,27 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
                   disabled={!!channelSending}
                   onClick={async () => {
                     setChannelSending('wa')
-                    try { await sendChannelWa(channelPicker) } finally { setChannelSending(null); setChannelPicker(null) }
+                    try { await sendChannelWa(channelPicker, 'fer') } finally { setChannelSending(null); setChannelPicker(null) }
                   }}
                   style={{
                     background: 'linear-gradient(135deg, #22d68a, #1ab574)', color: 'white',
                     border: 'none', padding: '12px 16px', borderRadius: 8, fontSize: 14,
                     fontWeight: 700, cursor: 'pointer', opacity: channelSending && channelSending !== 'wa' ? 0.5 : 1,
                   }}>
-                  {channelSending === 'wa' ? 'Enviando desde tu WhatsApp…' : '🟢 2. WhatsApp (desde tu WB, tú das seguimiento)'}
+                  {channelSending === 'wa' ? 'Enviando desde tu WhatsApp…' : '🟢 WhatsApp — enviar como FER'}
+                </button>
+              <button
+                  disabled={!!channelSending}
+                  onClick={async () => {
+                    setChannelSending('wa2')
+                    try { await sendChannelWa(channelPicker, 'moises') } finally { setChannelSending(null); setChannelPicker(null) }
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #22d68a, #1ab574)', color: 'white',
+                    border: 'none', padding: '12px 16px', borderRadius: 8, fontSize: 14,
+                    fontWeight: 700, cursor: 'pointer', opacity: channelSending && channelSending !== 'wa2' ? 0.5 : 1,
+                  }}>
+                  {channelSending === 'wa2' ? 'Enviando desde WhatsApp de Moises…' : '🔵 WhatsApp — enviar como MOISES'}
                 </button>
                 <button
                   disabled={!!channelSending}
