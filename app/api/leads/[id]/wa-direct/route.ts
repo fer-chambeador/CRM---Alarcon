@@ -76,7 +76,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     ultimo_contacto: new Date().toISOString(),
     veces_contactado: (lead.veces_contactado || 0) + 1,
   }
-  if (lead.status === 'nuevo') {
+  if (sender === 'fer' || sender === 'moises') updates.vendedor = sender === 'moises' ? 'Moises' : 'Fer'
+    if (lead.status === 'nuevo') {
     updates.status = 'contactado'
     updates.status_changed_at = new Date().toISOString()
   }
