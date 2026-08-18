@@ -11,10 +11,10 @@
 
 // Mismo copy que la plantilla Vambe `outbound_primer_mensaje_sales`.
 // ⚠️ Si esa plantilla cambia en Vambe, actualizar aquí también.
-export const waDirectTemplate = (empresa: string) =>
+export const waDirectTemplate = (empresa: string, sender: string = 'fer') =>
   `Lic, mucho gusto.
 
-Soy Fernando de ChambasAI, la plataforma de reclutamiento, vi que te registraste con ${empresa}\n\n¿Estás libre hoy o mañana para una llamada? Así te explico a detalle cómo reclutamos.`
+Soy ${sender === 'moises' ? 'Moisés' : 'Fernando'} de ChambasAI, la plataforma de reclutamiento, vi que te registraste con ${empresa}\n\n¿Estás libre hoy o mañana para una llamada? Así te explico a detalle cómo reclutamos.`
 
 export type WaBridgeResult = { ok: boolean; error?: string; to?: string }
 
