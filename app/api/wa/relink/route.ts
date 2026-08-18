@@ -5,9 +5,10 @@ export const dynamic = 'force-dynamic'
 // GET /api/wa/relink — proxy server-side: fuerza al bridge a borrar su sesión
 // y reiniciar para generar un QR nuevo. Usa el secret del servidor (no expuesto).
 // Endpoint temporal de recuperación; quitar tras re-vincular.
-export async function GET() {
+export async function GET(req: Request) {
+  const which = new URL(req.url).searchParams.get('which')
   const secret = process.env.WA_BRIDGE_SECRET || ''
-  let u = process.env.WA_BRIDGE_URL || ''
+  let u = (which === 'moises' ? process.env.WA_BRIDGE_URL_MOISES : process.env.WA_BRIDGE_URL) || ''
   if (u && !/^https?:\/\//.test(u)) u = 'https://' + u
   u = u.replace(/\/+$/, '')
   if (!u || !secret) return NextResponse.json({ ok: false, error: 'WA_BRIDGE no configurado' })
