@@ -5,7 +5,7 @@ import { syncLeadToCalendar } from '@/lib/googleCalendar'
 import { handleStatusChangeForFollowUp } from '@/lib/followUp'
 import type { Lead } from '@/lib/supabase'
 
-const ALLOWED = ['nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at','tipo_llamada','created_at'] as const
+const ALLOWED = ['vendedor','nombre','empresa','telefono','puesto','canal_adquisicion','status','notas','plan','veces_contactado','monto','estado','presupuesto','vacante','llamada_at','tipo_llamada','created_at'] as const
 
 /** Labels human-readable para los registros de actividad. */
 const FIELD_LABELS: Record<string, string> = {
@@ -25,6 +25,7 @@ const FIELD_LABELS: Record<string, string> = {
   llamada_at: 'Llamada agendada',
   tipo_llamada: 'Tipo de llamada',
   ultimo_contacto: 'Último contacto',
+  vendedor: 'Vendedor',
 }
 
 /** Formatea un valor para mostrarlo en el log. */
