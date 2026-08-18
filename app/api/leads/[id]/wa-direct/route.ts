@@ -17,8 +17,9 @@ export const maxDuration = 30
  *   - anti doble-click con lock optimistic en lead_actividad (2 min)
  *   - status nuevo→contactado + ultimo_contacto + veces_contactado
  */
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createServiceClient()
+  const { sender } = await req.json().catch(() => ({} as any))
   const { data: leadRow, error } = await supabase
     .from('leads').select('*').eq('id', params.id).maybeSingle()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -54,7 +55,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
   const empresa = lead.empresa || lead.nombre || 'tu empresa'
   const text = waDirectTemplate(empresa)
-  const result = await sendViaWaBridge(lead.telefono, text)
+  const result = await sendViaWaBridge(lead.telefono, text, sender)
 
   if (!result.ok) {
     await supabase.from('lead_actividad').update({
