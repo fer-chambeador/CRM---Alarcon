@@ -54,7 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const lockId = (lockRow as { id: string }).id
 
   const empresa = lead.empresa || lead.nombre || 'tu empresa'
-  const text = waDirectTemplate(empresa)
+  const text = waDirectTemplate(empresa, sender)
   const result = await sendViaWaBridge(lead.telefono, text, sender)
 
   if (!result.ok) {
