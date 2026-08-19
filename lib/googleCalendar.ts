@@ -236,11 +236,11 @@ export async function syncLeadToCalendar(
   lead: Lead,
   newLlamadaAt: string | null,
   oldEventId: string | null,
-): Promise<{
-  // ⛔ SYNC AUTOMÁTICO CRM→GOOGLE CALENDAR DESACTIVADO a petición de Fer (19/08/2026).
+): Promise<{ ok: boolean; event_id: string | null; error?: string }> {
+  // SYNC AUTOMATICO CRM->GOOGLE CALENDAR DESACTIVADO a peticion de Fer (19/08/2026).
   // El CRM ya NO crea/actualiza eventos en el calendario. Para reactivar, elimina este return.
   return null as any
- ok: boolean; event_id: string | null; error?: string }> {
+
   try {
     if (!newLlamadaAt) {
       if (oldEventId) {
@@ -291,7 +291,7 @@ export async function createFollowUpReminder(
   lead: FollowUpLead & { email: string },
   daysAhead = 3,
 ): Promise<string> {
-  // ⛔ SYNC AUTOMÁTICO CRM→GOOGLE CALENDAR DESACTIVADO a petición de Fer (19/08/2026).
+  // SYNC AUTOMATICO CRM->GOOGLE CALENDAR DESACTIVADO a peticion de Fer (19/08/2026).
   // El CRM ya NO crea/actualiza eventos en el calendario. Para reactivar, elimina este return.
   return null as any
 
