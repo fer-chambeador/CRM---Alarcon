@@ -239,7 +239,7 @@ export async function syncLeadToCalendar(
 ): Promise<{ ok: boolean; event_id: string | null; error?: string }> {
   // SYNC AUTOMATICO CRM->GOOGLE CALENDAR DESACTIVADO a peticion de Fer (19/08/2026).
   // El CRM ya NO crea/actualiza eventos en el calendario. Para reactivar, elimina este return.
-  return null as any
+  if (!process.env.ENABLE_GCAL_SYNC) return null as any
 
   try {
     if (!newLlamadaAt) {
@@ -293,7 +293,7 @@ export async function createFollowUpReminder(
 ): Promise<string> {
   // SYNC AUTOMATICO CRM->GOOGLE CALENDAR DESACTIVADO a peticion de Fer (19/08/2026).
   // El CRM ya NO crea/actualiza eventos en el calendario. Para reactivar, elimina este return.
-  return null as any
+  if (!process.env.ENABLE_GCAL_SYNC) return null as any
 
   const due = new Date(Date.now() + daysAhead * 86400_000)
   const startDate = ymd(due)
