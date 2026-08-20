@@ -44,6 +44,19 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createServiceClient()
+
+  // Rellenar la variable {{empresa}} del template; sin esto Vambe manda
+  // '{{1}}' literal al lead (bug 20/08/2026, envios de las 10:10).
+  const empresaById = new Map()
+  try {
+    const ids = leads.map((l) => l.id).filter(Boolean)
+    if (ids.length) {
+      const { data: rows } = await supabase.from('leads').select('id, empresa, nombre').in('id', ids)
+      for (const r of (rows || []) as { id: string; empresa: string | null; nombre: string | null }[]) {
+        empresaById.set(r.id, (r.empresa || r.nombre || '').trim())
+      }
+    }
+  } catch (e) { console.warn('fetch empresas para template vars fallo', e) }
   const results: { id: string; ok: boolean; messageId?: string; error?: string }[] = []
 
   for (const l of leads) {
@@ -56,6 +69,7 @@ export async function POST(req: NextRequest) {
         phone: l.phone,
         templateId,
         stageId: stageId || undefined,
+        data: { empresa: empresaById.get(l.id) || 'tu negocio' },
       })) as { messageId?: string; contactId?: string }
 
       // Registrar la actividad para no re-mandarle al mismo lead la próxima
