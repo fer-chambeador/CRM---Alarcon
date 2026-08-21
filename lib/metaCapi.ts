@@ -4,30 +4,42 @@ import { normalizeMexicanPhone } from './phoneNormalize'
 import { captureException } from './errorTracking'
 
 /**
- * Meta Conversions API (CAPI) — nutre el Pixel/dataset de Meta con el evento
- * estándar "Schedule" cuando un lead llega a status `llamada_agendada`.
+ * Meta Conversions API (CAPI) — nutre el dataset de Meta con un evento de
+ * conversión cuando un lead llega a status `llamada_agendada`.
+ *
+ * Nombre del evento: "CONVERTED" (default) — DEBE coincidir exactamente con
+ * el "Evento de conversión" configurado en el ad set (campaña con origen de
+ * señal CRM, objetivo "maximizar clientes potenciales calificados"). Si
+ * marketing cambia el evento de la campaña, ajustar META_CAPI_EVENT_NAME
+ * en Railway sin tocar código. (Hasta 2026-08-06 se mandaba "Schedule";
+ * se renombró porque la campaña optimiza con CONVERTED.)
  *
  * El envío NO se hace inline en los sitios que escriben el status (hay 8+):
  * el cron /api/cron/meta-capi barre cada 10 min los leads agendados sin
  * evento enviado (columna leads.meta_capi_schedule_sent_at) y llama
- * sendScheduleEvent(). Un solo punto de enganche, cubre caminos futuros.
+ * sendConversionEvent(). Un solo punto de enganche, cubre caminos futuros.
  *
  * Docs: https://developers.facebook.com/docs/marketing-api/conversions-api
  *
  * Env vars:
  *  - META_CAPI_PIXEL_ID         (dataset/pixel ID, Events Manager)
  *  - META_CAPI_ACCESS_TOKEN     (Events Manager → Configuración → Conversions API → Generate token)
+ *  - META_CAPI_EVENT_NAME       (opcional — default "CONVERTED"; case-sensitive)
  *  - META_CAPI_TEST_EVENT_CODE  (opcional — tab Test Events; quitar en prod)
  */
 
 const GRAPH_URL = 'https://graph.facebook.com/v23.0'
+
+export function metaCapiEventName(): string {
+  return process.env.META_CAPI_EVENT_NAME || 'CONVERTED'
+}
 
 export function isMetaCapiConfigured(): boolean {
   return Boolean(process.env.META_CAPI_PIXEL_ID && process.env.META_CAPI_ACCESS_TOKEN)
 }
 
 export type MetaCapiResult =
-  | { ok: true; events_received: number; fbtrace_id?: string; custom_data: Record<string, unknown> }
+  | { ok: true; events_received: number; fbtrace_id?: string; custom_data: Record<string, unknown>; event_name: string; event_id: string }
   // unmatchable = el lead no tiene email ni teléfono utilizables — reintentar
   // nunca va a servir; el cron lo marca como enviado con actividad de skip.
   | { ok: false; error: string; unmatchable?: boolean }
@@ -78,13 +90,13 @@ function buildUserData(lead: Lead): Record<string, unknown> | null {
 }
 
 /**
- * Manda el evento "Schedule" a Meta CAPI para un lead que llegó a
- * llamada_agendada. Best-effort: nunca lanza. La idempotencia (una vez por
- * lead) vive en el cron vía leads.meta_capi_schedule_sent_at; además el
- * event_id determinístico hace que Meta deduplique reintentos (ventana 48h)
- * y un eventual Pixel del sitio con el mismo id.
+ * Manda el evento de conversión (default "CONVERTED") a Meta CAPI para un
+ * lead que llegó a llamada_agendada. Best-effort: nunca lanza. La
+ * idempotencia (una vez por lead) vive en el cron vía
+ * leads.meta_capi_schedule_sent_at; además el event_id determinístico hace
+ * que Meta deduplique reintentos (ventana 48h por event_name+event_id).
  */
-export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
+export async function sendConversionEvent(lead: Lead): Promise<MetaCapiResult> {
   try {
     const pixelId = process.env.META_CAPI_PIXEL_ID
     const token = process.env.META_CAPI_ACCESS_TOKEN
@@ -113,10 +125,12 @@ export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
 
     // business_messaging exige ctwa_clid; sin él (leads manuales, o mientras
     // Vambe no reenvíe el referral) el evento sale como system_generated.
+    const eventName = metaCapiEventName()
+    const eventId = `${eventName.toLowerCase()}-${lead.id}`
     const event: Record<string, unknown> = {
-      event_name: 'Schedule',
+      event_name: eventName,
       event_time: eventTime,
-      event_id: `schedule-${lead.id}`,
+      event_id: eventId,
       action_source: lead.ctwa_clid ? 'business_messaging' : 'system_generated',
       user_data: userData,
       custom_data: customData,
@@ -139,9 +153,9 @@ export async function sendScheduleEvent(lead: Lead): Promise<MetaCapiResult> {
     if (!res.ok) {
       return { ok: false, error: json?.error?.message || `Meta CAPI HTTP ${res.status}` }
     }
-    return { ok: true, events_received: json?.events_received ?? 0, fbtrace_id: json?.fbtrace_id, custom_data: customData }
+    return { ok: true, events_received: json?.events_received ?? 0, fbtrace_id: json?.fbtrace_id, custom_data: customData, event_name: eventName, event_id: eventId }
   } catch (e) {
-    captureException(e, { context: 'meta-capi sendScheduleEvent', lead_id: lead.id })
+    captureException(e, { context: 'meta-capi sendConversionEvent', lead_id: lead.id })
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }

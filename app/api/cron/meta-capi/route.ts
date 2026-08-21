@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import type { Lead } from '@/lib/supabase'
-import { isMetaCapiConfigured, sendScheduleEvent } from '@/lib/metaCapi'
+import { isMetaCapiConfigured, sendConversionEvent, metaCapiEventName } from '@/lib/metaCapi'
 import { alertMetaCapiEvent } from '@/lib/slackAlertMetaCapi'
 import { captureMessage } from '@/lib/errorTracking'
 
@@ -11,8 +11,9 @@ export const maxDuration = 60
 /**
  * GET /api/cron/meta-capi?secret=<META_CAPI_CRON_SECRET>
  *
- * Sweep cada 10 min: manda el evento "Schedule" a Meta CAPI por cada lead
- * que llegó a `llamada_agendada` y aún no tiene evento enviado
+ * Sweep cada 10 min: manda el evento de conversión (META_CAPI_EVENT_NAME,
+ * default "CONVERTED" — debe coincidir con el evento del ad set) a Meta CAPI
+ * por cada lead que llegó a `llamada_agendada` y aún no tiene evento enviado
  * (meta_capi_schedule_sent_at IS NULL).
  *
  * Este cron es el punto de enganche ÚNICO — no hay llamadas inline en los
@@ -78,21 +79,22 @@ export async function GET(req: NextRequest) {
   const failures: Array<{ lead_id: string; error: string }> = []
 
   for (const lead of leads) {
-    const result = await sendScheduleEvent(lead)
+    const result = await sendConversionEvent(lead)
 
     if (result.ok) {
       sent++
       // Marcar DESPUÉS del envío exitoso. Si dos corridas se solaparan, el
-      // event_id determinístico (schedule-<lead.id>) hace que Meta deduplique.
+      // event_id determinístico hace que Meta deduplique.
       await supabase.from('leads')
         .update({ meta_capi_schedule_sent_at: new Date().toISOString() })
         .eq('id', lead.id)
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'meta_capi_event',
-        descripcion: '📡 Evento Schedule enviado a Meta CAPI',
+        descripcion: `📡 Evento ${result.event_name} enviado a Meta CAPI`,
         metadata: {
-          event_id: `schedule-${lead.id}`,
+          event_id: result.event_id,
+          event_name: result.event_name,
           action_source: lead.ctwa_clid ? 'business_messaging' : 'system_generated',
           fbtrace_id: result.fbtrace_id,
           events_received: result.events_received,
@@ -100,8 +102,8 @@ export async function GET(req: NextRequest) {
       })
       await alertMetaCapiEvent({
         lead,
-        eventName: 'Schedule',
-        eventId: `schedule-${lead.id}`,
+        eventName: result.event_name,
+        eventId: result.event_id,
         datasetId: process.env.META_CAPI_PIXEL_ID || '',
         customData: result.custom_data,
         eventsReceived: result.events_received,
@@ -116,7 +118,7 @@ export async function GET(req: NextRequest) {
       await supabase.from('lead_actividad').insert({
         lead_id: lead.id,
         tipo: 'meta_capi_skip',
-        descripcion: '📡 Schedule NO enviado a Meta — sin email/teléfono matcheable',
+        descripcion: `📡 Evento ${metaCapiEventName()} NO enviado a Meta — sin email/teléfono matcheable`,
         metadata: { reason: result.error },
       })
     } else {
@@ -124,12 +126,12 @@ export async function GET(req: NextRequest) {
       // actividad: reintenta en la siguiente corrida sin ensuciar la timeline.
       failed++
       failures.push({ lead_id: lead.id, error: result.error })
-      console.error('[meta-capi] fallo enviando Schedule', { lead_id: lead.id, error: result.error })
+      console.error('[meta-capi] fallo enviando evento', { lead_id: lead.id, error: result.error })
     }
   }
 
   if (failed > 0) {
-    captureMessage(`meta-capi: ${failed} evento(s) Schedule fallaron`, 'warning', {
+    captureMessage(`meta-capi: ${failed} evento(s) de conversión fallaron`, 'warning', {
       failures: failures.slice(0, 5),
     })
   }

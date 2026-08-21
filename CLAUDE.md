@@ -53,7 +53,7 @@ Un módulo por servicio en `lib/` con su propio wrapper fetch y doc de env vars 
 
 Endpoints en `app/api/cron/*/route.ts` disparados por scheduler externo cada 10 min. Auth estándar: `?secret=` o header `x-cron-secret` comparado contra `CRON_SECRET || DAPTA_POST_CALL_SECRET`. Si la integración no está configurada devuelven `{ok: true, skipped}` (no error). Los webhooks entrantes usan secrets propios (`VAMBE_WEBHOOK_SECRET`, `GCAL_WEBHOOK_TOKEN`, firma de Slack) y siempre deduplican (retries de proveedores son la norma).
 
-Ejemplo del patrón completo (cron + idempotencia por columna + actividad): `app/api/cron/meta-capi/route.ts`, que manda el evento `Schedule` a Meta CAPI una sola vez por lead agendado (`meta_capi_schedule_sent_at`).
+Ejemplo del patrón completo (cron + idempotencia por columna + actividad): `app/api/cron/meta-capi/route.ts`, que manda el evento de conversión (`META_CAPI_EVENT_NAME`, default `CONVERTED` — debe coincidir con el evento del ad set en Meta) una sola vez por lead agendado (`meta_capi_schedule_sent_at`).
 
 ### Convenciones
 
