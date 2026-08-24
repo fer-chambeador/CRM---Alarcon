@@ -158,6 +158,8 @@ export async function POST(req: NextRequest) {
         await supabase.from('leads').update({
           status: 'convertido',
           plan: parsed.plan || existing.plan,
+          // Actualizar monto de pipeline con lo realmente pagado (regla Fer 20/08/2026)
+          monto: parsed.monto ?? existing.monto,
           nombre: parsed.nombre || existing.nombre,
           suscripcion_fecha: new Date().toISOString(),
           status_changed_at: new Date().toISOString(),
