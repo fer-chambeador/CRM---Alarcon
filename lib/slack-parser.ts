@@ -46,6 +46,20 @@ export function parseSlackMessage(text: string): ParsedLead | null {
   if (!text) return null
   const normalized = text.trim()
 
+  // -- Nueva suscripcion de creditos (paquetes, ej. $2,500 x5 publicaciones) --
+  // Formato Slack: 'Nueva suscripcion de creditos | Cliente: Nombre (email) | Monto: $2500 MXN | Creditos: 5'
+  // Se trata como pago confirmado: marca convertido y actualiza monto de pipeline (regla Fer 20/08/2026).
+  if (/suscripci/i.test(normalized) && /cr[eé]ditos/i.test(normalized)) {
+    const email = extractEmail(normalized)
+    if (!email) return null
+    const monto = parseMonto(normalized)
+    if (monto === null || monto === 0) return null
+    const nombre = normalized.match(/Cliente:\s*([^(<\n]+?)[\s(<]/)?.[1]?.trim() || null
+    const creditos = normalized.match(/Cr[eé]ditos:\s*(\d+)/i)?.[1] || null
+    const plan = creditos ? ('Creditos x' + creditos) : 'Creditos'
+    return { tipo_evento: 'pago_confirmado', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon: null, monto, presupuesto: null, vacante: null }
+  }
+
   // ── Pago confirmado ─────────────────────────────────
   if (normalized.toLowerCase().includes('pago de suscripci') && normalized.toLowerCase().includes('confirmado')) {
     const email = extractEmail(normalized)
