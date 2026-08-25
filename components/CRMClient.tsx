@@ -600,6 +600,15 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
   const [filterCanal, setFilterCanal] = useState<string>('todos')
   const [filterVendedor, setFilterVendedor] = useState<string>('todos')
   const [dateRange, setDateRange] = useState<DateRange>('mes')
+  // Revenue REAL del mes desde el Google Sheet 'Revenue' (fuente de verdad de Fer, 24/08/2026).
+  // La card 'Pipeline cerrado' muestra este numero en el filtro 'mes'; si el fetch falla,
+  // cae al calculo interno por leads convertidos.
+  const [sheetRev, setSheetRev] = useState<{ revenue: number; deals: number } | null>(null)
+  useEffect(() => {
+    fetch('/api/revenue-sheet').then(r => r.json()).then(j => {
+      if (j && j.ok && typeof j.revenue === 'number') setSheetRev({ revenue: j.revenue, deals: j.deals || 0 })
+    }).catch(() => {})
+  }, [])
   // Custom date range — solo se usan cuando dateRange === 'custom'.
   // Default: el rango del mes actual (inicio mes → hoy) para que abra con algo útil.
   const todayIso = new Date().toISOString().slice(0, 10)
@@ -814,6 +823,8 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
     }
   }, [dateScoped, leads, dateRange, customFrom, customTo])
   const periodGoal = goalForPeriod(dateRange)
+  const cerradoValor = dateRange === 'mes' && sheetRev ? sheetRev.revenue : stats.pipelineCerrado
+  const cerradoDeals = dateRange === 'mes' && sheetRev ? sheetRev.deals : stats.pipelineCerradoCount
 
   // Build CSV de leads — usado por el modal de export.
   const buildLeadsCsv = useCallback((leads: Lead[]) => {
@@ -975,14 +986,14 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
           </div>
           <div className={clsx(styles.kpiHeroCard, styles.kpiHeroDark)}>
             <div className={styles.kpiHeroLabel}>Pipeline cerrado</div>
-            <div className={styles.kpiHeroValue}>{fmtMoney(stats.pipelineCerrado)}</div>
+            <div className={styles.kpiHeroValue}>{fmtMoney(cerradoValor)}</div>
             <div className={styles.kpiHeroSub}>
-              {stats.pipelineCerradoCount} deals · {goalLabel(dateRange)} {fmtMoney(periodGoal)}
-              {' '}({periodGoal > 0 ? Math.round(Math.min(1, stats.pipelineCerrado / periodGoal) * 100) : 0}%)
+              {cerradoDeals} deals · {goalLabel(dateRange)} {fmtMoney(periodGoal)}
+              {' '}({periodGoal > 0 ? Math.round(Math.min(1, cerradoValor / periodGoal) * 100) : 0}%)
             </div>
             <div className={styles.kpiHeroBar}>
               <div className={styles.kpiHeroBarFill}
-                style={{ width: `${periodGoal > 0 ? Math.min(100, (stats.pipelineCerrado / periodGoal) * 100) : 0}%` }} />
+                style={{ width: `${periodGoal > 0 ? Math.min(100, (cerradoValor / periodGoal) * 100) : 0}%` }} />
             </div>
           </div>
         </div>
