@@ -3,7 +3,7 @@
  * estos números a una tabla de Supabase y los editás desde la UI.
  */
 export const WEEKLY_GOAL  = 100_000
-export const MONTHLY_GOAL = 400_000  // Junio 2026: actualizado por Fer
+export const MONTHLY_GOAL = 500_000  // Agosto 2026: actualizado por Fer (24/08)
 
 /**
  * Días hábiles del mes (lun-vie). Aprox. 22 al mes. Usamos esto para
