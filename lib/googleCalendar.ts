@@ -545,7 +545,7 @@ export type ImportResult = {
   }>
 }
 
-type LeadMatch = { id: string; email: string; nombre: string | null; telefono: string | null; status: string; llamada_at: string | null; google_calendar_event_id: string | null }
+type LeadMatch = { id: string; email: string; nombre: string | null; telefono: string | null; empresa: string | null; vacante: string | null; status: string; llamada_at: string | null; google_calendar_event_id: string | null }
 
 /**
  * Decide si un evento del Calendar es relevante para importar al CRM.
@@ -626,7 +626,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
   const allLeads = await fetchAllRows<LeadMatch>((from, to) =>
     supabase
       .from('leads')
-      .select('id, email, nombre, telefono, status, llamada_at, google_calendar_event_id')
+      .select('id, email, nombre, telefono, empresa, vacante, status, llamada_at, google_calendar_event_id')
       .order('created_at', { ascending: false })
       .range(from, to),
   )
@@ -650,7 +650,9 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
 
   for (const ev of valid) {
     const when = ev.start?.dateTime || ''
-    const client = extractClientFromEvent(ev, auth.googleEmail)
+    const client = extractClientFromEvent(ev, auth.googleEmail); const descEv = stripBidi(ev.description || ''); const mEmp = descEv.match(/Empresa:\s*([^
+]+)/i); const mVac = descEv.match(/Personal que busca:\s*([^
+]+)/i); const empresaEv = mEmp ? mEmp[1].trim() : null; const vacanteEv = mVac ? mVac[1].trim() : null
 
     // Match en orden de confianza:
     //   1. Por teléfono (last10) — el más confiable cuando viene del título Vambe.
@@ -703,7 +705,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
       }
       // Si el lead no tiene nombre/telefono y el evento sí, llenarlos
       if (!matchedLead.nombre && client.nombre) updates.nombre = client.nombre
-      if (!matchedLead.telefono && client.telefono) updates.telefono = client.telefono
+      if (!matchedLead.telefono && client.telefono) updates.telefono = client.telefono; if (empresaEv && !matchedLead.empresa) updates.empresa = empresaEv; if (vacanteEv && !matchedLead.vacante) updates.vacante = vacanteEv
 
       await supabase.from('leads').update(updates).eq('id', matchedLead.id)
       await supabase.from('lead_actividad').insert({
@@ -737,7 +739,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
         email: clientEmail,
         nombre: client.nombre,
         telefono: client.telefono,
-        canal_adquisicion: 'Calendar booking',
+        canal_adquisicion: 'Calendar booking', empresa: empresaEv, vacante: vacanteEv,
         status: 'llamada_agendada',
         llamada_at: when,
         google_calendar_event_id: ev.id,
