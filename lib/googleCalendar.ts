@@ -765,7 +765,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
         // Agregarlo al map por si otro evento del mismo email viene después
         leadsByEmail.set(clientEmail, {
           id: newLead.id, email: clientEmail, nombre: client.nombre,
-          telefono: client.telefono, status: 'llamada_agendada',
+          telefono: client.telefono, empresa: empresaEv, vacante: vacanteEv, status: 'llamada_agendada',
           llamada_at: when, google_calendar_event_id: ev.id,
         })
         result.leads_created += 1
