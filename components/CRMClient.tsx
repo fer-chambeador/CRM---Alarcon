@@ -15,7 +15,7 @@ import {
 import { phoneToState, ALL_STATES } from '@/lib/lada'
 import { PRESUPUESTO_VALUES, PRESUPUESTO_LABELS, PRESUPUESTO_COLORS, fmtPresupuesto } from '@/lib/budget'
 import type { Presupuesto } from '@/lib/budget'
-import { canReactivateVambe3d, daysSinceContact } from '@/lib/leadVambe'
+import { canReactivateVambe3d, daysSinceContact } from '@/lib/leadVambe'; import { esLeadNoCalificable } from '@/lib/leadQuality'
 import { leadScore as leadPriorityScore, scoreBucket, SCORE_BUCKET_COLOR, SCORE_BUCKET_EMOJI } from '@/lib/scoring'
 import { daysInCurrentStage, agingBucket, AGING_COLOR, fmtAgingShort } from '@/lib/velocity'
 import { goalForPeriod, goalLabel } from '@/lib/goal'
@@ -815,7 +815,7 @@ export default function CRMClient({ initialLeads }: { initialLeads: Lead[] }) {
       return true
     })
     return {
-      leads: dateScoped.length,
+      leads: dateScoped.filter(l => !esLeadNoCalificable(l)).length,
       pipelineActivo: sumMonto(dateScoped.filter(l => PIPELINE_ACTIVE.includes(l.status))),
       pipelineCierre: sumMonto(dateScoped.filter(l => PIPELINE_CLOSING.includes(l.status))),
       pipelineCerrado: sumMonto(cerrados),
