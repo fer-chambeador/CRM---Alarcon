@@ -650,9 +650,7 @@ export async function importEventsToLeads(supabase: Supabase): Promise<ImportRes
 
   for (const ev of valid) {
     const when = ev.start?.dateTime || ''
-    const client = extractClientFromEvent(ev, auth.googleEmail); const descEv = stripBidi(ev.description || ''); const mEmp = descEv.match(/Empresa:\s*([^
-]+)/i); const mVac = descEv.match(/Personal que busca:\s*([^
-]+)/i); const empresaEv = mEmp ? mEmp[1].trim() : null; const vacanteEv = mVac ? mVac[1].trim() : null
+    const client = extractClientFromEvent(ev, auth.googleEmail); const descEv = stripBidi(ev.description || ''); const mEmp = descEv.match(/Empresa:\s*(.+)/i); const mVac = descEv.match(/Personal que busca:\s*(.+)/i); const empresaEv = mEmp ? mEmp[1].trim() : null; const vacanteEv = mVac ? mVac[1].trim() : null
 
     // Match en orden de confianza:
     //   1. Por teléfono (last10) — el más confiable cuando viene del título Vambe.
