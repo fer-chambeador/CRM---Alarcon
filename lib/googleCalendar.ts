@@ -356,7 +356,7 @@ type GCalEvent = {
   start?: { dateTime?: string; date?: string }
   end?: { dateTime?: string; date?: string }
   attendees?: Array<{ email?: string; responseStatus?: string }>
-  organizer?: { email?: string }
+  organizer?: { email?: string }; created?: string
   status?: string
 }
 
@@ -1060,7 +1060,7 @@ async function getEventStatus(supabase: Supabase, eventId: string): Promise<'act
   return ev.status === 'cancelled' ? 'cancelled' : 'active'
 }
 
-export async function reconcileCancelledCalls(supabase: Supabase, maxLeads = 25): Promise<ReconcileResult> {
+/** 14-sep-2026 (Fer): "se estan duplicando eventos y no se borran los cancelados". Cuando un lead reagenda, Vambe crea el evento nuevo pero NO ejecuta "Cancelar evento" sobre el anterior, y quedan dos llamadas vivas para la misma persona (caso real: Looptonic, 15-sep 12:30 y 16:30). Esta funcion agrupa los eventos FUTUROS por identidad del lead (telefono last-10, o email si no hay telefono) y deja UNO SOLO: gana el evento CREADO mas recientemente, que es la reagenda. Los demas se borran. La senal esta en el propio calendario, asi que funciona aunque el lead no este enlazado al CRM todavia. Regla de negocio de origen (20-jul-2026): un lead = un solo evento. */ export async function dedupeUpcomingDuplicates(supabase: Supabase): Promise<{ grupos_revisados: number; duplicados: Array<{ clave: string; conservado: string; borrados: string[] }> }> { const auth = await getValidAccessToken(supabase); if (!auth) throw new Error('Google Calendar no conectado'); const events = (await listUpcomingEvents(supabase, 30)).filter(isRelevantCalendarEvent); const porClave = new Map<string, GCalEvent[]>(); for (const ev of events) { const c = extractClientFromEvent(ev, auth.googleEmail); const tel = c.telefono ? c.telefono.replace(/[^0-9]/g, '').slice(-10) : ''; const clave = tel.length === 10 ? 'tel:' + tel : (c.email ? 'mail:' + c.email : ''); if (!clave) continue; const arr = porClave.get(clave) || []; arr.push(ev); porClave.set(clave, arr); } const duplicados: Array<{ clave: string; conservado: string; borrados: string[] }> = []; for (const [clave, evs] of porClave) { if (evs.length < 2) continue; const ordenados = [...evs].sort((a, b) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime()); const ganador = ordenados[0]; const borrados: string[] = []; for (const ev of ordenados.slice(1)) { try { await deleteCalendarEvent(supabase, ev.id); borrados.push(ev.id) } catch (e) { console.error('[dedupe] no se pudo borrar ' + ev.id, e) } } if (borrados.length > 0) { duplicados.push({ clave, conservado: ganador.id, borrados }); const { data: leadRow } = await supabase.from('leads').select('id').eq('google_calendar_event_id', ganador.id).maybeSingle(); if (leadRow) { await supabase.from('lead_actividad').insert({ lead_id: (leadRow as { id: string }).id, tipo: 'field_change', descripcion: 'Se borraron ' + borrados.length + ' evento(s) duplicado(s) del calendario; queda la llamada mas reciente.', metadata: { source: 'calendar_dedupe', conservado: ganador.id, borrados } }) } } } return { grupos_revisados: porClave.size, duplicados } } export async function reconcileCancelledCalls(supabase: Supabase, maxLeads = 25): Promise<ReconcileResult> {
   const result: ReconcileResult = { checked: 0, reverted: [], errors: 0 }
 
   const { data: leads } = await supabase
