@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { importEventsToLeads, isConnected, reconcileCancelledCalls, ensureWatchChannel } from '@/lib/googleCalendar'
+import { importEventsToLeads, isConnected, reconcileCancelledCalls, ensureWatchChannel, dedupeUpcomingDuplicates } from '@/lib/googleCalendar'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -8,7 +8,7 @@ export const maxDuration = 60
 /**
  * GET /api/cron/calendar-sync?secret=<DAPTA_POST_CALL_SECRET>
  *
- * Endpoint disparado por cron-job.org cada 10 min. Sincroniza próximas
+ * Endpoint disparado por cron-job.org cada 5 min. Sincroniza próximas
  * llamadas del Google Calendar al CRM:
  *
  *  - Pull eventos relevantes (filtrados por isRelevantCalendarEvent — ver
@@ -21,8 +21,7 @@ export const maxDuration = 60
  *        status='llamada_agendada'.
  *      · Si ya estaba sincronizado idénticamente → skip (idempotente).
  *
- * Reusa DAPTA_POST_CALL_SECRET como secret común para cron-job.org. Si
- * algún día queremos uno separado podemos agregar CRON_SECRET adicional.
+ * Reusa DAPTA_POST_CALL_SECRET como secret común para cron-job.org.
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -52,19 +51,25 @@ export async function GET(req: NextRequest) {
     // borradas en GCal revierten el lead a 'contactado' (no dejar colgados).
     const reconciled = await reconcileCancelledCalls(supabase)
 
+    // 14-sep-2026 (Fer): un lead = un solo evento. Si Vambe dejó duplicados al
+    // reagendar (crea el nuevo pero no cancela el viejo), acá se colapsan
+    // conservando la llamada creada más recientemente.
+    const dedupe = await dedupeUpcomingDuplicates(supabase)
+
     // 20-jul-2026: mantener vivo el canal de push (tiempo real). El canal
     // expira cada 7 días; acá se renueva solo cuando faltan <24h.
     const watch = await ensureWatchChannel(supabase)
 
-    // Log de la corrida en lead_actividad — pero solo si hubo trabajo real.
-    // No queremos spam en la timeline cada 10 min con corridas vacías.
-    if (result.leads_updated > 0 || result.leads_created > 0 || reconciled.reverted.length > 0) {
+    // Log de la corrida — pero solo si hubo trabajo real, para no llenar los
+    // logs cada 5 min con corridas vacías.
+    if (result.leads_updated > 0 || result.leads_created > 0 || reconciled.reverted.length > 0 || dedupe.duplicados.length > 0) {
       console.log('[calendar-sync] result', {
         scanned: result.events_scanned,
         matched: result.leads_matched,
         updated: result.leads_updated,
         created: result.leads_created,
         reverted: reconciled.reverted.length,
+        duplicados_limpiados: dedupe.duplicados.length,
         watch: watch.action,
       })
     }
@@ -73,6 +78,7 @@ export async function GET(req: NextRequest) {
       timestamp: new Date().toISOString(),
       ...result,
       reconcile: { checked: reconciled.checked, reverted: reconciled.reverted },
+      dedupe,
       watch,
     })
   } catch (e) {
