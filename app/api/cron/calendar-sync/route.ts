@@ -54,7 +54,17 @@ export async function GET(req: NextRequest) {
     // 14-sep-2026 (Fer): un lead = un solo evento. Si Vambe dejó duplicados al
     // reagendar (crea el nuevo pero no cancela el viejo), acá se colapsan
     // conservando la llamada creada más recientemente.
-    const dedupe = await dedupeUpcomingDuplicates(supabase)
+    // PAUSADO 14-sep-2026 — NO reactivar sin leer esto:
+    // Vambe crea los eventos en el calendario de moises@chambas.ai y Fer solo
+    // queda como INVITADO. El CRM tiene el OAuth de fer@chambas.ai, así que un
+    // DELETE con ese token no borra el evento: solo lo quita de la vista de Fer
+    // y la llamada sigue viva en el calendario de Moisés — peor que el duplicado.
+    // Reactivar cuando el CRM tenga OAuth de la cuenta que ORGANIZA los eventos.
+    const dedupe = {
+      grupos_revisados: 0,
+      duplicados: [] as Array<{ clave: string; conservado: string; borrados: string[] }>,
+      pausado: 'Fer es invitado, no organizador. Ver comentario en el codigo.',
+    }
 
     // 20-jul-2026: mantener vivo el canal de push (tiempo real). El canal
     // expira cada 7 días; acá se renueva solo cuando faltan <24h.
