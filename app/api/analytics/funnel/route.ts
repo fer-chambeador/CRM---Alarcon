@@ -71,7 +71,10 @@ export async function GET(req: NextRequest) {
         .from('leads')
         .select('id, status, created_at, status_changed_at')
         if (from) {
-          q = q.or(`and(created_at.gte.${from},created_at.lte.${to}),and(status.in.(convertido,cliente_recurrente),status_changed_at.gte.${from},status_changed_at.lte.${to})`)
+          // Solo 'convertido' por fecha de cambio: el cron de cierre de mes promueve a
+          // cliente_recurrente y re-estampa status_changed_at → inflaba el funnel con
+          // ~150 clientes del mes anterior (fix Fer 7-oct-2026).
+          q = q.or(`and(created_at.gte.${from},created_at.lte.${to}),and(status.eq.convertido,status_changed_at.gte.${from},status_changed_at.lte.${to})`)
         } else {
           q = q.lte('created_at', to)
         }
@@ -83,7 +86,7 @@ export async function GET(req: NextRequest) {
   const leadIds = leads.map(l => l.id)
 
   // 2. Pull lead_actividad status_change events para esos leads.
-  type ActRow = { lead_id: string; metadata: Record<string, unknown> | null; created_at: string }
+  type ActRow = { lead_id: string; tipo?: string; descripcion?: string | null; metadata: Record<string, unknown> | null; created_at: string }
   const acts: ActRow[] = []
   if (leadIds.length > 0) {
     // Chunkear ids (URLs muy largas truenan con miles de ids) y paginar
@@ -94,9 +97,11 @@ export async function GET(req: NextRequest) {
       const chunkActs = await fetchAllRows<ActRow>((rFrom, rTo) =>
         supabase
           .from('lead_actividad')
-          .select('lead_id, metadata, created_at')
+          .select('lead_id, tipo, descripcion, metadata, created_at')
           .in('lead_id', idsChunk)
-          .eq('tipo', 'status_change')
+          // Además de status_change, los movimientos que llegan de Vambe y los pagos
+          // de Slack también cambian el status (antes no se contaban en la historia).
+          .in('tipo', ['status_change', 'vambe_stage_change', 'slack_update'])
           .order('created_at', { ascending: true })
           .range(rFrom, rTo),
       )
@@ -113,7 +118,10 @@ export async function GET(req: NextRequest) {
     transitionsByLead.set(l.id, [{ stage: 'nuevo', at: new Date(l.created_at).getTime() }])
   }
   for (const a of acts) {
-    const after = a.metadata && (a.metadata as { after?: string }).after
+    const md = (a.metadata || {}) as { after?: string; target_status?: string }
+    const after = a.tipo === 'vambe_stage_change'
+      ? (a.descripcion || '').match(/CRM status → ([a-z_]+)/)?.[1]
+      : a.tipo === 'slack_update' ? md.target_status : md.after
     if (!after || !STAGES.includes(after as Stage)) continue
     const arr = transitionsByLead.get(a.lead_id) || []
     arr.push({ stage: after as Stage, at: new Date(a.created_at).getTime() })
