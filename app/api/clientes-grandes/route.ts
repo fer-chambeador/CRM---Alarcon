@@ -78,7 +78,8 @@ export async function GET() {
     const d = db.get(c.key)
     if (d?.eliminado) continue
     const l = leadsByEmail.get(c.key)
-    const fv = fuente.buscar(c.key.includes('@') ? c.key : null, d?.empresa || l?.empresa || c.cliente)
+    // El correo que el operador puso a mano manda (sirve para conectar clientes que en el sheet vienen por nombre)
+    const fv = fuente.buscar(d?.email || (c.key.includes('@') ? c.key : null), d?.empresa || l?.empresa || c.cliente)
     out.push({
       fv,
       key: c.key,
