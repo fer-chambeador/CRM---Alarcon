@@ -62,3 +62,5 @@
 .metrics span { color: var(--text3); font-size: 10px; white-space: nowrap; }
 .accionNone { color: #fff; background: var(--accent); border-color: var(--accent); }
 .dateMini { display: block; margin-top: 4px; background: var(--bg3); border: 1px solid var(--border); color: var(--text2); border-radius: 6px; padding: 3px 6px; font-size: 11.5px; font-family: var(--font); }
+.dateRenueva { background: transparent; border: 1px solid transparent; color: var(--text); font-family: var(--font); font-size: 12.5px; padding: 2px 4px; border-radius: 6px; cursor: pointer; color-scheme: dark; }
+.dateRenueva:hover { border-color: var(--border2); background: var(--bg3); }

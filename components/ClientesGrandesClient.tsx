@@ -13,6 +13,7 @@ type Cliente = {
   ultimo_pago: string | null; canal: string | null; plan: string | null; proxima_accion: string | null
   proxima_accion_fecha: string | null; ultimo_contacto: string | null; notas: string | null
   fv: FV | null
+  renueva?: string | null; dias_renueva?: number | null; renueva_manual?: boolean
   origen: 'sheet' | 'manual'; salud: 'riesgo' | 'espera' | 'contento' | 'muy_feliz'; salud_manual?: boolean; lead_id: string | null
 }
 type FV = {
@@ -79,6 +80,7 @@ export default function ClientesGrandesClient() {
     const r = await fetch(`/api/clientes-grandes/${encodeURIComponent(c.key)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     const j = await r.json().catch(() => ({}))
     if (!j.ok) { alert('No se pudo guardar: ' + (j.error || r.status)); load() }
+    else if ('renueva_manual' in body) load()
   }
   const pedirTel = (c: Cliente) => {
     const t = window.prompt(`WhatsApp del owner de la cuenta ${c.email || c.empresa || ''} (10 dígitos):`)
@@ -102,7 +104,7 @@ export default function ClientesGrandesClient() {
       (!lq || [r.empresa, r.email, r.contacto_nombre, r.telefono].some(v => (v || '').toLowerCase().includes(lq))))
     out = [...out].sort((a, b) => orden === 'gasto' ? b.total - a.total
       : orden === 'ultimo' ? (b.ultimo_pago || '').localeCompare(a.ultimo_pago || '')
-      : orden === 'renueva' ? (a.fv?.dias_renueva ?? 9999) - (b.fv?.dias_renueva ?? 9999)
+      : orden === 'renueva' ? (a.dias_renueva ?? 9999) - (b.dias_renueva ?? 9999)
       : (a.proxima_accion_fecha || '9999').localeCompare(b.proxima_accion_fecha || '9999'))
     return out
   }, [rows, q, owner, salud, orden, estado])
@@ -212,15 +214,20 @@ export default function ClientesGrandesClient() {
                           : <span className={cg.muted}>—</span>}
                       </td>
                       <td>
-                        {c.fv?.renueva
-                          ? <>
-                              <div className={clsx(c.fv.dias_renueva != null && c.fv.dias_renueva < 0 && cg.red, c.fv.dias_renueva != null && c.fv.dias_renueva >= 0 && c.fv.dias_renueva <= 7 && cg.yellow)}>{fmtFecha(c.fv.renueva)}</div>
-                              <div className={cg.muted}>
-                                {c.fv.dias_renueva == null ? '' : c.fv.dias_renueva < 0 ? `venció hace ${-c.fv.dias_renueva}d` : c.fv.dias_renueva === 0 ? 'hoy' : `en ${c.fv.dias_renueva}d`}
-                                {c.fv.estado_renovacion ? ` · ${c.fv.estado_renovacion}` : ''}
-                              </div>
-                            </>
-                          : <span className={cg.muted}>—</span>}
+                        {(() => {
+                          const d = c.dias_renueva ?? null
+                          return <>
+                            <input type="date" className={clsx(cg.dateRenueva, d != null && d < 0 && cg.red, d != null && d >= 0 && d <= 7 && cg.yellow)}
+                              value={c.renueva || ''} disabled={!tablaLista}
+                              title={c.renueva_manual ? 'Fecha puesta a mano (bórrala para volver a la de la Fuente de Verdad)' : 'De la Fuente de Verdad · cámbiala si no es correcta'}
+                              onChange={e => patch(c, { renueva_manual: e.target.value })} />
+                            <div className={cg.muted}>
+                              {d == null ? '' : d < 0 ? `venció hace ${-d}d` : d === 0 ? 'hoy' : `en ${d}d`}
+                              {c.fv?.estado_renovacion ? ` · ${c.fv.estado_renovacion}` : ''}
+                              {c.renueva_manual ? ' · manual' : ''}
+                            </div>
+                          </>
+                        })()}
                       </td>
                       <td className={cg.num}>
                         <div className={cg.strong}>{fmtMoney(c.total)}</div>
