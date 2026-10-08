@@ -71,15 +71,24 @@ export async function fetchClientesDelSheet(): Promise<{ clientes: ClienteSheet[
       if (!r.ok) { errores.push(`${sheet}: HTTP ${r.status}`); return }
       const rows = parseCsv(await r.text())
       const head = (rows[0] || []).map(h => h.trim().toUpperCase())
-      const iCli = head.indexOf('CLIENTE'), iMonto = head.indexOf('MONTO'), iFecha = head.indexOf('FECHA')
-      const iVac = head.indexOf('# DE VACANTES'), iCanal = head.indexOf('CANAL'), iMet = head.findIndex(h => h.startsWith('MÉTODO') || h.startsWith('METODO'))
+      const iCli = head.indexOf('CLIENTE'), iMonto = head.indexOf('MONTO')
+      // gviz a veces renombra la columna de fecha (p. ej. 'v'); si no está, es la primera.
+      const iFecha = head.indexOf('FECHA') >= 0 ? head.indexOf('FECHA') : (iCli > 0 ? 0 : -1)
+      // Quién vendió: 'QUIÉN' en el sheet (antes 'CANAL').
+      const iCanal = head.findIndex(h => h === 'QUIÉN' || h === 'QUIEN' || h === 'CANAL')
+      const iVac = head.indexOf('# DE VACANTES'), iMet = head.findIndex(h => h.startsWith('MÉTODO') || h.startsWith('METODO'))
       if (iCli < 0 || iMonto < 0) { errores.push(`${sheet}: sin columnas CLIENTE/MONTO`); return }
+      // gviz deja vacías muchas fechas (tipos mezclados): usamos la última fecha
+      // vista en la pestaña, o el día 1 del mes de la pestaña.
+      const [mesNom, anio] = sheet.split(' ')
+      let fechaPrev = `${anio}-${String(MESES.indexOf(mesNom) + 1).padStart(2, '0')}-01`
       for (const row of rows.slice(1)) {
         const cliente = (row[iCli] || '').trim()
         const monto = money(row[iMonto] || '')
         if (!cliente || monto <= 0) continue
         const key = cliente.toLowerCase()
-        const f = iFecha >= 0 ? fecha(row[iFecha] || '') : null
+        const f = (iFecha >= 0 ? fecha(row[iFecha] || '') : null) || fechaPrev
+        fechaPrev = f
         const cur = agg.get(key) || { key, cliente, total: 0, pagos: 0, vacantes: 0, primer_pago: null, ultimo_pago: null, canal: null, metodo: null }
         cur.total += monto
         cur.pagos += 1
@@ -102,20 +111,26 @@ export async function fetchClientesDelSheet(): Promise<{ clientes: ClienteSheet[
 
 /** CANAL del sheet → owner sugerido. */
 export function ownerDesdeCanal(canal: string | null): string {
-  const c = (canal || '').toLowerCase()
+  const c = (canal || '').trim().toLowerCase()
+  if (c === 'marina') return 'Marina'
+  if (c === 'max') return 'Max'
+  if (c.includes('olvera')) return 'Olvera'
   if (c.includes('moy') || c.includes('mois')) return 'Moisés'
   if (c.includes('rodrigo')) return 'Rodrigo'
-  if (c.includes('fer')) return 'Fer'
+  if (c === 'fer' || c.startsWith('fer ') || c.includes('fernando a')) return 'Fer'
   return 'Sin asignar'
 }
 
-export const OWNERS = ['Sin asignar', 'Moisés', 'Fer', 'Rodrigo', 'Marina'] as const
+export const OWNERS = ['Sin asignar', 'Moisés', 'Fer', 'Rodrigo', 'Marina', 'Max', 'Olvera'] as const
 
-/** Salud según días desde el último pago. */
-export function saludPorPago(ultimo: string | null): 'activo' | 'seguimiento' | 'riesgo' {
+export type Salud = 'riesgo' | 'espera' | 'contento' | 'muy_feliz'
+export const SALUDES: Salud[] = ['riesgo', 'espera', 'contento', 'muy_feliz']
+
+/** Salud sugerida (solo si el operador no la ha puesto) según días desde el último pago. */
+export function saludPorPago(ultimo: string | null): Salud {
   if (!ultimo) return 'riesgo'
   const dias = (Date.now() - new Date(ultimo + 'T12:00:00-06:00').getTime()) / 86_400_000
-  if (dias <= 35) return 'activo'
-  if (dias <= 60) return 'seguimiento'
+  if (dias <= 35) return 'contento'
+  if (dias <= 60) return 'espera'
   return 'riesgo'
 }
