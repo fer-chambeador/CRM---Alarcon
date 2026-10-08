@@ -12,13 +12,14 @@ type Cliente = {
   telefono: string | null; owner: string; total: number; pagos: number; vacantes: number; primer_pago: string | null
   ultimo_pago: string | null; canal: string | null; plan: string | null; proxima_accion: string | null
   proxima_accion_fecha: string | null; ultimo_contacto: string | null; notas: string | null
-  origen: 'sheet' | 'manual'; salud: 'activo' | 'seguimiento' | 'riesgo'; lead_id: string | null
+  origen: 'sheet' | 'manual'; salud: 'riesgo' | 'espera' | 'contento' | 'muy_feliz'; salud_manual?: boolean; lead_id: string | null
 }
-const OWNERS = ['Sin asignar', 'Moisés', 'Fer', 'Rodrigo', 'Marina']
+const OWNERS = ['Sin asignar', 'Moisés', 'Fer', 'Rodrigo', 'Marina', 'Max', 'Olvera']
 const SALUD: Record<Cliente['salud'], { label: string; cls: string }> = {
-  activo: { label: 'Activo', cls: cg.pillOk },
-  seguimiento: { label: 'Seguimiento', cls: cg.pillWarn },
   riesgo: { label: 'En riesgo', cls: cg.pillRisk },
+  espera: { label: 'En espera resultados', cls: cg.pillWarn },
+  contento: { label: 'Contento', cls: cg.pillOk },
+  muy_feliz: { label: 'Muy feliz', cls: cg.pillHappy },
 }
 const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString('es-MX')
 const fmtFecha = (iso: string | null) => {
@@ -27,6 +28,10 @@ const fmtFecha = (iso: string | null) => {
   return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })
 }
 const diasDesde = (iso: string | null) => iso ? Math.floor((Date.now() - new Date(iso.length === 10 ? iso + 'T12:00:00' : iso).getTime()) / 86_400_000) : null
+const fmtTel = (tel: string | null) => {
+  const d = (tel || '').replace(/\D/g, '').slice(-10)
+  return d.length === 10 ? `${d.slice(0, 2)} ${d.slice(2, 6)} ${d.slice(6)}` : (tel || '')
+}
 const waLink = (tel: string | null) => {
   const d = (tel || '').replace(/\D/g, '').slice(-10)
   return d.length === 10 ? `https://wa.me/52${d}` : null
@@ -61,6 +66,11 @@ export default function ClientesGrandesClient() {
     const r = await fetch(`/api/clientes-grandes/${encodeURIComponent(c.key)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     const j = await r.json().catch(() => ({}))
     if (!j.ok) { alert('No se pudo guardar: ' + (j.error || r.status)); load() }
+  }
+  const pedirTel = (c: Cliente) => {
+    const t = window.prompt(`WhatsApp del owner de la cuenta ${c.email || c.empresa || ''} (10 dígitos):`)
+    const d = (t || '').replace(/\D/g, '')
+    if (d.length >= 10) patch(c, { telefono: d.slice(-10) })
   }
   const eliminar = async (c: Cliente) => {
     if (!confirm(`¿Quitar a ${c.empresa || c.email || 'este cliente'} de Clientes grandes?`)) return
@@ -113,7 +123,7 @@ export default function ClientesGrandesClient() {
           <div className={cg.kpis}>
             <Kpi label="Clientes grandes" value={String(kpi.n)} sub={`${kpi.sinOwner} sin owner`} color="var(--accent)" />
             <Kpi label="Ingreso acumulado" value={fmtMoney(kpi.total)} sub="Enero a hoy" color="var(--yellow)" />
-            <Kpi label="En riesgo" value={String(kpi.riesgo)} sub="Sin pago en más de 60 días" color="var(--red)" />
+            <Kpi label="En riesgo" value={String(kpi.riesgo)} sub="Marcados en riesgo" color="var(--red)" />
             <Kpi label="Acciones esta semana" value={String(kpi.semana)} sub="Reuniones y seguimientos" color="var(--accent2)" />
           </div>
           <div className={cg.filters}>
@@ -122,7 +132,7 @@ export default function ClientesGrandesClient() {
               <option value="Todos">Owner: Todos</option>{OWNERS.map(o => <option key={o} value={o}>Owner: {o}</option>)}
             </select>
             <select className={cg.select} value={salud} onChange={e => setSalud(e.target.value)}>
-              <option value="Todas">Salud: Todas</option><option value="activo">Activo</option><option value="seguimiento">Seguimiento</option><option value="riesgo">En riesgo</option>
+              <option value="Todas">Salud: Todas</option>{(Object.keys(SALUD) as Cliente['salud'][]).map(k => <option key={k} value={k}>{SALUD[k].label}</option>)}
             </select>
             <select className={cg.select} value={orden} onChange={e => setOrden(e.target.value as typeof orden)}>
               <option value="gasto">Ordenar: Más gasto</option><option value="ultimo">Ordenar: Pago más reciente</option><option value="accion">Ordenar: Próxima acción</option>
@@ -147,8 +157,10 @@ export default function ClientesGrandesClient() {
                         <div className={cg.muted}>{c.empresa ? c.email : ''}{c.lead_id && <> · <a href={`/leads/${c.lead_id}`} className={cg.link}>ver lead</a></>}</div>
                       </td>
                       <td>
-                        <div>{c.contacto_nombre || '—'}</div>
-                        <div className={cg.muted}>{c.contacto_puesto || c.telefono || ''}</div>
+                        {wa
+                          ? <a href={wa} target="_blank" rel="noreferrer" className={cg.waLink} title="Abrir WhatsApp del owner de la cuenta">💬 {fmtTel(c.telefono)}</a>
+                          : <button className={cg.btnGhost} disabled={!tablaLista} onClick={() => pedirTel(c)}>+ WhatsApp</button>}
+                        <div className={cg.muted}>{[c.contacto_nombre, c.contacto_puesto].filter(Boolean).join(' · ')}</div>
                       </td>
                       <td>
                         <select className={clsx(cg.ownerSel, c.owner === 'Sin asignar' && cg.ownerNone)} value={c.owner} disabled={!tablaLista}
@@ -162,15 +174,22 @@ export default function ClientesGrandesClient() {
                         <div>{fmtFecha(c.ultimo_pago)}</div>
                         {dias != null && <div className={cg.muted}>hace {dias} días</div>}
                       </td>
-                      <td><span className={clsx(cg.pill, SALUD[c.salud].cls)}>{SALUD[c.salud].label}</span></td>
+                      <td>
+                        <select className={clsx(cg.pill, cg.saludSel, SALUD[c.salud].cls)} value={c.salud} disabled={!tablaLista}
+                          title={c.salud_manual ? 'Puesto por el operador' : 'Sugerido por último pago: cámbialo tú'}
+                          onChange={e => patch(c, { salud: e.target.value, salud_manual: true })}>
+                          {(Object.keys(SALUD) as Cliente['salud'][]).map(k => <option key={k} value={k}>{SALUD[k].label}</option>)}
+                        </select>
+                      </td>
                       <td>
                         <button className={c.proxima_accion ? cg.btnGhost : cg.btnSmall} disabled={!tablaLista} onClick={() => setEditAccion(c)}>
                           {c.proxima_accion ? `${c.proxima_accion}${c.proxima_accion_fecha ? ' · ' + fmtFecha(c.proxima_accion_fecha) : ''}` : 'Pedir reunión'}
                         </button>
                       </td>
                       <td className={cg.actions}>
-                        {wa && <a href={wa} target="_blank" rel="noreferrer" className={cg.iconBtn} title="WhatsApp">💬</a>}
-                        {c.email && <a href={`mailto:${c.email}?subject=${encodeURIComponent('Reunión ChambasAI')}`} className={cg.iconBtn} title="Correo">✉️</a>}
+                        {wa
+                          ? <a href={wa} target="_blank" rel="noreferrer" className={cg.iconBtn} title={`WhatsApp del owner de la cuenta (${c.telefono})`}>💬</a>
+                          : <button className={cg.iconBtn} title="Sin WhatsApp: agregar número" disabled={!tablaLista} onClick={() => pedirTel(c)}>➕💬</button>}
                         <button className={cg.iconBtn} title="Quitar de la lista" disabled={!tablaLista} onClick={() => eliminar(c)}>🗑</button>
                       </td>
                     </tr>
@@ -179,7 +198,7 @@ export default function ClientesGrandesClient() {
               </tbody>
             </table>
           </div>
-          <div className={cg.muted}>Mostrando {filtered.length} de {rows.length} · Regla: entra todo cliente con pagos de enero a hoy mayores a $5,000 (sheet Revenue). Salud: activo ≤ 35 días desde su último pago, seguimiento ≤ 60, en riesgo &gt; 60.</div>
+          <div className={cg.muted}>Mostrando {filtered.length} de {rows.length} · Regla: entra todo cliente con pagos de enero a hoy mayores a $5,000 (sheet Revenue). Salud: la pone el operador; mientras no la cambie se sugiere por último pago (≤ 35 días contento, ≤ 60 en espera, &gt; 60 en riesgo).</div>
         </div>
       </main>
       {modal && <AgregarModal onClose={() => setModal(false)} onSaved={() => { setModal(false); load() }} />}
