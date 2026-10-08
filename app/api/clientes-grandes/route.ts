@@ -28,6 +28,9 @@ export type ClienteGrandeRow = {
   origen: 'sheet' | 'manual'
   salud: Salud
   fv: FuenteVerdadInfo | null
+  renueva: string | null
+  dias_renueva: number | null
+  renueva_manual: boolean
   salud_manual: boolean
   lead_id: string | null
 }
@@ -36,7 +39,7 @@ type DbRow = {
   cliente_key: string; empresa: string | null; contacto_nombre: string | null; contacto_puesto: string | null
   telefono: string | null; email: string | null; owner: string; gasto_manual: number | null; plan: string | null
   proxima_accion: string | null; proxima_accion_fecha: string | null; ultimo_contacto: string | null
-  notas: string | null; origen: 'sheet' | 'manual'; eliminado: boolean; created_at: string; salud?: string | null
+  notas: string | null; origen: 'sheet' | 'manual'; eliminado: boolean; created_at: string; salud?: string | null; renueva_manual?: string | null
 }
 
 /**
@@ -46,6 +49,13 @@ type DbRow = {
  *       − los marcados como eliminados.
  * Se enriquece con el lead del CRM (match por email) para empresa/contacto.
  */
+/** Fecha de renovación: la que puso el operador manda sobre la de la Fuente de Verdad. */
+function renov(manual: string | null | undefined, fv: FuenteVerdadInfo | null) {
+  const renueva = manual || fv?.renueva || null
+  const dias = renueva ? Math.round((new Date(renueva + 'T12:00:00-06:00').getTime() - Date.now()) / 86_400_000) : null
+  return { renueva, dias_renueva: manual ? dias : (fv?.dias_renueva ?? dias), renueva_manual: !!manual }
+}
+
 export async function GET() {
   const supabase = createServiceClient()
   const [{ clientes, pestañas, errores }, dbRes, fuente] = await Promise.all([
@@ -82,6 +92,7 @@ export async function GET() {
     const fv = fuente.buscar(d?.email || (c.key.includes('@') ? c.key : null), d?.empresa || l?.empresa || c.cliente)
     out.push({
       fv,
+      ...renov(d?.renueva_manual, fv),
       key: c.key,
       empresa: d?.empresa || fv?.empresa || l?.empresa || (c.key.includes('@') ? null : c.cliente),
       email: d?.email || (c.key.includes('@') ? c.key : null),
@@ -110,6 +121,7 @@ export async function GET() {
     const fvm = fuente.buscar(d.email, d.empresa)
     out.push({
       fv: fvm,
+      ...renov(d.renueva_manual, fvm),
       key: d.cliente_key, empresa: d.empresa, email: d.email, contacto_nombre: d.contacto_nombre,
       contacto_puesto: d.contacto_puesto, telefono: d.telefono || fvm?.wa || null, owner: d.owner,
       total: Number(d.gasto_manual || 0), pagos: 0, vacantes: 0, primer_pago: null,

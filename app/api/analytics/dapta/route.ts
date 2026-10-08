@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createServiceClient, fetchAllRows } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -141,7 +141,19 @@ export async function GET(req: NextRequest) {
     .in('tipo', OUTBOUND_TIPOS)
   if (from) qMsgs = qMsgs.gte('created_at', from)
   qMsgs = qMsgs.lte('created_at', to)
-  const { count: vambeOutboundMsgs } = await qMsgs
+  const { count: crmOutboundMsgs } = await qMsgs
+
+  // Plantillas que salen desde campañas de Vambe (no pasan por el CRM): llegan por
+  // webhook como vambe_message outbound con "(message template…" en el raw. Fer 7-oct-2026.
+  const vambeTplRows = await fetchAllRows<{ lead_id: string | null }>((rFrom, rTo) => {
+    let q = supabase.from('lead_actividad').select('lead_id')
+      .eq('tipo', 'vambe_message')
+      .like('metadata->raw->>message', '(message template%')
+    if (from) q = q.gte('created_at', from)
+    q = q.lte('created_at', to)
+    return q.range(rFrom, rTo)
+  })
+  const vambeOutboundMsgs = (crmOutboundMsgs ?? 0) + vambeTplRows.length
 
   // ── 6 & 7. Outbound funnel ──
   let qOutboundActs = supabase
@@ -153,7 +165,10 @@ export async function GET(req: NextRequest) {
   qOutboundActs = qOutboundActs.lte('created_at', to)
   const { data: outboundActs } = await qOutboundActs
   const outboundLeadIds = Array.from(
-    new Set(((outboundActs ?? []) as Array<{ lead_id: string }>).map(r => r.lead_id)),
+    new Set([
+      ...((outboundActs ?? []) as Array<{ lead_id: string }>).map(r => r.lead_id),
+      ...vambeTplRows.map(r => r.lead_id).filter((x): x is string => !!x),
+    ]),
   )
 
   let outboundPidioLlamada = 0

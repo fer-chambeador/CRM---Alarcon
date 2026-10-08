@@ -1862,9 +1862,12 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
   // Auto-refresh: la página es server-rendered y quedaba congelada con los
   // datos del momento de carga (ej: "hoy" clavado mientras llegaban más leads).
   // Refresca cada 60s y al volver el foco a la pestaña.
+  // `tick` también re-dispara los fetch de funnel / movimiento / outbound (antes
+  // solo se pedían al cambiar el rango → se quedaban congelados). Fer 7-oct-2026.
+  const [tick, setTick] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => router.refresh(), 60_000)
-    const onFocus = () => router.refresh()
+    const id = setInterval(() => { router.refresh(); setTick(t => t + 1) }, 60_000)
+    const onFocus = () => { router.refresh(); setTick(t => t + 1) }
     window.addEventListener('focus', onFocus)
     return () => { clearInterval(id); window.removeEventListener('focus', onFocus) }
   }, [router])
@@ -1923,13 +1926,13 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     if (from) qs.set('from', from.toISOString())
     if (to)   qs.set('to', to.toISOString())
     let cancelled = false
-    setMovement(null)
+    if (tick === 0) setMovement(null)
     fetch(`/api/analytics/movement?${qs}`, { cache: 'no-store' })
       .then(r => r.json())
       .then((j: MovementData) => { if (!cancelled) setMovement(j) })
-      .catch(() => { if (!cancelled) setMovement({ passCounts: [], transitions: [], advance: {}, sample_size: 0 }) })
+      .catch(() => { if (!cancelled) setMovement(m => m || { passCounts: [], transitions: [], advance: {}, sample_size: 0 }) })
     return () => { cancelled = true }
-  }, [dateRange])
+  }, [dateRange, tick])
 
   // Fetch dapta + outbound metrics when range changes
   useEffect(() => {
@@ -1938,13 +1941,13 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     if (from) qs.set('from', from.toISOString())
     if (to)   qs.set('to', to.toISOString())
     let cancelled = false
-    setDaptaMetrics(null)
+    if (tick === 0) setDaptaMetrics(null)
     fetch(`/api/analytics/dapta?${qs}`, { cache: 'no-store' })
       .then(r => r.json())
       .then((j: DaptaMetrics) => { if (!cancelled) setDaptaMetrics(j) })
       .catch(() => { /* ignore */ })
     return () => { cancelled = true }
-  }, [dateRange])
+  }, [dateRange, tick])
 
   // Fetch funnel
   useEffect(() => {
@@ -1953,13 +1956,13 @@ export default function AnalyticsClient({ initialLeads }: { initialLeads: Lead[]
     if (from) qs.set('from', from.toISOString())
     if (to)   qs.set('to', to.toISOString())
     let cancelled = false
-    setFunnelData(null)
+    if (tick === 0) setFunnelData(null)
     fetch(`/api/analytics/funnel?${qs}`, { cache: 'no-store' })
       .then(r => r.json())
-      .then((j: FunnelData) => { if (!cancelled) setFunnelData(j) })
+      .then((j: FunnelData) => { if (!cancelled && j && Array.isArray(j.stages)) setFunnelData(j) })
       .catch(() => { /* ignore */ })
     return () => { cancelled = true }
-  }, [dateRange])
+  }, [dateRange, tick])
 
   // tactics removidas — user pidió sin sugerencias en este rediseño
 

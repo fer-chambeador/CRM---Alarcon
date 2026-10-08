@@ -172,6 +172,14 @@ export async function POST(req: NextRequest) {
           descripcion: conCupon ? 'Cuenta activada con cupón ($0) → convertido' : `Pago confirmado - Monto: $${parsed.monto} MXN`,
           metadata: { monto: parsed.monto, plan: parsed.plan, target_status: 'convertido', cupon: conCupon },
         })
+        if (existing.status !== 'convertido') {
+          await supabase.from('lead_actividad').insert({
+            lead_id: existing.id,
+            tipo: 'status_change',
+            descripcion: 'Status cambiado a: convertido',
+            metadata: { field: 'status', before: existing.status, after: 'convertido', source: 'slack' },
+          })
+        }
       }
       return NextResponse.json({ ok: true })
     }
