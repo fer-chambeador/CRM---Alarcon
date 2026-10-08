@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-const EDITABLES = ['empresa', 'contacto_nombre', 'contacto_puesto', 'telefono', 'email', 'owner', 'plan', 'proxima_accion', 'proxima_accion_fecha', 'ultimo_contacto', 'notas', 'salud'] as const
+const EDITABLES = ['empresa', 'contacto_nombre', 'contacto_puesto', 'telefono', 'email', 'owner', 'plan', 'proxima_accion', 'proxima_accion_fecha', 'ultimo_contacto', 'notas', 'salud', 'renueva_manual'] as const
 
 /** PATCH /api/clientes-grandes/[key] — editar owner / próxima acción / datos (upsert sobre la fila del sheet). */
 export async function PATCH(req: NextRequest, { params }: { params: { key: string } }) {
