@@ -261,7 +261,7 @@ export default function CommandCenter({ initialLeads }: { initialLeads: Lead[] }
 }
 
 // ─── Sidebar (shared shape across pages) ─────────────────────────────────────
-export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' | 'aprobaciones' | 'follow-ups' }) {
+export function Sidebar({ alertsCount, active }: { alertsCount?: number; active: 'leads' | 'clientes-grandes' | 'pendientes' | 'analytics' | 'asistente' | 'recurrentes' | 'recurrentes-analitica' | 'templates' | 'settings' | 'llamadas' | 'aprobaciones' | 'follow-ups' }) {
   const link = (href: string, key: string, label: string, icon: string) => (
     <Link href={href} className={clsx(styles.navLink, active === key && styles.navLinkActive)}>
       <span>{icon} {label}</span>
@@ -282,7 +282,10 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
     <>
       <nav className={styles.sidebarNav}>
         {link('/leads', 'leads', 'Leads', '📋')}
-        {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
+        {link('/clientes-grandes', 'clientes-grandes', 'Clientes grandes', '💎')}
+        {/* Ocultos 7-oct-2026 por pedido de Fer (las páginas siguen funcionando, sólo salen del menú):
+            {link('/outbound', 'aprobaciones', 'Outbound', '📨')}
+            {link('/asistente', 'asistente', 'Asistente', '🧠')} */}
         {/* Ocultos 24-jun-2026 por pedido de Fer (las páginas siguen funcionales, sólo se quitaron del sidebar):
             {link('/llamadas', 'llamadas', 'Llamadas', '☎️')}
             {link('/follow-ups', 'follow-ups', 'Follow Ups', '📌')}
@@ -290,7 +293,6 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
             {onRecurrentes && subLink('/recurrentes/analitica', 'recurrentes-analitica', 'Analítica')}
         */}
         {link('/analytics', 'analytics', 'Analítica', '📊')}
-        {link('/asistente', 'asistente', 'Asistente', '🧠')}
         {link('/settings', 'settings', 'Settings', '⚙️')}
         {onSettings && subLink('/settings', 'settings', 'General')}
         {onSettings && subLink('/templates', 'templates', 'Templates')}
@@ -303,12 +305,12 @@ export function Sidebar({ alertsCount, active }: { alertsCount?: number; active:
 // ─── Mobile bottom tab bar ───────────────────────────────────────────────────
 const MOBILE_TABS = [
   { key: 'leads', href: '/leads', icon: '📋', label: 'Leads' },
-  { key: 'aprobaciones', href: '/outbound', icon: '📨', label: 'Outbound' },
+  { key: 'clientes-grandes', href: '/clientes-grandes', icon: '💎', label: 'Clientes' },
   // Ocultos 24-jun-2026 (junto con sidebar):
   // { key: 'llamadas', href: '/llamadas', icon: '☎️', label: 'Llamadas' },
   // { key: 'recurrentes', href: '/recurrentes', icon: '💎', label: 'Recurr.' },
   { key: 'analytics', href: '/analytics', icon: '📊', label: 'Análisis' },
-  { key: 'asistente', href: '/asistente', icon: '🧠', label: 'Asist.' },
+  // Outbound y Asistente ocultos 7-oct-2026 (Fer)
 ] as const
 
 export function MobileTabBar({ active }: { active: string }) {
@@ -328,10 +330,6 @@ export function MobileTabBar({ active }: { active: string }) {
         <div className={styles.mobileSheetOverlay} onClick={() => setMoreOpen(false)}>
           <div className={styles.mobileSheet} onClick={e => e.stopPropagation()}>
             <div className={styles.mobileSheetHandle} />
-            <Link href="/outbound" onClick={() => setMoreOpen(false)}
-              className={clsx(styles.mobileSheetItem, norm === 'aprobaciones' && styles.mobileSheetItemActive)}>
-              📨 Outbound
-            </Link>
             <Link href="/templates" onClick={() => setMoreOpen(false)}
               className={clsx(styles.mobileSheetItem, norm === 'templates' && styles.mobileSheetItemActive)}>
               ✉️ Templates
@@ -413,7 +411,7 @@ export function CommandPalette({ leads, onClose, onUpdateStatus: _ }: {
       { kind: 'nav', label: '📋 Lista de leads', href: '/leads' },
       { kind: 'nav', label: '☎️ Llamadas', href: '/llamadas' },
       { kind: 'nav', label: '📊 Analítica', href: '/analytics' },
-      { kind: 'nav', label: '🧠 Asistente', href: '/asistente' },
+      { kind: 'nav', label: '💎 Clientes grandes', href: '/clientes-grandes' },
       { kind: 'nav', label: '✉️ Templates', href: '/templates' },
       { kind: 'create' },
     ]
