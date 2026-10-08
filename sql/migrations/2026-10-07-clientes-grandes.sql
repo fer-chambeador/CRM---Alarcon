@@ -25,3 +25,6 @@ create table if not exists clientes_grandes (
   updated_at timestamptz not null default now()
 );
 create index if not exists clientes_grandes_owner_idx on clientes_grandes (owner);
+
+-- 7-oct (2): salud la pone el operador: riesgo | espera | contento | muy_feliz
+alter table clientes_grandes add column if not exists salud text;
