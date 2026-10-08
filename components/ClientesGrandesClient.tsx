@@ -12,8 +12,19 @@ type Cliente = {
   telefono: string | null; owner: string; total: number; pagos: number; vacantes: number; primer_pago: string | null
   ultimo_pago: string | null; canal: string | null; plan: string | null; proxima_accion: string | null
   proxima_accion_fecha: string | null; ultimo_contacto: string | null; notas: string | null
+  fv: FV | null
   origen: 'sheet' | 'manual'; salud: 'riesgo' | 'espera' | 'contento' | 'muy_feliz'; salud_manual?: boolean; lead_id: string | null
 }
+type FV = {
+  encontrado: boolean; activo: boolean; tipo_cliente: string | null; vacantes: number | null
+  post_30d: number | null; conf_30d: number | null; asis_30d: number | null; contratados: number | null
+  dias_sin_login: number | null; salud_score: number | null; salud_bucket: string | null; focos: string[]
+  renueva: string | null; dias_renueva: number | null; estado_renovacion: string | null; wa: string | null
+}
+const FV_URL = 'https://chambas-customers.vercel.app/'
+const n0 = (v: number | null | undefined) => (v == null ? '—' : String(v))
+const ACCIONES = ['Mensaje con el cliente', 'Agendar reunión', 'Llamada agendada', 'Visita presencial']
+const hoyISO = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })
 const OWNERS = ['Sin asignar', 'Moisés', 'Fer', 'Rodrigo', 'Marina', 'Max', 'Olvera']
 const SALUD: Record<Cliente['salud'], { label: string; cls: string }> = {
   riesgo: { label: 'En riesgo', cls: cg.pillRisk },
@@ -45,7 +56,8 @@ export default function ClientesGrandesClient() {
   const [q, setQ] = useState('')
   const [owner, setOwner] = useState('Todos')
   const [salud, setSalud] = useState('Todas')
-  const [orden, setOrden] = useState<'gasto' | 'ultimo' | 'accion'>('gasto')
+  const [orden, setOrden] = useState<'gasto' | 'ultimo' | 'accion' | 'renueva'>('gasto')
+  const [estado, setEstado] = useState<'Todos' | 'activo' | 'inactivo'>('Todos')
   const [modal, setModal] = useState(false)
   const [editAccion, setEditAccion] = useState<Cliente | null>(null)
 
@@ -85,12 +97,14 @@ export default function ClientesGrandesClient() {
     let out = rows.filter(r =>
       (owner === 'Todos' || r.owner === owner) &&
       (salud === 'Todas' || r.salud === salud) &&
+      (estado === 'Todos' || (estado === 'activo') === !!r.fv?.activo) &&
       (!lq || [r.empresa, r.email, r.contacto_nombre, r.telefono].some(v => (v || '').toLowerCase().includes(lq))))
     out = [...out].sort((a, b) => orden === 'gasto' ? b.total - a.total
       : orden === 'ultimo' ? (b.ultimo_pago || '').localeCompare(a.ultimo_pago || '')
+      : orden === 'renueva' ? (a.fv?.dias_renueva ?? 9999) - (b.fv?.dias_renueva ?? 9999)
       : (a.proxima_accion_fecha || '9999').localeCompare(b.proxima_accion_fecha || '9999'))
     return out
-  }, [rows, q, owner, salud, orden])
+  }, [rows, q, owner, salud, orden, estado])
 
   const kpi = useMemo(() => {
     const hoy = new Date(); const fin = new Date(); fin.setDate(hoy.getDate() + 7)
@@ -100,6 +114,9 @@ export default function ClientesGrandesClient() {
       riesgo: rows.filter(r => r.salud === 'riesgo').length,
       semana: rows.filter(r => r.proxima_accion_fecha && new Date(r.proxima_accion_fecha + 'T12:00:00') <= fin).length,
       sinOwner: rows.filter(r => r.owner === 'Sin asignar').length,
+      activos: rows.filter(r => r.fv?.activo).length,
+      renuevan7: rows.filter(r => r.fv?.dias_renueva != null && r.fv.dias_renueva >= 0 && r.fv.dias_renueva <= 7).length,
+      vencidos: rows.filter(r => r.fv?.activo && r.fv?.dias_renueva != null && r.fv.dias_renueva < 0).length,
     }
   }, [rows])
 
@@ -123,6 +140,8 @@ export default function ClientesGrandesClient() {
           <div className={cg.kpis}>
             <Kpi label="Clientes grandes" value={String(kpi.n)} sub={`${kpi.sinOwner} sin owner`} color="var(--accent)" />
             <Kpi label="Ingreso acumulado" value={fmtMoney(kpi.total)} sub="Enero a hoy" color="var(--yellow)" />
+            <Kpi label="Activos hoy" value={`${kpi.activos}/${kpi.n}`} sub={`${kpi.n - kpi.activos} sin cuenta activa`} color="var(--green)" />
+            <Kpi label="Renuevan ≤ 7 días" value={String(kpi.renuevan7)} sub={`${kpi.vencidos} con renovación vencida`} color="var(--yellow)" />
             <Kpi label="En riesgo" value={String(kpi.riesgo)} sub="Marcados en riesgo" color="var(--red)" />
             <Kpi label="Acciones esta semana" value={String(kpi.semana)} sub="Reuniones y seguimientos" color="var(--accent2)" />
           </div>
@@ -134,19 +153,22 @@ export default function ClientesGrandesClient() {
             <select className={cg.select} value={salud} onChange={e => setSalud(e.target.value)}>
               <option value="Todas">Salud: Todas</option>{(Object.keys(SALUD) as Cliente['salud'][]).map(k => <option key={k} value={k}>{SALUD[k].label}</option>)}
             </select>
+            <select className={cg.select} value={estado} onChange={e => setEstado(e.target.value as typeof estado)}>
+              <option value="Todos">Estado: Todos</option><option value="activo">Activos</option><option value="inactivo">Inactivos</option>
+            </select>
             <select className={cg.select} value={orden} onChange={e => setOrden(e.target.value as typeof orden)}>
-              <option value="gasto">Ordenar: Más gasto</option><option value="ultimo">Ordenar: Pago más reciente</option><option value="accion">Ordenar: Próxima acción</option>
+              <option value="gasto">Ordenar: Más gasto</option><option value="ultimo">Ordenar: Pago más reciente</option><option value="accion">Ordenar: Próxima acción</option><option value="renueva">Ordenar: Renueva antes</option>
             </select>
           </div>
           <div className={cg.tableWrap}>
             <table className={cg.table}>
               <thead><tr>
-                <th>Empresa</th><th>Contacto</th><th>Owner</th><th className={cg.num}>Gasto total</th><th>Pagos</th><th>Último pago</th><th>Salud</th><th>Próxima acción</th><th></th>
+                <th>Empresa</th><th>WhatsApp</th><th>Owner</th><th>Estado</th><th>Métricas de éxito (30 días)</th><th>Renueva</th><th className={cg.num}>Gasto total</th><th>Salud</th><th>Próxima acción</th><th></th>
               </tr></thead>
               <tbody>
-                {loading && <tr><td colSpan={9} className={cg.empty}>Cargando clientes del sheet…</td></tr>}
-                {error && !loading && <tr><td colSpan={9} className={cg.empty}>Error: {error}</td></tr>}
-                {!loading && !error && filtered.length === 0 && <tr><td colSpan={9} className={cg.empty}>Sin clientes con esos filtros</td></tr>}
+                {loading && <tr><td colSpan={10} className={cg.empty}>Cargando clientes del sheet…</td></tr>}
+                {error && !loading && <tr><td colSpan={10} className={cg.empty}>Error: {error}</td></tr>}
+                {!loading && !error && filtered.length === 0 && <tr><td colSpan={10} className={cg.empty}>Sin clientes con esos filtros</td></tr>}
                 {!loading && filtered.map(c => {
                   const dias = diasDesde(c.ultimo_pago)
                   const wa = waLink(c.telefono)
@@ -154,7 +176,7 @@ export default function ClientesGrandesClient() {
                     <tr key={c.key}>
                       <td>
                         <div className={cg.strong}>{c.empresa || c.email || '—'}{c.origen === 'manual' && <span className={cg.tag}>manual</span>}</div>
-                        <div className={cg.muted}>{c.empresa ? c.email : ''}{c.lead_id && <> · <a href={`/leads/${c.lead_id}`} className={cg.link}>ver lead</a></>}</div>
+                        <div className={cg.muted}>{c.empresa ? c.email : ''}{c.fv?.tipo_cliente ? ` · ${c.fv.tipo_cliente}` : ''}{c.lead_id && <> · <a href={`/leads/${c.lead_id}`} className={cg.link}>ver lead</a></>}</div>
                       </td>
                       <td>
                         {wa
@@ -168,11 +190,43 @@ export default function ClientesGrandesClient() {
                           {OWNERS.map(o => <option key={o} value={o}>{o}</option>)}
                         </select>
                       </td>
-                      <td className={clsx(cg.num, cg.strong)}>{fmtMoney(c.total)}</td>
-                      <td>{c.origen === 'manual' ? '—' : `${c.pagos} · ${c.vacantes} vac.`}</td>
                       <td>
-                        <div>{fmtFecha(c.ultimo_pago)}</div>
-                        {dias != null && <div className={cg.muted}>hace {dias} días</div>}
+                        {c.fv
+                          ? <>
+                              <span className={clsx(cg.pill, c.fv.activo ? cg.pillOk : cg.pillRisk)}>{c.fv.activo ? 'Activo' : 'Inactivo'}</span>
+                              <div className={cg.muted} title={c.fv.focos.join(' · ')}>
+                                {[c.fv.salud_bucket && `${c.fv.salud_bucket}${c.fv.salud_score != null ? ' ' + c.fv.salud_score : ''}`, c.fv.dias_sin_login != null && `login hace ${c.fv.dias_sin_login}d`].filter(Boolean).join(' · ')}
+                              </div>
+                            </>
+                          : <span className={clsx(cg.pill, cg.pillMuted)} title="No aparece en la Fuente de Verdad (sin cuenta activa ni renovación este mes)">Sin cuenta</span>}
+                      </td>
+                      <td>
+                        {c.fv
+                          ? <>
+                              <div className={cg.metrics} title="Últimos 30 días">
+                                <div><b>{n0(c.fv.vacantes)}</b><span>Vac. activas</span></div>
+                                <div><b>{n0(c.fv.post_30d)}</b><span>Postulados</span></div>
+                                <div><b>{n0(c.fv.conf_30d)}</b><span>Confirmados</span></div>
+                                <div><b>{n0(c.fv.asis_30d)}</b><span>Asistencias</span></div>
+                                <div><b className={cg.hire}>{n0(c.fv.contratados)}</b><span>Contratados</span></div>
+                              </div>
+                            </>
+                          : <span className={cg.muted}>—</span>}
+                      </td>
+                      <td>
+                        {c.fv?.renueva
+                          ? <>
+                              <div className={clsx(c.fv.dias_renueva != null && c.fv.dias_renueva < 0 && cg.red, c.fv.dias_renueva != null && c.fv.dias_renueva >= 0 && c.fv.dias_renueva <= 7 && cg.yellow)}>{fmtFecha(c.fv.renueva)}</div>
+                              <div className={cg.muted}>
+                                {c.fv.dias_renueva == null ? '' : c.fv.dias_renueva < 0 ? `venció hace ${-c.fv.dias_renueva}d` : c.fv.dias_renueva === 0 ? 'hoy' : `en ${c.fv.dias_renueva}d`}
+                                {c.fv.estado_renovacion ? ` · ${c.fv.estado_renovacion}` : ''}
+                              </div>
+                            </>
+                          : <span className={cg.muted}>—</span>}
+                      </td>
+                      <td className={cg.num}>
+                        <div className={cg.strong}>{fmtMoney(c.total)}</div>
+                        <div className={cg.muted}>{c.origen === 'manual' ? 'manual' : `${c.pagos} pagos · último ${fmtFecha(c.ultimo_pago)}${dias != null ? ` (${dias}d)` : ''}`}</div>
                       </td>
                       <td>
                         <select className={clsx(cg.pill, cg.saludSel, SALUD[c.salud].cls)} value={c.salud} disabled={!tablaLista}
@@ -182,9 +236,13 @@ export default function ClientesGrandesClient() {
                         </select>
                       </td>
                       <td>
-                        <button className={c.proxima_accion ? cg.btnGhost : cg.btnSmall} disabled={!tablaLista} onClick={() => setEditAccion(c)}>
-                          {c.proxima_accion ? `${c.proxima_accion}${c.proxima_accion_fecha ? ' · ' + fmtFecha(c.proxima_accion_fecha) : ''}` : 'Pedir reunión'}
-                        </button>
+                        <select className={clsx(cg.ownerSel, !c.proxima_accion && cg.accionNone)} value={ACCIONES.includes(c.proxima_accion || '') ? c.proxima_accion! : ''} disabled={!tablaLista}
+                          onChange={e => patch(c, { proxima_accion: e.target.value, proxima_accion_fecha: e.target.value ? (c.proxima_accion_fecha || hoyISO()) : '' })}>
+                          <option value="">Pendiente</option>
+                          {ACCIONES.map(a => <option key={a} value={a}>{a}</option>)}
+                        </select>
+                        {c.proxima_accion && <input type="date" className={cg.dateMini} value={c.proxima_accion_fecha || ''} disabled={!tablaLista}
+                          onChange={e => patch(c, { proxima_accion_fecha: e.target.value })} />}
                       </td>
                       <td className={cg.actions}>
                         {wa
@@ -198,7 +256,7 @@ export default function ClientesGrandesClient() {
               </tbody>
             </table>
           </div>
-          <div className={cg.muted}>Mostrando {filtered.length} de {rows.length} · Regla: entra todo cliente con pagos de enero a hoy mayores a $5,000 (sheet Revenue). Salud: la pone el operador; mientras no la cambie se sugiere por último pago (≤ 35 días contento, ≤ 60 en espera, &gt; 60 en riesgo).</div>
+          <div className={cg.muted}>Mostrando {filtered.length} de {rows.length} · Regla: entra todo cliente con pagos de enero a hoy mayores a $5,000 (sheet Revenue). Estado, éxito 30 días, renovación y WhatsApp vienen en vivo de la <a href={FV_URL} target="_blank" rel="noreferrer" className={cg.link}>Fuente de Verdad</a>. Salud: la pone el operador; mientras no la cambie se sugiere por último pago (≤ 35 días contento, ≤ 60 en espera, &gt; 60 en riesgo).</div>
         </div>
       </main>
       {modal && <AgregarModal onClose={() => setModal(false)} onSaved={() => { setModal(false); load() }} />}

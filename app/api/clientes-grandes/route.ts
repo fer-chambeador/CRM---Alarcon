@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient, fetchAllRows } from '@/lib/supabase'
+import { cargarFuenteVerdad, type FuenteVerdadInfo } from '@/lib/fuenteVerdad'
 import { fetchClientesDelSheet, ownerDesdeCanal, saludPorPago, SALUDES, UMBRAL_CLIENTE_GRANDE, type Salud } from '@/lib/clientesGrandes'
 
 export const dynamic = 'force-dynamic'
@@ -26,6 +27,7 @@ export type ClienteGrandeRow = {
   notas: string | null
   origen: 'sheet' | 'manual'
   salud: Salud
+  fv: FuenteVerdadInfo | null
   salud_manual: boolean
   lead_id: string | null
 }
@@ -46,9 +48,10 @@ type DbRow = {
  */
 export async function GET() {
   const supabase = createServiceClient()
-  const [{ clientes, pestañas, errores }, dbRes] = await Promise.all([
+  const [{ clientes, pestañas, errores }, dbRes, fuente] = await Promise.all([
     fetchClientesDelSheet(),
     supabase.from('clientes_grandes').select('*'),
+    cargarFuenteVerdad(),
   ])
   const tablaLista = !dbRes.error
   const db = new Map<string, DbRow>(((dbRes.data || []) as DbRow[]).map(r => [r.cliente_key, r]))
@@ -75,13 +78,16 @@ export async function GET() {
     const d = db.get(c.key)
     if (d?.eliminado) continue
     const l = leadsByEmail.get(c.key)
+    const fv = fuente.buscar(c.key.includes('@') ? c.key : null, d?.empresa || l?.empresa || c.cliente)
     out.push({
+      fv,
       key: c.key,
-      empresa: d?.empresa || l?.empresa || (c.key.includes('@') ? null : c.cliente),
+      empresa: d?.empresa || fv?.empresa || l?.empresa || (c.key.includes('@') ? null : c.cliente),
       email: d?.email || (c.key.includes('@') ? c.key : null),
       contacto_nombre: d?.contacto_nombre || l?.nombre || null,
       contacto_puesto: d?.contacto_puesto || l?.puesto || null,
-      telefono: d?.telefono || l?.telefono || null,
+      // WhatsApp: el que puso el operador > Fuente de Verdad (owner de la cuenta) > lead del CRM
+      telefono: d?.telefono || fv?.wa || l?.telefono || null,
       owner: d?.owner || ownerDesdeCanal(c.canal),
       total: c.total, pagos: c.pagos, vacantes: c.vacantes,
       primer_pago: c.primer_pago, ultimo_pago: c.ultimo_pago, canal: c.canal,
@@ -100,9 +106,11 @@ export async function GET() {
   const keysSheet = new Set(clientes.map(c => c.key))
   for (const d of db.values()) {
     if (d.eliminado || d.origen !== 'manual' || keysSheet.has(d.cliente_key)) continue
+    const fvm = fuente.buscar(d.email, d.empresa)
     out.push({
+      fv: fvm,
       key: d.cliente_key, empresa: d.empresa, email: d.email, contacto_nombre: d.contacto_nombre,
-      contacto_puesto: d.contacto_puesto, telefono: d.telefono, owner: d.owner,
+      contacto_puesto: d.contacto_puesto, telefono: d.telefono || fvm?.wa || null, owner: d.owner,
       total: Number(d.gasto_manual || 0), pagos: 0, vacantes: 0, primer_pago: null,
       ultimo_pago: null, canal: null, plan: d.plan, proxima_accion: d.proxima_accion,
       proxima_accion_fecha: d.proxima_accion_fecha, ultimo_contacto: d.ultimo_contacto,
@@ -110,7 +118,7 @@ export async function GET() {
     })
   }
   out.sort((a, b) => b.total - a.total)
-  return NextResponse.json({ ok: true, clientes: out, umbral: UMBRAL_CLIENTE_GRANDE, pestañas, errores, tablaLista })
+  return NextResponse.json({ ok: true, clientes: out, umbral: UMBRAL_CLIENTE_GRANDE, pestañas, errores, tablaLista, fuenteVerdad: fuente.ok })
 }
 
 /** POST /api/clientes-grandes — agregar cliente a mano. */
