@@ -1265,6 +1265,17 @@ async function handleStageChanged(supabase: Supabase, aiContactId: string | unde
 
   await supabase.from('leads').update(updates).eq('id', lead.id)
 
+  // Registrar el cambio de status como status_change para que Analítica (funnel,
+  // movimiento, tiempos) lo vea en tiempo real. Fer 7-oct-2026.
+  if (updates.status) {
+    await supabase.from('lead_actividad').insert({
+      lead_id: lead.id,
+      tipo: 'status_change',
+      descripcion: `Status cambiado a: ${updates.status}`,
+      metadata: { field: 'status', before: lead.status, after: updates.status, source: 'vambe' },
+    })
+  }
+
   // ── Dedupe de eventos en Google Calendar (prevención de llamadas duplicadas) ──
   // Cuando un lead reagenda en Vambe, el bot crea un evento nuevo en GCal
   // pero el evento previo NO se borra automáticamente (Vambe no le pasa el
