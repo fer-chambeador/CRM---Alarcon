@@ -141,9 +141,6 @@ export default function ClientesGrandesClient() {
             <Kpi label="Clientes grandes" value={String(kpi.n)} sub={`${kpi.sinOwner} sin owner`} color="var(--accent)" />
             <Kpi label="Ingreso acumulado" value={fmtMoney(kpi.total)} sub="Enero a hoy" color="var(--yellow)" />
             <Kpi label="Activos hoy" value={`${kpi.activos}/${kpi.n}`} sub={`${kpi.n - kpi.activos} sin cuenta activa`} color="var(--green)" />
-            <Kpi label="Renuevan ≤ 7 días" value={String(kpi.renuevan7)} sub={`${kpi.vencidos} con renovación vencida`} color="var(--yellow)" />
-            <Kpi label="En riesgo" value={String(kpi.riesgo)} sub="Marcados en riesgo" color="var(--red)" />
-            <Kpi label="Acciones esta semana" value={String(kpi.semana)} sub="Reuniones y seguimientos" color="var(--accent2)" />
           </div>
           <div className={cg.filters}>
             <input className={cg.search} placeholder="Buscar empresa, correo o contacto…" value={q} onChange={e => setQ(e.target.value)} />
