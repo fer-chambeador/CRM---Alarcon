@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient, fetchAllRows } from '@/lib/supabase'
-import { fetchClientesDelSheet, ownerDesdeCanal, saludPorPago, UMBRAL_CLIENTE_GRANDE } from '@/lib/clientesGrandes'
+import { fetchClientesDelSheet, ownerDesdeCanal, saludPorPago, SALUDES, UMBRAL_CLIENTE_GRANDE, type Salud } from '@/lib/clientesGrandes'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -25,7 +25,8 @@ export type ClienteGrandeRow = {
   ultimo_contacto: string | null
   notas: string | null
   origen: 'sheet' | 'manual'
-  salud: 'activo' | 'seguimiento' | 'riesgo'
+  salud: Salud
+  salud_manual: boolean
   lead_id: string | null
 }
 
@@ -33,7 +34,7 @@ type DbRow = {
   cliente_key: string; empresa: string | null; contacto_nombre: string | null; contacto_puesto: string | null
   telefono: string | null; email: string | null; owner: string; gasto_manual: number | null; plan: string | null
   proxima_accion: string | null; proxima_accion_fecha: string | null; ultimo_contacto: string | null
-  notas: string | null; origen: 'sheet' | 'manual'; eliminado: boolean; created_at: string
+  notas: string | null; origen: 'sheet' | 'manual'; eliminado: boolean; created_at: string; salud?: string | null
 }
 
 /**
@@ -57,8 +58,16 @@ export async function GET() {
   const leadsByEmail = new Map<string, { id: string; empresa: string | null; nombre: string | null; telefono: string | null; puesto: string | null }>()
   if (emails.length) {
     const leads = await fetchAllRows<{ id: string; email: string; empresa: string | null; nombre: string | null; telefono: string | null; puesto: string | null }>((from, to) =>
-      supabase.from('leads').select('id,email,empresa,nombre,telefono,puesto').in('email', emails).range(from, to))
-    for (const l of leads) leadsByEmail.set((l.email || '').toLowerCase(), l)
+      supabase.from('leads').select('id,email,empresa,nombre,telefono,puesto').not('email', 'is', null).range(from, to))
+    // Match por correo sin importar mayúsculas/espacios; si hay varios leads con
+    // el mismo correo, gana el que tiene teléfono (WhatsApp del owner de la cuenta).
+    const wanted = new Set(emails)
+    for (const l of leads) {
+      const k = (l.email || '').trim().toLowerCase()
+      if (!wanted.has(k)) continue
+      const prev = leadsByEmail.get(k)
+      if (!prev || (!prev.telefono && l.telefono)) leadsByEmail.set(k, l)
+    }
   }
 
   const out: ClienteGrandeRow[] = []
@@ -68,7 +77,7 @@ export async function GET() {
     const l = leadsByEmail.get(c.key)
     out.push({
       key: c.key,
-      empresa: d?.empresa || l?.empresa || null,
+      empresa: d?.empresa || l?.empresa || (c.key.includes('@') ? null : c.cliente),
       email: d?.email || (c.key.includes('@') ? c.key : null),
       contacto_nombre: d?.contacto_nombre || l?.nombre || null,
       contacto_puesto: d?.contacto_puesto || l?.puesto || null,
@@ -82,7 +91,8 @@ export async function GET() {
       ultimo_contacto: d?.ultimo_contacto || null,
       notas: d?.notas || null,
       origen: 'sheet',
-      salud: saludPorPago(c.ultimo_pago),
+      salud: SALUDES.includes(d?.salud as Salud) ? d!.salud as Salud : saludPorPago(c.ultimo_pago),
+      salud_manual: SALUDES.includes(d?.salud as Salud),
       lead_id: l?.id || null,
     })
   }
@@ -96,7 +106,7 @@ export async function GET() {
       total: Number(d.gasto_manual || 0), pagos: 0, vacantes: 0, primer_pago: null,
       ultimo_pago: null, canal: null, plan: d.plan, proxima_accion: d.proxima_accion,
       proxima_accion_fecha: d.proxima_accion_fecha, ultimo_contacto: d.ultimo_contacto,
-      notas: d.notas, origen: 'manual', salud: 'activo', lead_id: null,
+      notas: d.notas, origen: 'manual', salud: SALUDES.includes(d.salud as Salud) ? d.salud as Salud : 'espera', salud_manual: SALUDES.includes(d.salud as Salud), lead_id: null,
     })
   }
   out.sort((a, b) => b.total - a.total)
