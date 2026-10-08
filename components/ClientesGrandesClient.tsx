@@ -60,6 +60,7 @@ export default function ClientesGrandesClient() {
   const [estado, setEstado] = useState<'Todos' | 'activo' | 'inactivo'>('Todos')
   const [modal, setModal] = useState(false)
   const [editAccion, setEditAccion] = useState<Cliente | null>(null)
+  const [editar, setEditar] = useState<Cliente | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -245,6 +246,7 @@ export default function ClientesGrandesClient() {
                         {wa
                           ? <a href={wa} target="_blank" rel="noreferrer" className={cg.iconBtn} title={`WhatsApp del owner de la cuenta (${c.telefono})`}>💬</a>
                           : <button className={cg.iconBtn} title="Sin WhatsApp: agregar número" disabled={!tablaLista} onClick={() => pedirTel(c)}>➕💬</button>}
+                        <button className={cg.iconBtn} title="Editar datos del cliente (correo para conectar con la Fuente de Verdad, WhatsApp, contacto)" disabled={!tablaLista} onClick={() => setEditar(c)}>✏️</button>
                         <button className={cg.iconBtn} title="Quitar de la lista" disabled={!tablaLista} onClick={() => eliminar(c)}>🗑</button>
                       </td>
                     </tr>
@@ -257,6 +259,8 @@ export default function ClientesGrandesClient() {
         </div>
       </main>
       {modal && <AgregarModal onClose={() => setModal(false)} onSaved={() => { setModal(false); load() }} />}
+      {editar && <EditarModal c={editar} onClose={() => setEditar(null)}
+        onSave={async b => { await patch(editar, b); setEditar(null); load() }} />}
       {editAccion && <AccionModal c={editAccion} onClose={() => setEditAccion(null)}
         onSave={async b => { await patch(editAccion, b); setEditAccion(null) }} />}
     </div>
@@ -286,6 +290,42 @@ function AccionModal({ c, onClose, onSave }: { c: Cliente; onClose: () => void; 
           {c.proxima_accion && <button className={cg.btnGhost} onClick={() => onSave({ proxima_accion: null, proxima_accion_fecha: null, notas, ultimo_contacto: new Date().toISOString() })}>Marcar hecha</button>}
           <button className={cg.btnGhost} onClick={onClose}>Cancelar</button>
           <button className={cg.btnPrimary} onClick={() => onSave({ proxima_accion: accion, proxima_accion_fecha: fecha || null, notas })}>Guardar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EditarModal({ c, onClose, onSave }: { c: Cliente; onClose: () => void; onSave: (b: Record<string, unknown>) => Promise<void> }) {
+  const [f, setF] = useState({
+    empresa: c.empresa || '', email: c.email || '', telefono: c.telefono || '',
+    contacto_nombre: c.contacto_nombre || '', contacto_puesto: c.contacto_puesto || '', notas: c.notas || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF(s => ({ ...s, [k]: e.target.value }))
+  const save = async () => {
+    const email = f.email.trim().toLowerCase()
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert('Ese correo no parece válido'); return }
+    setSaving(true)
+    await onSave({ ...f, email, telefono: f.telefono.replace(/\D/g, '').slice(-10) })
+    setSaving(false)
+  }
+  return (
+    <div className={cg.overlay} onClick={onClose}>
+      <div className={cg.modal} onClick={e => e.stopPropagation()}>
+        <h2>Editar cliente</h2>
+        <div className={cg.muted}>Pon el correo con el que la cuenta entra a la plataforma para conectarla con la Fuente de Verdad (vacantes activas, métricas, renovación y WhatsApp).</div>
+        <div className={cg.grid2}>
+          <label className={cg.full}>Empresa<input value={f.empresa} onChange={set('empresa')} /></label>
+          <label className={cg.full}>Correo de la cuenta<input value={f.email} onChange={set('email')} placeholder="correo@empresa.com" /></label>
+          <label>WhatsApp del owner<input value={f.telefono} onChange={set('telefono')} placeholder="10 dígitos (vacío = el de la Fuente de Verdad)" /></label>
+          <label>Contacto<input value={f.contacto_nombre} onChange={set('contacto_nombre')} /></label>
+          <label className={cg.full}>Puesto<input value={f.contacto_puesto} onChange={set('contacto_puesto')} /></label>
+          <label className={cg.full}>Notas<textarea rows={2} value={f.notas} onChange={set('notas')} /></label>
+        </div>
+        <div className={cg.modalBtns}>
+          <button className={cg.btnGhost} onClick={onClose}>Cancelar</button>
+          <button className={cg.btnPrimary} onClick={save} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
         </div>
       </div>
     </div>

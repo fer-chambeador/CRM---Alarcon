@@ -155,11 +155,13 @@ export async function POST(req: NextRequest) {
     // antes (status=cliente_recurrente).
     if (parsed.tipo_evento === 'pago_confirmado') {
       if (existing) {
+        const conCupon = parsed.monto === 0
         await supabase.from('leads').update({
           status: 'convertido',
           plan: parsed.plan || existing.plan,
-          // Actualizar monto de pipeline con lo realmente pagado (regla Fer 20/08/2026)
-          monto: parsed.monto ?? existing.monto,
+          // Actualizar monto de pipeline con lo realmente pagado (regla Fer 20/08/2026).
+          // Si se activó con cupón ($0) no pisamos el monto existente.
+          monto: conCupon ? existing.monto : (parsed.monto ?? existing.monto),
           nombre: parsed.nombre || existing.nombre,
           suscripcion_fecha: new Date().toISOString(),
           status_changed_at: new Date().toISOString(),
@@ -167,8 +169,8 @@ export async function POST(req: NextRequest) {
         await supabase.from('lead_actividad').insert({
           lead_id: existing.id,
           tipo: 'slack_update',
-          descripcion: `Pago confirmado - Monto: $${parsed.monto} MXN`,
-          metadata: { monto: parsed.monto, plan: parsed.plan, target_status: 'convertido' },
+          descripcion: conCupon ? 'Cuenta activada con cupón ($0) → convertido' : `Pago confirmado - Monto: $${parsed.monto} MXN`,
+          metadata: { monto: parsed.monto, plan: parsed.plan, target_status: 'convertido', cupon: conCupon },
         })
       }
       return NextResponse.json({ ok: true })

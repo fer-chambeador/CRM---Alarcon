@@ -66,14 +66,14 @@ export function parseSlackMessage(text: string): ParsedLead | null {
     if (!email) return null
 
     const monto = parseMonto(normalized)
-    // Ignorar si monto es 0 (cupón del 100%)
-    if (monto === null || monto === 0) return null
+    if (monto === null) return null
+    // Monto $0 = cuenta activada con cupón → también es convertido (regla Fer 7/10/2026)
 
     const nombreMatch = normalized.match(/Usuario:\s*([^(\n<]+?)[\s(<]/)
     const nombre = nombreMatch?.[1]?.trim() || null
     const plan = normalized.match(/Plan:\s*(.+)/)?.[1]?.trim() || null
 
-    return { tipo_evento: 'pago_confirmado', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon: null, monto, presupuesto: null, vacante: null }
+    return { tipo_evento: 'pago_confirmado', email, nombre, empresa: null, telefono: null, puesto: null, canal_adquisicion: null, plan, cupon: monto === 0 ? 'cupón (monto $0)' : null, monto, presupuesto: null, vacante: null }
   }
 
   // ── Usuario nuevo ────────────────────────────────────
