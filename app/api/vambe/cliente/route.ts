@@ -22,7 +22,7 @@ export const dynamic = 'force-dynamic'
  */
 
 const FV = process.env.FUENTE_VERDAD_URL || 'https://chambas-customers.vercel.app'
-const SOPORTE_WA = 'https://wa.me/15554757207'
+const SOPORTE_WA = 'https://wa.me/525554757207' // soporte: 55 5475 7207 (MX)
 const SOPORTE_CHANNEL = process.env.SLACK_SOPORTE_CHANNEL_ID || 'C0BS8AET1T5' // #tickets-soporte
 
 const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10)
