@@ -203,19 +203,25 @@ export async function POST(req: NextRequest) {
     const item: Record<string, unknown> = {
       phone_number: r.phone,
       nombre: r.nombre || r.lead?.nombre || 'amigo',
-      empresa: (r.extraVars?.empresa as string) || r.lead?.empresa || '',
-      vacante: (r.extraVars?.vacante as string) || r.lead?.vacante || '',
+      // Fallbacks (21-oct-2026): con '' Vambe manda el literal {{1}} al lead
+      // ("vi que te registraste con {{1}}"). Nunca mandar vacío.
+      empresa: (r.extraVars?.empresa as string) || r.lead?.empresa || 'tu empresa',
+      vacante: (r.extraVars?.vacante as string) || r.lead?.vacante || 'tu vacante',
       email: r.email || r.lead?.email || '',
       puesto: r.lead?.puesto || '',
     }
     // Merge extraVars del Excel
     if (r.extraVars) {
       for (const [k, v] of Object.entries(r.extraVars)) {
-        if (v != null && v !== '') item[k] = v
+        if (v != null && String(v).trim() !== '') item[k] = v
       }
     }
-    // Override vars globales
-    if (body.overrideVars) Object.assign(item, body.overrideVars)
+    // Override vars globales (ignorar vacíos)
+    if (body.overrideVars) {
+      for (const [k, v] of Object.entries(body.overrideVars)) {
+        if (v != null && String(v).trim() !== '') item[k] = v
+      }
+    }
     return item
   })
 
