@@ -84,6 +84,18 @@ function normalizePhone(phone: string): string {
   return `+${cleaned}`
 }
 
+// El numero EMISOR de WhatsApp en Mexico se registra con el "1" de movil
+// (+521##########). Si VAMBE_CHANNEL_PHONE llega como +52########## (sin el 1),
+// NO coincide con el canal registrado en Vambe y el envio da 400
+// ("from-phone-number ... is not a WhatsApp number"). Lo normalizamos aqui.
+// Idempotente: si ya trae el "1", o no es MX, lo deja igual.
+function normalizeWhatsAppFrom(phone: string): string {
+  const p = (phone || '').replace(/[\s\-()]/g, '')
+  const m = p.match(/^\+?52(\d{10})$/)
+  if (m) return `+521${m[1]}`
+  return p.startsWith('+') ? p : `+${p}`
+}
+
 export async function upsertContact(input: UpsertContactInput): Promise<UpsertContactResult> {
   const channelPhone = process.env.VAMBE_CHANNEL_PHONE
   if (!channelPhone) throw new Error('VAMBE_CHANNEL_PHONE no configurada')
@@ -139,7 +151,7 @@ export async function sendTemplate(params: {
 }): Promise<unknown> {
   const channelPhone = process.env.VAMBE_CHANNEL_PHONE
   if (!channelPhone) throw new Error('VAMBE_CHANNEL_PHONE no configurada')
-  const fromPhone = channelPhone
+  const fromPhone = normalizeWhatsAppFrom(channelPhone)
 
   // Query params: x-api-key (en query, no header) y from-phone-number
   return vambeFetch('POST', `/api/public/whatsapp/message/send/template/${encodeURIComponent(params.templateId)}`, {
@@ -227,7 +239,7 @@ export async function sendTemplateBulk(params: {
   return vambeFetch('POST', `/api/public/whatsapp/message/send/template/${encodeURIComponent(params.templateId)}/many`, {
     headerKey: false,
     query: {
-      'from-phone-number': channelPhone,
+      'from-phone-number': normalizeWhatsAppFrom(channelPhone),
       stage: params.stageId,
     },
     body: items,
