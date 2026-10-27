@@ -90,10 +90,12 @@ function normalizePhone(phone: string): string {
 // ("from-phone-number ... is not a WhatsApp number"). Lo normalizamos aqui.
 // Idempotente: si ya trae el "1", o no es MX, lo deja igual.
 function normalizeWhatsAppFrom(phone: string): string {
-  const p = (phone || '').replace(/[\s\-()]/g, '')
-  const m = p.match(/^\+?52(\d{10})$/)
-  if (m) return `+521${m[1]}`
-  return p.startsWith('+') ? p : `+${p}`
+  // Vambe identifica el canal por el numero SIN "+" y con el "1" de movil MX
+  // (el canal registrado es "5215632552922"). Quitamos "+" y aseguramos el "1".
+  const p = (phone || '').replace(/[\s\-()+]/g, '')
+  const m = p.match(/^52(\d{10})$/)
+  if (m) return `521${m[1]}`
+  return p
 }
 
 export async function upsertContact(input: UpsertContactInput): Promise<UpsertContactResult> {
