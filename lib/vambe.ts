@@ -48,7 +48,9 @@ async function vambeFetch(method: string, path: string, opts: {
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Vambe ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`)
+    // Enmascara la API key que Vambe refleja en el path del body de error.
+    const safeText = text.replace(/x-api-key=[^&"'\s)]+/gi, 'x-api-key=***')
+    throw new Error(`Vambe ${method} ${path} → ${res.status}: ${safeText.slice(0, 300)}`)
   }
   const ct = res.headers.get('content-type') || ''
   if (ct.includes('json')) return res.json()
@@ -115,6 +117,19 @@ export async function upsertContact(input: UpsertContactInput): Promise<UpsertCo
   return { ai_contact_id, raw }
 }
 
+// Sanitiza variables de template: WhatsApp/Meta rechazan (400) valores con
+// saltos de linea, tabs o 4+ espacios seguidos. Limpiamos y acotamos el largo.
+// Mantiene las llaves presentes (aunque queden vacias) para no omitir variables.
+function sanitizeTemplateVars(data?: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, val] of Object.entries(data || {})) {
+    out[k] = typeof val === 'string'
+      ? val.replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 1000)
+      : val
+  }
+  return out
+}
+
 // ─── Send template ──────────────────────────────────────────────────────
 export async function sendTemplate(params: {
   phone: string
@@ -135,7 +150,7 @@ export async function sendTemplate(params: {
     },
     body: {
       phone_number: normalizePhone(params.phone),
-      ...(params.data || {}),
+      ...sanitizeTemplateVars(params.data),
     },
   })
 }

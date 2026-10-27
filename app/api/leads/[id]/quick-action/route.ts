@@ -83,7 +83,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const result = await sendTemplate({
         phone: lead.telefono,
         templateId: tpl.template_id,
-        data: { empresa: lead.empresa || lead.nombre || 'tu empresa' },
+        data: {
+          nombre: lead.nombre || 'amigo',
+          empresa: lead.empresa || lead.nombre || 'tu empresa',
+          vacante: lead.vacante || 'tu vacante',
+        },
         // FIX (21-jul-2026): pasar stageId para que Vambe asigne el contacto a
         // "Interesado" al enviar. Sin etapa, ningun asistente IA atiende la
         // respuesta del lead (mismo bug corregido en reactivate-vambe-3d el 17-jun,
